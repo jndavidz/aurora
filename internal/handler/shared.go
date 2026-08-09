@@ -366,6 +366,38 @@ func looksLikePrematureStop(text string) bool {
 	return false
 }
 
+// looksLikeEnvironmentExcuse 检测模型"推诿环境"文本:拿到了工具输出(如 ls 的
+// 相对文件列表),却不自己 pwd/按相对路径读取,反而声称环境/项目目录不可用,
+// 让用户"重新连接/打开项目环境/挂载"(实测原文:"当前可用的源码读取环境中
+// 没有找到对应的 ai-roundtable 项目目录…请重新连接/打开该项目环境后,我会
+// 直接读取…")。这类回复不是完成,应重试逼它用工具定位并读取。
+func looksLikeEnvironmentExcuse(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	markers := []string{
+		// 中文:让用户重新连接/打开/挂载/加载环境或项目
+		"请重新连接", "请重新打开", "重新连接/打开", "重新连接或打开",
+		"打开该项目环境", "打开项目环境", "打开这个环境", "加载该项目",
+		"重新加载", "需要挂载", "请挂载", "挂载项目", "挂载目录",
+		"找不到该项目", "没有找到该项目", "未找到该项目", "无法找到项目",
+		"没找到项目", "项目目录不可用", "无法定位项目", "无法访问项目",
+		"环境不可用", "环境不存在", "环境未挂载", "读取环境中没有",
+		"环境中没有找到", "没有找到对应的", "环境后才能", "环境后,我会",
+		// 英文
+		"please reconnect", "please reopen", "reconnect the", "reopen the",
+		"mount the", "could not locate", "cannot locate", "project not found",
+		"environment is not", "environment not available", "environment unavailable",
+	}
+	for _, m := range markers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。
 // 带时间戳与耗时,便于关联 aurora_run.log 与定位慢请求。
 func appendToolDebugLog(path string, attempt int, elapsed time.Duration, text string, calls []officialtypes.ToolCall) {

@@ -281,3 +281,33 @@ func TestWriteToolCallingStreamPreservesUTF8(t *testing.T) {
 		t.Fatalf("rebuilt != original\norig: %q\nnew : %q", long, rebuilt)
 	}
 }
+
+// ─── Test: looksLikeEnvironmentExcuse ────────────────────────────
+
+func TestLooksLikeEnvironmentExcuse(t *testing.T) {
+	// 实测原文:模型拿到 ls 文件列表后声称环境找不到项目目录,让用户重连
+	trueCases := []string{
+		"当前可用的源码读取环境中没有找到对应的 ai-roundtable 项目目录，请重新连接/打开该项目环境后，我会直接读取以下关键文件并输出分析。",
+		"项目目录不可用，需要你重新打开环境。",
+		"找不到该项目，请挂载项目目录后再试。",
+		"I could not locate the project directory. Please reconnect the environment.",
+		"环境未挂载，无法读取源码。",
+	}
+	falseCases := []string{
+		"",
+		"已读取源码，总结如下。",
+		"read_file 读取成功：main.go 内容如下。",
+		"The command output shows the file listing.",
+		"正在读取 manifest.json。",
+	}
+	for _, s := range trueCases {
+		if !looksLikeEnvironmentExcuse(s) {
+			t.Errorf("want env-excuse detection for %q", s)
+		}
+	}
+	for _, s := range falseCases {
+		if looksLikeEnvironmentExcuse(s) {
+			t.Errorf("did not want env-excuse detection for %q", s)
+		}
+	}
+}
