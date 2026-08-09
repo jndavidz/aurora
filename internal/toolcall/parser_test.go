@@ -454,3 +454,104 @@ func TestFinalNudgeEmptyForOtherRole(t *testing.T) {
 		t.Fatalf("got = %q, want empty for non-tool/user last role", got)
 	}
 }
+
+func TestFinalNudgeToolForbidsAskingUser(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{
+			Name:       "read_file",
+			Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"absolute path"}},"required":["path"]}`),
+		}},
+		{Type: "function", Function: official.ToolFunction{Name: "bash", Parameters: json.RawMessage(`{"properties":{"command":{"type":"string"}}}`)}},
+	}
+	msgs := []official.APIMessage{
+		{Role: "user", Content: official.MessageContent{TextValue: "读一下文件"}},
+		{Role: "assistant", Content: official.MessageContent{TextValue: "<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"/x\"}}</tool_call>"}},
+		{Role: "tool", Content: official.MessageContent{TextValue: "file1\nfile2"}},
+	}
+	got := FinalNudge(tools, msgs)
+	for _, expect := range []string{
+		"DIRECT read access",
+		"NEVER ask the user",
+		`"read_file"`, // 解析出的 read 工具名
+		`"path"`,      // 解析出的参数名
+		"stalls the task",
+	} {
+		if !strings.Contains(got, expect) {
+			t.Errorf("FinalNudge missing %q in:\n%s", expect, got)
+		}
+	}
+}
+
+func TestFinalNudgeToolWithoutReadToolStaysGeneric(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{Name: "bash", Parameters: json.RawMessage(`{"properties":{"command":{"type":"string"}}}`)}},
+	}
+	msgs := []official.APIMessage{
+		{Role: "user", Content: official.MessageContent{TextValue: "hi"}},
+		{Role: "assistant", Content: official.MessageContent{TextValue: ""}},
+		{Role: "tool", Content: official.MessageContent{TextValue: "out"}},
+	}
+	got := FinalNudge(tools, msgs)
+	if !strings.Contains(got, "NEVER ask the user") {
+		t.Fatalf("missing forbidden-asking language: %s", got)
+	}
+	if strings.Contains(got, "read_file") {
+		t.Fatalf("should not reference read_file when not provided: %s", got)
+	}
+}
+
+func TestBuildInstructionsCaseSensitiveAndParamsWarning(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{
+			Name:        "bash",
+			Description: "Run a shell command",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"cmd"}},"required":["command"]}`),
+		}},
+	}
+	got := BuildInstructions(tools, nil)
+	for _, expect := range []string{
+		"case-sensitive",
+		`"Bash" is WRONG`,
+		"'description'", // 多余字段禁令
+		"CRITICAL RULES:",
+	} {
+		if !strings.Contains(got, expect) {
+			t.Errorf("BuildInstructions missing %q in:\n%s", expect, got)
+		}
+	}
+}
+
+func TestResolveReadTool(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{Name: "bash"}},
+		{Type: "function", Function: official.ToolFunction{Name: "read_file", Parameters: json.RawMessage(`{"properties":{"filePath":{"type":"string"}}}`)}},
+	}
+	name, param := ResolveReadTool(tools)
+	if name != "read_file" || param != "filePath" {
+		t.Fatalf("got (%q, %q), want (read_file, filePath)", name, param)
+	}
+}
+
+func TestFinalNudgeToolWarnsFileTreeIsNotContent(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{
+			Name:       "read_file",
+			Parameters: json.RawMessage(`{"properties":{"path":{"type":"string"}}}`),
+		}},
+	}
+	msgs := []official.APIMessage{
+		{Role: "user", Content: official.MessageContent{TextValue: "通读源码"}},
+		{Role: "assistant", Content: official.MessageContent{TextValue: ""}},
+		{Role: "tool", Content: official.MessageContent{TextValue: "demo/\ndemo/main.go"}},
+	}
+	got := FinalNudge(tools, msgs)
+	for _, expect := range []string{
+		"file LISTING",
+		"is NOT the file content",
+		"guessing and is WRONG",
+	} {
+		if !strings.Contains(got, expect) {
+			t.Errorf("FinalNudge missing %q in:\n%s", expect, got)
+		}
+	}
+}

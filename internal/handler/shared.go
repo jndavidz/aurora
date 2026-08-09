@@ -286,6 +286,39 @@ func looksLikeSandboxRefusal(text string) bool {
 	return false
 }
 
+// looksLikeRequestingUserContent 检测模型"向用户索要文件/内容/路径/上传/粘贴"
+// 式的停顿文本。这类回复不是任务完成,而是模型放弃工具调用——它明明可以
+// 用 read/bash 工具自己读,却让用户把文件内容"提供"过来(实测原文:
+// "请把源码内容继续提供(或让我能读取工作区文件),我就继续。")。
+// 命中时应继续重试,而不是被"工具结果后散文=完成"的启发式放行。
+func looksLikeRequestingUserContent(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	markers := []string{
+		// 中文:索要文件/内容/路径/上传/粘贴
+		"请提供", "请你提供", "请把", "请上传", "上传给", "粘贴", "发给我",
+		"让我能读取", "让我读取", "无法读取工作区", "需要你提供", "需要您提供",
+		"把源码", "把代码", "把文件内容", "把内容", "告诉我路径", "告诉我文件",
+		"直接上传", "请补充", "请给出", "你方便的话",
+		// "请继续提供源码读取结果后…" 这类变体(实测原文)
+		"请继续提供", "继续提供", "提供源码", "提供文件", "提供内容",
+		"读取结果后", "拿到源码", "等你提供", "等待你",
+		// 英文:请求用户提供内容
+		"please provide", "please share", "please paste", "please upload",
+		"please send", "can you provide", "can you share", "could you provide",
+		"could you share", "paste the file", "upload the file", "share the file", "send me the file",
+		"give me access to", "attach the file", "provide me with",
+	}
+	for _, m := range markers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。
 // 带时间戳与耗时,便于关联 aurora_run.log 与定位慢请求。
 func appendToolDebugLog(path string, attempt int, elapsed time.Duration, text string, calls []officialtypes.ToolCall) {

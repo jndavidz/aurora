@@ -162,3 +162,50 @@ func sseDataLines(output string) []string {
 	}
 	return lines
 }
+
+// ─── Test: looksLikeRequestingUserContent ────────────────────────
+
+func TestLooksLikeRequestingUserContent(t *testing.T) {
+	trueCases := []string{
+		// 实测原文:模型拿到文件树后向用户索要源码正文
+		"请把源码内容继续提供（或让我能读取工作区文件），我就继续。",
+		"我可以读源码。请把项目路径、仓库内容，或直接上传/粘贴你想看的文件。",
+		"Please provide the file contents so I can continue.",
+		"Could you share the source files with me?",
+		"请把 main.go 的内容发给我。",
+		"你方便的话，把代码直接上传给我。",
+	}
+	falseCases := []string{
+		"",
+		"已读取文件内容，总结如下：项目结构清晰。",
+		"The tool output above is the file listing. I will now summarize.",
+		"我完成分析了。",
+		"This tool will provide the output when executed.",
+		"ls 输出正常。",
+	}
+	for _, s := range trueCases {
+		if !looksLikeRequestingUserContent(s) {
+			t.Errorf("want stall detection for %q", s)
+		}
+	}
+	for _, s := range falseCases {
+		if looksLikeRequestingUserContent(s) {
+			t.Errorf("did not want stall detection for %q", s)
+		}
+	}
+}
+
+func TestLooksLikeRequestingUserContentVariants(t *testing.T) {
+	// 实测变体:"请继续提供源码读取结果后,我会基于实际代码整理…"
+	variants := []string{
+		"请继续提供源码读取结果后，我会基于实际代码整理完整架构文档。",
+		"拿到源码内容后，我会整理架构。",
+		"等你提供文件内容我再继续。",
+		"Please send me the file so I can analyze it.",
+	}
+	for _, s := range variants {
+		if !looksLikeRequestingUserContent(s) {
+			t.Errorf("want stall detection for variant %q", s)
+		}
+	}
+}

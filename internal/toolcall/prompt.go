@@ -33,13 +33,14 @@ func BuildInstructions(tools []official.Tool, toolChoice *official.ToolChoice) s
 	sb.WriteString(`{"name": "<tool_name>", "arguments": {"arg1": "value2"}}`)
 	sb.WriteString("\n</tool_call>\n\n")
 	sb.WriteString("CRITICAL RULES:\n")
-	sb.WriteString("0. Use ONLY the EXACT tool names listed under TOOLS AVAILABLE. Never rename, abbreviate or invent names. If the available tool is \"read\", do NOT call \"read_file\". Copy the name character-for-character.\n")
+	sb.WriteString("0. Use ONLY the EXACT tool names listed under TOOLS AVAILABLE. Names are case-sensitive: if the tool is \"bash\", calling it \"Bash\" is WRONG and will fail. Never rename, abbreviate or invent names. If the available tool is \"read\", do NOT call \"read_file\". Copy the name character-for-character, including case.\n")
 	sb.WriteString("1. ONLY use the tags above for tool calling. NEVER output raw JSON without tags.\n")
 	sb.WriteString("2. You can call multiple tools by emitting multiple <tool_call> blocks consecutively.\n")
 	sb.WriteString("3. Do NOT output any other text after your <tool_call> blocks. Wait for the tool response.\n")
 	sb.WriteString("4. The JSON inside the tags MUST be valid and include the 'arguments' field.\n")
 	sb.WriteString("5. If you need to use a tool, do it IMMEDIATELY without preamble.\n")
 	sb.WriteString("6. DO NOT use your internal/native Python tool, Advanced Data Analysis, or Code Interpreter. They run in a remote sandbox on your servers and have NO access to the user's workspace. You MUST use ONLY the custom tools listed under TOOLS AVAILABLE (like 'glob', 'read', 'grep', or 'bash').\n")
+	sb.WriteString("7. Inside 'arguments', include ONLY the parameters listed under 'Params:' for that tool. Never add extra fields such as 'description', 'explanation' or 'note' — they will break the call.\n")
 	if forced := toolChoice.ForcedFunctionName(); forced != "" {
 		fmt.Fprintf(&sb, "\nCRITICAL: You MUST call the tool %q in this response. Do not call any other tool, and do not produce a final answer without calling it first.\n", forced)
 	} else if toolChoice != nil && toolChoice.IsForcedNone() {
@@ -174,6 +175,50 @@ func ExtractWorkingDir(messages []official.APIMessage) string {
 	return ""
 }
 
+// ReadToolNames 候选文件读取工具名,按顺序匹配第一个出现在 tools 列表里的。
+var ReadToolNames = []string{
+	"read", "read_file", "readfile", "get_file_contents", "read_text_file",
+	"cat", "open", "view",
+}
+
+// ReadPathCandidates 参数名候选(path / filePath / file_path / filename / file),
+// 按出现顺序挑第一个在工具 schema 中声明的。
+var ReadPathCandidates = []string{"path", "filePath", "file_path", "filename", "file", "file_name"}
+
+// ResolveReadTool 找到 tools 列表里第一个文件读取工具,返回 (name, pathParam)。
+// 没找到就返回 ("", "")。
+func ResolveReadTool(tools []official.Tool) (string, string) {
+	for _, t := range tools {
+		if t.Type != "function" {
+			continue
+		}
+		name := strings.ToLower(t.Function.Name)
+		if !contains(ReadToolNames, name) {
+			continue
+		}
+		return t.Function.Name, pickReadPathParam(t.Function.Parameters)
+	}
+	return "", ""
+}
+
+func pickReadPathParam(paramsJSON json.RawMessage) string {
+	if len(paramsJSON) == 0 {
+		return "path"
+	}
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(paramsJSON, &schema); err != nil || schema.Properties == nil {
+		return "path"
+	}
+	for _, cand := range ReadPathCandidates {
+		if _, ok := schema.Properties[cand]; ok {
+			return cand
+		}
+	}
+	return "path"
+}
+
 // FinalNudge 是给模型末尾追加的"先做这个,别分析 sandbox"系统指令。
 // 用 lastRole 决定上下文:
 //   - tool   : 提醒把 tool 输出当 ground truth,继续调用或总结
@@ -186,8 +231,18 @@ func FinalNudge(tools []official.Tool, messages []official.APIMessage) string {
 	last := messages[len(messages)-1]
 	switch last.Role {
 	case "tool", "function":
-		// 拿不到具体的 tool 名(API 没有 tool_call_id 映射),用一个通用表达
-		return "\n[SYSTEM INSTRUCTION: The 'Tool (...)' block above is the REAL output produced by running your tool call on the user's actual machine. Treat it as ground truth and as the current state of the workspace. Continue the task based strictly on it: call another tool using the exact <tool_call>{...}</tool_call> format if you need more information, or give your final answer. NEVER claim a directory or file does not exist, or that you are in a different/isolated environment, when it appears in the output above.]"
+		// 拿不到具体的 tool 名(API 没有 tool_call_id 映射),用一个通用表达。
+		// 但必须明确:模型对用户文件有直接读取权,索要文件内容是失败行为。
+		// (实测:模型拿到 find 文件树后不调 read,反而向用户要源码正文)
+		var sb strings.Builder
+		sb.WriteString("\n[SYSTEM INSTRUCTION: The 'Tool (...)' block above is the REAL output produced by running your tool call on the user's actual machine. Treat it as ground truth and as the current state of the workspace. You have DIRECT read access to every file on the user's machine through the tools — the tool output IS the real file content.")
+		if name, param := ResolveReadTool(tools); name != "" {
+			fmt.Fprintf(&sb, " If you need a file's content, call the %q tool with its absolute path, e.g. <tool_call>{\"name\": %q, \"arguments\": {%q: \"C:/path/to/file\"}}</tool_call>.", name, name, param)
+		} else {
+			sb.WriteString(" If you need a file's content, call the appropriate read tool with its absolute path.")
+		}
+		sb.WriteString(" A file LISTING (tree) is NOT the file content — if the task requires reading file contents, you are NOT done until you have read each relevant file with the read tool; summarizing from a file tree without reading the files is guessing and is WRONG. NEVER ask the user to provide, paste, upload or explain file contents — asking the user for files you can read yourself is a FAILURE and stalls the task. Continue the task based strictly on the tool output: call another tool using the exact <tool_call>{...}</tool_call> format if you need more information, or give your final answer. NEVER claim a directory or file does not exist, or that you are in a different/isolated environment, when it appears in the output above.]")
+		return sb.String()
 	case "user":
 		wd := ExtractWorkingDir(messages)
 		example := FirstToolCallExample(tools, wd)

@@ -132,16 +132,17 @@ func TestConvertAPIRequestHandlesToolResult(t *testing.T) {
 		},
 	}
 	out := testConvert(t, req)
-	// 找到 tool 消息
+	// 工具结果现以 user 角色回传(AddToolMessage,commit 43951e7);
+	// 按 "Tool (Resultado da ferramenta …)" 前缀定位该消息。
 	var toolMsg string
 	for _, m := range out.Messages {
-		if m.Author.Role == "tool" {
-			text, _ := m.Content.Parts[0].(string)
+		text, _ := m.Content.Parts[0].(string)
+		if strings.Contains(text, "Resultado da ferramenta") {
 			toolMsg = text
 		}
 	}
 	if !strings.Contains(toolMsg, "Resultado da ferramenta bash") {
-		t.Fatalf("tool message missing  prefix: %q", toolMsg)
+		t.Fatalf("tool message missing prefix: %q", toolMsg)
 	}
 	if !strings.Contains(toolMsg, "file1.py") {
 		t.Fatalf("tool message missing content: %q", toolMsg)
