@@ -807,6 +807,25 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 		finalText = lastNonEmptyText
 	}
 
+	// 全部尝试都返回空(上游限流/临时静默,实测 16:12 会话连续 5 次空回复):
+	// 返回明确错误而不是 200-空,避免客户端(如 ZCode)收到空内容后无限等待
+	// ("计时停留在 45 秒"就是 200-空导致的)。
+	if strings.TrimSpace(finalText) == "" && len(lastToolCalls) == 0 {
+		reqTextChars := 0
+		for _, m := range originalRequest.Messages {
+			reqTextChars += len([]rune(m.Text()))
+		}
+		fmt.Fprintf(os.Stderr, "[chatgpt] upstream empty response on all %d attempts (tools=%d, messages=%d, historyText=%d chars) -> 502\n",
+			maxRefusalRetries, len(originalRequest.Tools), len(originalRequest.Messages), reqTextChars)
+		c.JSON(502, gin.H{"error": gin.H{
+			"message": "ChatGPT 上游连续返回空回复(可能触发限流或临时静默),请稍候重试。",
+			"type":    "upstream_empty_response",
+			"param":   nil,
+			"code":    "upstream_empty_response",
+		}})
+		return
+	}
+
 	if originalRequest.Stream {
 		// 客户端要求流式:统一输出标准 SSE(工具调用或纯文本都兼容 OpenAI 协议)
 		outputTokens := util.CountToken(finalText)
