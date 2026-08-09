@@ -684,6 +684,7 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 	var lastConversationID string
 	var lastSentinel []map[string]interface{}
 	var lastStall bool
+	consecutiveEmpty := 0
 
 	for attempt := 0; attempt < maxRefusalRetries; attempt++ {
 		attemptStart := time.Now()
@@ -765,6 +766,18 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 			lastToolCalls = calls
 			break
 		}
+		// 上游静默检测:连续两次空回复(无文本、无 tool_call)说明账号正被
+		// 限流/哑火(实测 16:12 会话连续 5 次空回复)。立即停止重试——
+		// 继续重试只会拉长限流窗口并浪费请求,交由下方 502 路径返回明确错误。
+		if strings.TrimSpace(result.Text) == "" {
+			consecutiveEmpty++
+			if consecutiveEmpty >= 2 {
+				fmt.Fprintf(os.Stderr, "[chatgpt] upstream muted (2 consecutive empty replies at attempt %d/%d), stopping retries\n", attempt+1, maxRefusalRetries)
+				break
+			}
+		} else {
+			consecutiveEmpty = 0
+		}
 		// 没有解析出工具调用。判断是否值得重试:
 		//  - 若最后一条消息是工具结果(tool/function)且模型给出了总结文本,
 		//    说明模型已基于工具输出完成任务,应接受而非强制重试
@@ -797,6 +810,12 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 		} else {
 			fmt.Fprintf(os.Stderr, "[chatgpt] no tool call in reply (attempt %d/%d), retrying\n", attempt+1, maxRefusalRetries)
 		}
+		// 重试间退避:避免对上游/限流窗口的连续轰击(1s→2s→4s→8s,上限 8s)
+		backoff := time.Duration(1<<attempt) * time.Second
+		if backoff > 8*time.Second {
+			backoff = 8 * time.Second
+		}
+		time.Sleep(backoff)
 	}
 
 	// 重试耗尽后的兜底:若最后一次回复是空文本(上游静默/模型放弃,
