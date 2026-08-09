@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +17,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
+
+// tokenFilePath 返回凭证文件的路径:优先读取 ./.runtime/tokens/(凭证与
+// 日志/运行产物隔离,便于双端 Drive 同步与排除),目录不存在时回退当前目录。
+func tokenFilePath(name string) string {
+	dir := filepath.Join(".runtime", "tokens")
+	if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+		return filepath.Join(dir, name)
+	}
+	return name
+}
 
 // App 封装应用启动所需的所有依赖
 type App struct {
@@ -45,7 +56,7 @@ func Init() (*App, error) {
 	seen := make(map[string]bool)
 
 	// 1. access_tokens.txt — 纯 access token，不可续期
-	for _, t := range accounts.LoadTokensFromFile("access_tokens.txt") {
+	for _, t := range accounts.LoadTokensFromFile(tokenFilePath("access_tokens.txt")) {
 		// 从 access_token JWT 解析 chatgpt_account_id 用于去重
 		chatGPTID := accounts.ExtractChatGPTAccountID(t.Token)
 		key := "access:" + chatGPTID
@@ -63,7 +74,7 @@ func Init() (*App, error) {
 	}
 
 	// 2. refresh_tokens.txt — 带 refresh_token，可续期
-	for _, t := range accounts.LoadTokensFromFile("refresh_tokens.txt") {
+	for _, t := range accounts.LoadTokensFromFile(tokenFilePath("refresh_tokens.txt")) {
 		// 立即交换一次获取 access_token 才能解析 chatgpt_account_id
 		// 先用 refresh_token 本身做去重 key,避免重复交换
 		key := "refresh:" + t.Token
@@ -88,7 +99,7 @@ func Init() (*App, error) {
 	}
 
 	// 3. session_tokens.txt — ChatGPT session token，用于免费账号续期
-	for _, t := range accounts.LoadTokensFromFile("session_tokens.txt") {
+	for _, t := range accounts.LoadTokensFromFile(tokenFilePath("session_tokens.txt")) {
 		key := "session:" + t.Token
 		if seen[key] {
 			continue
@@ -110,7 +121,7 @@ func Init() (*App, error) {
 	}
 
 	// 4. free_tokens.txt — 设备 UUID
-	for _, t := range accounts.LoadTokensFromFile("free_tokens.txt") {
+	for _, t := range accounts.LoadTokensFromFile(tokenFilePath("free_tokens.txt")) {
 		key := "free:" + t.Token
 		if seen[key] {
 			continue
@@ -235,8 +246,8 @@ func loadProxyList() []string {
 		proxies = append(proxies, proxyUrl)
 	}
 
-	if _, err := os.Stat("proxies.txt"); err == nil {
-		data, err := os.ReadFile("proxies.txt")
+	if _, err := os.Stat(tokenFilePath("proxies.txt")); err == nil {
+		data, err := os.ReadFile(tokenFilePath("proxies.txt"))
 		if err == nil {
 			lines := string(data)
 			for _, line := range strings.Split(lines, "\n") {
