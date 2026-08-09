@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -668,6 +669,31 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 		maxRefusalRetries = 3
 	}
 
+	// 预检:请求历史过大 → 免费模型单轮上下文有限,上游会对超大请求静默返回
+	// 空回复,导致 502 循环(实测:13.9 万字符历史的会话每轮都 502,客户端
+	// 无限"重新连接中";~13 万字符必失败,~4 万字符正常)。
+	// 超限直接返回明确错误,不浪费上游调用。
+	const maxHistoryChars = 100000
+	historyChars := 0
+	for _, m := range originalRequest.Messages {
+		historyChars += len([]rune(m.Text()))
+	}
+	var toolSchemaChars int
+	if b, err := json.Marshal(originalRequest.Tools); err == nil {
+		toolSchemaChars = len(b)
+	}
+	if historyChars+toolSchemaChars > maxHistoryChars {
+		fmt.Fprintf(os.Stderr, "[chatgpt] request too large (history=%d chars + tools=%d chars > %d), refusing upstream call\n",
+			historyChars, toolSchemaChars, maxHistoryChars)
+		c.JSON(413, gin.H{"error": gin.H{
+			"message": fmt.Sprintf("对话历史过大(%d 字符,上限约 %d),免费模型单轮上下文有限,请新建会话或精简历史;长任务请分阶段进行。", historyChars+toolSchemaChars, maxHistoryChars),
+			"type":    "history_too_large",
+			"param":   nil,
+			"code":    "history_too_large",
+		}})
+		return
+	}
+
 	baseTranslated := chatgptrequestconverter.ConvertAPIRequest(*originalRequest, account, *proxyUrl, *client)
 	if baseTranslated.ConversationID != "" {
 		*clientState = h.sessions.Get(baseTranslated.ConversationID)
@@ -685,8 +711,10 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 	var lastSentinel []map[string]interface{}
 	var lastStall bool
 	consecutiveEmpty := 0
+	attemptsMade := 0
 
 	for attempt := 0; attempt < maxRefusalRetries; attempt++ {
+		attemptsMade = attempt + 1
 		attemptStart := time.Now()
 		translated := baseTranslated
 		if attempt > 0 {
@@ -834,8 +862,8 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 		for _, m := range originalRequest.Messages {
 			reqTextChars += len([]rune(m.Text()))
 		}
-		fmt.Fprintf(os.Stderr, "[chatgpt] upstream empty response on all %d attempts (tools=%d, messages=%d, historyText=%d chars) -> 502\n",
-			maxRefusalRetries, len(originalRequest.Tools), len(originalRequest.Messages), reqTextChars)
+		fmt.Fprintf(os.Stderr, "[chatgpt] upstream empty response on %d/%d attempts (tools=%d, messages=%d, historyText=%d chars) -> 502\n",
+			attemptsMade, maxRefusalRetries, len(originalRequest.Tools), len(originalRequest.Messages), reqTextChars)
 		c.JSON(502, gin.H{"error": gin.H{
 			"message": "ChatGPT 上游连续返回空回复(可能触发限流或临时静默),请稍候重试。",
 			"type":    "upstream_empty_response",
