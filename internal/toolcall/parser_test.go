@@ -555,3 +555,24 @@ func TestFinalNudgeToolWarnsFileTreeIsNotContent(t *testing.T) {
 		}
 	}
 }
+
+func TestFinalNudgeToolForbidsProgressReport(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{Name: "read_file", Parameters: json.RawMessage(`{"properties":{"path":{"type":"string"}}}`)}},
+	}
+	msgs := []official.APIMessage{
+		{Role: "user", Content: official.MessageContent{TextValue: "通读源码"}},
+		{Role: "assistant", Content: official.MessageContent{TextValue: ""}},
+		{Role: "tool", Content: official.MessageContent{TextValue: "main.go\nutil.go"}},
+	}
+	got := FinalNudge(tools, msgs)
+	for _, expect := range []string{
+		"progress report",
+		"NOT a final answer",
+		"no later turn",
+	} {
+		if !strings.Contains(got, expect) {
+			t.Errorf("FinalNudge missing %q in:\n%s", expect, got)
+		}
+	}
+}

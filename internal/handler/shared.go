@@ -319,6 +319,53 @@ func looksLikeRequestingUserContent(text string) bool {
 	return false
 }
 
+// looksLikePrematureStop 检测模型"中途停顿"文本:没有 tool_call,却输出
+// 进度报告/后续计划/继续承诺(实测原文:读完两个文件后输出
+// "我已经读完 manifest.json、background.js 前半部分…当前已确认核心架构"
+// 就停下,等用户发"继续";或反复输出"我会按以下顺序通读…读完后整理")。
+// 这类回复不是完成,应重试逼它立刻继续调工具,而不是放行。
+func looksLikePrematureStop(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	// 明确的"部分完成/还没完成"信号
+	partial := []string{
+		"前半部分", "还没读完", "还没有读完", "尚未读完", "还没通读", "没有通读",
+		"还没拿到", "还没有拿到", "尚未拿到", "还没读取", "还没有读取", "还没看",
+		"没有拿到正文", "只看到", "只读取", "只拿到", "只有文件列表", "只有目录",
+		"先到这里", "暂时先",
+	}
+	// 明确的"将来才做"计划/继续承诺信号
+	future := []string{
+		"我继续", "我会继续", "我将继续", "继续通读", "继续读取", "继续阅读",
+		"继续分析", "继续完成", "会继续", "再继续", "按以下顺序", "按这个顺序",
+		"我会按", "读完后", "等读完", "之后我", "之后再", "让我继续", "待我",
+		"等我", "我先读", "先读取", "我再读", "继续补充", "继续深入",
+	}
+	enFuture := []string{
+		"i will continue", "i'll continue", "continue reading", "continue to read",
+		"let me continue", "to be continued", "next i will", "will now continue",
+		"will continue reading", "i will read", "i'll read", "will continue",
+	}
+	for _, m := range partial {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	for _, m := range future {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	for _, m := range enFuture {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。
 // 带时间戳与耗时,便于关联 aurora_run.log 与定位慢请求。
 func appendToolDebugLog(path string, attempt int, elapsed time.Duration, text string, calls []officialtypes.ToolCall) {

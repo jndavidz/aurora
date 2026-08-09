@@ -209,3 +209,34 @@ func TestLooksLikeRequestingUserContentVariants(t *testing.T) {
 		}
 	}
 }
+
+// ─── Test: looksLikePrematureStop ────────────────────────────────
+
+func TestLooksLikePrematureStop(t *testing.T) {
+	// 实测原文:读完两个文件后输出进度报告停下,等用户发"继续"
+	trueCases := []string{
+		"我已经读完：\n- manifest.json\n- background.js 前半部分（消息入口、AI 注册表…）\n当前已确认核心架构：",
+		"我继续通读。目前我已经确认了源码结构，但还没有拿到文件正文内容。我会按以下顺序通读：1. manifest.json 2. background.js",
+		"我可以继续通读，但当前我还没有拿到源码正文，只看到了文件列表。读完后我会整理成：",
+		"我继续通读源码。前面只读取到了文件列表，还没有逐文件读取正文。我会继续按源码顺序读取。",
+		"I will continue reading the remaining files and summarize afterwards.",
+		"Let me continue reading the next file first.",
+	}
+	falseCases := []string{
+		"",
+		"已通读全部源码，总结如下：项目是 MV3 扩展，入口为 background.js。",
+		"已完成读取，结论：read_file 可用。",
+		"The tool output above shows the file listing. Here is the complete summary.",
+		"总结：工具调用成功。",
+	}
+	for _, s := range trueCases {
+		if !looksLikePrematureStop(s) {
+			t.Errorf("want premature-stop detection for %q", s)
+		}
+	}
+	for _, s := range falseCases {
+		if looksLikePrematureStop(s) {
+			t.Errorf("did not want premature-stop detection for %q", s)
+		}
+	}
+}
