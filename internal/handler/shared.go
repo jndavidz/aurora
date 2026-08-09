@@ -277,6 +277,10 @@ func looksLikeSandboxRefusal(text string) bool {
 		"i cannot access", "i can't access", "i cannot read", "i can't read",
 		"don't have access", "do not have access", "no access to", "cannot access",
 		"not available in this", "no such tool", "tool is not available",
+		// 沙箱幻觉新变体(实测:模型编造 '/caas_toolbox' 沙箱路径,声称
+		// "当前工作目录:/" —— 实际 bash 工具在用户项目工作区执行)
+		"caas_toolbox", "当前工作目录：`/`", "当前工作目录: `/`",
+		"当前实际挂载的文件系统", "挂载的文件系统中没有",
 	}
 	for _, m := range markers {
 		if strings.Contains(t, m) {
@@ -396,6 +400,18 @@ func looksLikeEnvironmentExcuse(text string) bool {
 		}
 	}
 	return false
+}
+
+// isValidToolReply 判断一段文本是否适合作为工具模式的最终答案:
+// 空文本、停顿(进度报告/计划)、索要内容、环境推诿、沙箱拒绝都不算。
+// 用于重试耗尽后的最终答案选择——防止把模型的"绕开工具"文本当答案返回。
+func isValidToolReply(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	return !looksLikeSandboxRefusal(t) && !looksLikeRequestingUserContent(t) &&
+		!looksLikePrematureStop(t) && !looksLikeEnvironmentExcuse(t)
 }
 
 // appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。

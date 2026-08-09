@@ -311,3 +311,58 @@ func TestLooksLikeEnvironmentExcuse(t *testing.T) {
 		}
 	}
 }
+
+// ─── Test: looksLikeSandboxRefusal 新沙箱幻觉变体 ────────────────
+
+func TestLooksLikeSandboxRefusalCaasToolbox(t *testing.T) {
+	// 实测:模型编造 '/caas_toolbox' 沙箱路径,声称"当前工作目录:/"
+	trueCases := []string{
+		"已检查：当前工作目录：`/`，搜索 manifest.json：只发现 `/caas_toolbox/manifest.json`",
+		"当前实际挂载的文件系统中没有找到 ai-roundtable 项目目录。",
+		"I found /caas_toolbox/manifest.json but no project files.",
+	}
+	falseCases := []string{
+		"",
+		"已读取 manifest.json，内容如下。",
+		"pwd 显示当前目录是项目根。",
+	}
+	for _, s := range trueCases {
+		if !looksLikeSandboxRefusal(s) {
+			t.Errorf("want sandbox-refusal detection for %q", s)
+		}
+	}
+	for _, s := range falseCases {
+		if looksLikeSandboxRefusal(s) {
+			t.Errorf("did not want sandbox-refusal detection for %q", s)
+		}
+	}
+}
+
+// ─── Test: isValidToolReply ──────────────────────────────────────
+
+func TestIsValidToolReply(t *testing.T) {
+	valid := []string{
+		"已通读全部源码，总结如下：项目为 MV3 扩展。",
+		"read_file 成功：main.go 内容为 package main。",
+		"The tool output shows the complete summary.",
+	}
+	invalid := []string{
+		"",
+		"   ",
+		"我继续读取源码后整理。",
+		"请把源码内容提供给我。",
+		"请重新连接/打开项目环境。",
+		"当前工作目录：`/`，只发现 /caas_toolbox/manifest.json",
+		"我无法访问你机器上的文件系统。",
+	}
+	for _, s := range valid {
+		if !isValidToolReply(s) {
+			t.Errorf("want valid for %q", s)
+		}
+	}
+	for _, s := range invalid {
+		if isValidToolReply(s) {
+			t.Errorf("did not want valid for %q", s)
+		}
+	}
+}
