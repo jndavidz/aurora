@@ -3,6 +3,7 @@ package toolcall
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -41,6 +42,7 @@ func BuildInstructions(tools []official.Tool, toolChoice *official.ToolChoice) s
 	sb.WriteString("5. If you need to use a tool, do it IMMEDIATELY without preamble.\n")
 	sb.WriteString("6. DO NOT use your internal/native Python tool, Advanced Data Analysis, or Code Interpreter. They run in a remote sandbox on your servers and have NO access to the user's workspace. You MUST use ONLY the custom tools listed under TOOLS AVAILABLE (like 'glob', 'read', 'grep', or 'bash').\n")
 	sb.WriteString("7. Inside 'arguments', include ONLY the parameters listed under 'Params:' for that tool. Never add extra fields such as 'description', 'explanation' or 'note' — they will break the call.\n")
+	sb.WriteString("8. The 'bash' tool (if present) runs Git Bash with bash syntax even on Windows: use `ls`, `cat`, `find`, `pwd`, `sed`, `grep` — NEVER Windows commands like `Get-ChildItem`, `dir`, `type`, `Get-Content`, `Select-String`. A 'command not found' error means you used the wrong shell syntax, NOT a broken environment — retry with bash syntax.\n")
 	if forced := toolChoice.ForcedFunctionName(); forced != "" {
 		fmt.Fprintf(&sb, "\nCRITICAL: You MUST call the tool %q in this response. Do not call any other tool, and do not produce a final answer without calling it first.\n", forced)
 	} else if toolChoice != nil && toolChoice.IsForcedNone() {
@@ -173,6 +175,26 @@ func ExtractWorkingDir(messages []official.APIMessage) string {
 		}
 	}
 	return ""
+}
+
+// ExtractProjectDir 扫描 messages 里"最后一个绝对路径"(Windows 盘符路径
+// 如 D:/dev/web/projects/ai-roundtable,或 Git Bash 的 /d/dev/... 形式)。
+// 用于 nudge 里拼出具体的首个读取示例,让模型直接复制调用而不是纠结
+// 路径。取最后一个匹配(最新的 pwd 输出通常就是工作目录)。
+func ExtractProjectDir(messages []official.APIMessage) string {
+	var absPathRe = regexp.MustCompile(`[A-Za-z]:[\\/][^\s"'<>|?*]+|[\\/][a-z][\\/][^\s"'<>|?*]+`)
+	last := ""
+	for _, m := range messages {
+		for _, line := range strings.Split(m.Content.Text(), "\n") {
+			for _, hit := range absPathRe.FindAllString(line, -1) {
+				cand := strings.TrimRight(strings.TrimSpace(hit), "/\\.,;:)'\"")
+				if cand != "" {
+					last = cand
+				}
+			}
+		}
+	}
+	return last
 }
 
 // ReadToolNames 候选文件读取工具名,按顺序匹配第一个出现在 tools 列表里的。

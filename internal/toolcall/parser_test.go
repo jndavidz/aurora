@@ -576,3 +576,26 @@ func TestFinalNudgeToolForbidsProgressReport(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractProjectDir(t *testing.T) {
+	msgs := []official.APIMessage{
+		{Role: "user", Content: official.MessageContent{TextValue: "请通读 D:/dev/web/projects/ai-roundtable 的源码"}},
+		{Role: "assistant", Content: official.MessageContent{TextValue: "<tool_call>{\"name\":\"Bash\",\"arguments\":{\"command\":\"pwd\"}}</tool_call>"}},
+		{Role: "tool", Content: official.MessageContent{TextValue: "D:/dev/web/projects/ai-roundtable"}},
+	}
+	if got := ExtractProjectDir(msgs); got != "D:/dev/web/projects/ai-roundtable" {
+		t.Fatalf("got %q", got)
+	}
+	// 无路径
+	if got := ExtractProjectDir([]official.APIMessage{{Role: "user", Content: official.MessageContent{TextValue: "你好"}}}); got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+	// 取最后一个匹配(最新的 pwd 输出)
+	msgs2 := []official.APIMessage{
+		{Role: "tool", Content: official.MessageContent{TextValue: "C:/Windows"}},
+		{Role: "tool", Content: official.MessageContent{TextValue: "D:/dev/web/projects/ai-roundtable"}},
+	}
+	if got := ExtractProjectDir(msgs2); got != "D:/dev/web/projects/ai-roundtable" {
+		t.Fatalf("got %q", got)
+	}
+}
