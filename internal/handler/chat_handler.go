@@ -93,6 +93,10 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	// 非流式调用上游攒全文解析,对外按 original_request.Stream 输出 SSE 或 JSON)
 	toolsEnabled := toolCallingEnabled(original_request.Tools, h.cfg)
 
+	// 发送上游前清洗历史里的"绕开工具"回复,防止模型被自己之前的
+	// 拒绝/推诿文本锚定而每轮重复同样的行为
+	sanitizeRefusalHistory(original_request.Messages)
+
 	// Convert the chat request to a ChatGPT request
 	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
 
@@ -314,6 +318,9 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	} else {
 		client = setupClientWithProxy(proxyUrl)
 	}
+
+	// 发送上游前清洗历史里的"绕开工具"回复(同 Nightmare)
+	sanitizeRefusalHistory(original_request.Messages)
 
 	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
 

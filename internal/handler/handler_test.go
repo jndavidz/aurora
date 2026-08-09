@@ -366,3 +366,31 @@ func TestIsValidToolReply(t *testing.T) {
 		}
 	}
 }
+
+// ─── Test: sanitizeRefusalHistory ────────────────────────────────
+
+func TestSanitizeRefusalHistory(t *testing.T) {
+	msgs := []officialtypes.APIMessage{
+		{Role: "user", Content: officialtypes.MessageContent{TextValue: "请通读 ai-roundtable 源码"}},
+		{Role: "assistant", Content: officialtypes.MessageContent{TextValue: "当前环境根目录为 Linux 文件系统 `/`,无法访问该 Windows 路径。"}},
+		{Role: "assistant", Content: officialtypes.MessageContent{TextValue: "我继续读取源码后整理。"}},
+		{Role: "assistant", Content: officialtypes.MessageContent{TextValue: "已通读全部源码,总结如下:项目为 MV3 扩展。"}},
+		{Role: "assistant", Content: officialtypes.MessageContent{TextValue: ""}, ToolCalls: []officialtypes.ToolCallRef{{ID: "c1"}}},
+	}
+	sanitizeRefusalHistory(msgs)
+	// 前两条拒绝/停顿文本被替换为占位符
+	if msgs[1].Content.Text() != "(上一轮模型回复未调用工具" && !strings.Contains(msgs[1].Content.Text(), "占位符") {
+		t.Fatalf("msg[1] not sanitized: %q", msgs[1].Content.Text())
+	}
+	if !strings.Contains(msgs[2].Content.Text(), "占位符") {
+		t.Fatalf("msg[2] not sanitized: %q", msgs[2].Content.Text())
+	}
+	// 正常总结保留
+	if msgs[3].Content.Text() != "已通读全部源码,总结如下:项目为 MV3 扩展。" {
+		t.Fatalf("msg[3] should be preserved: %q", msgs[3].Content.Text())
+	}
+	// 带 tool_calls 的 assistant 消息保留
+	if msgs[4].Content.Text() != "" || len(msgs[4].ToolCalls) != 1 {
+		t.Fatalf("msg[4] should be preserved: %#v", msgs[4])
+	}
+}

@@ -414,6 +414,29 @@ func isValidToolReply(text string) bool {
 		!looksLikePrematureStop(t) && !looksLikeEnvironmentExcuse(t)
 }
 
+// sanitizeRefusalHistory 把历史里模型之前"绕开工具"的回复(停顿/索要内容/
+// 环境推诿/沙箱幻觉/拒绝)替换为中性占位符。
+// 原因:这些文本作为 assistant 消息留在会话历史里,每轮重发给上游,会
+// 锚定模型重复同样的拒绝行为(实测:历史里堆积 15 条"无法访问 Windows
+// 路径 / Linux 文件系统 /"等拒绝文本后,模型每轮都重复同样的说辞,
+// nudge 再强也压不过历史里的自我强化)。
+func sanitizeRefusalHistory(messages []officialtypes.APIMessage) {
+	const placeholder = "(上一轮模型回复未调用工具,已被服务端替换为占位符,请忽略其内容并继续使用工具完成任务。)"
+	for i := range messages {
+		m := &messages[i]
+		if m.Role != "assistant" || m.HasToolCalls() {
+			continue // 带 tool_calls 的 assistant 消息是正常调用记录,保留
+		}
+		text := m.Content.Text()
+		if text == "" {
+			continue
+		}
+		if !isValidToolReply(text) {
+			m.Content = officialtypes.MessageContent{TextValue: placeholder}
+		}
+	}
+}
+
 // appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。
 // 带时间戳与耗时,便于关联 aurora_run.log 与定位慢请求。
 func appendToolDebugLog(path string, attempt int, elapsed time.Duration, text string, calls []officialtypes.ToolCall) {
