@@ -745,9 +745,18 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 			lastToolCalls = calls
 			break
 		}
-		// 没有解析出任何工具调用:只要还有重试次数就继续重试。
-		// 原实现只在模型"声称沙箱隔离"时重试;实际最常见的失败是模型
-		// 直接输出纯文本回答(不输出 <tool_call>),这种也必须重试。
+		// 没有解析出工具调用。判断是否值得重试:
+		//  - 若最后一条消息是工具结果(tool/function)且模型给出了总结文本,
+		//    说明模型已基于工具输出完成任务,应接受而非强制重试
+		//    (否则会重复请求同一对话,可能触发上游限流 → 500)
+		//  - 其余场景(如用户提问后模型直接纯文本回答绕开工具)继续重试
+		lastRole := ""
+		if n := len(originalRequest.Messages); n > 0 {
+			lastRole = originalRequest.Messages[n-1].Role
+		}
+		if (lastRole == "tool" || lastRole == "function") && strings.TrimSpace(result.Text) != "" {
+			break
+		}
 		if attempt >= maxRefusalRetries-1 {
 			break
 		}

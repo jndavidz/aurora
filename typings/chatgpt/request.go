@@ -104,12 +104,15 @@ func (c *ChatGPTRequest) AddAssistantMessage(input string) {
 	c.Messages = append(c.Messages, msg)
 }
 
-// AddToolMessage 追加一个 role=tool 的消息,把客户端执行工具的结果回传给上游。
+// AddToolMessage 追加一条 user 消息,把客户端执行工具的结果回传给上游。
 // toolName 形如 "bash";result 是工具返回的字符串(可能含换行)。
+// 注意:ChatGPT 网页端协议不认识 role=tool,直接发会导致模型困惑、
+// 返回空回复(实测 completion_tokens=0);用 user 角色 + 前缀文本标记,
+// 模型即可正常读取并继续。
 func (c *ChatGPTRequest) AddToolMessage(toolName, result string) {
 	// 包成 "Tool (Resultado da ferramenta bash): ..." 文本格式以兼容  协议
 	text := "Tool (Resultado da ferramenta " + toolName + "): " + result
-	c.AddMessage("tool", text)
+	c.AddMessage("user", text)
 }
 
 func isStringPart(part interface{}) bool {
