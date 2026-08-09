@@ -269,6 +269,14 @@ func looksLikeSandboxRefusal(text string) bool {
 		"falha na interface de execução", "falha no parsing",
 		"inferência baseada na estrutura", "inferencia baseada na estrutura",
 		"baseada apenas na estrutura",
+		// 中文拒绝模式(实测常见:模型声称"没有工具接口/无法访问")
+		"没有可用的", "我当前会话", "我目前没有", "当前会话中", "无法访问",
+		"我无法读取", "无法读取", "不能读取", "没有提供", "无法实际",
+		"未提供这些", "工具列表里未提供", "工具接口",
+		// 英文拒绝模式
+		"i cannot access", "i can't access", "i cannot read", "i can't read",
+		"don't have access", "do not have access", "no access to", "cannot access",
+		"not available in this", "no such tool", "tool is not available",
 	}
 	for _, m := range markers {
 		if strings.Contains(t, m) {
@@ -278,15 +286,17 @@ func looksLikeSandboxRefusal(text string) bool {
 	return false
 }
 
-// appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件
-func appendToolDebugLog(path string, attempt int, text string, calls []officialtypes.ToolCall) {
+// appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。
+// 带时间戳与耗时,便于关联 aurora_run.log 与定位慢请求。
+func appendToolDebugLog(path string, attempt int, elapsed time.Duration, text string, calls []officialtypes.ToolCall) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
 	callsJSON, _ := json.Marshal(calls)
-	fmt.Fprintf(f, "\n=== attempt %d ===\ntext: %s\ncalls: %s\n", attempt, text, string(callsJSON))
+	ts := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Fprintf(f, "\n=== %s attempt %d (%.0fms) ===\ntext: %s\ncalls: %s\n", ts, attempt, float64(elapsed.Milliseconds()), text, string(callsJSON))
 }
 
 // ── Responses 流式事件构造器 ──

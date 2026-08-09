@@ -88,11 +88,9 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		client = setupClientWithProxy(proxyUrl)
 	}
 
-	// 工具调用模式判定
+	// 工具调用模式判定(不再强制非流式:handleToolCalling 内部统一
+	// 非流式调用上游攒全文解析,对外按 original_request.Stream 输出 SSE 或 JSON)
 	toolsEnabled := toolCallingEnabled(original_request.Tools, h.cfg)
-	if toolsEnabled && h.cfg.StreamMode {
-		original_request.Stream = false
-	}
 
 	// Convert the chat request to a ChatGPT request
 	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
@@ -686,6 +684,7 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 	var lastSentinel []map[string]interface{}
 
 	for attempt := 0; attempt < maxRefusalRetries; attempt++ {
+		attemptStart := time.Now()
 		translated := baseTranslated
 		if attempt > 0 {
 			var retrySuffix string
@@ -739,7 +738,7 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 			calls[i].Index = i
 		}
 		if logPath := h.cfg.DebugToolLog; logPath != "" {
-			appendToolDebugLog(logPath, attempt, result.Text, calls)
+			appendToolDebugLog(logPath, attempt, time.Since(attemptStart), result.Text, calls)
 		}
 		if len(calls) > 0 {
 			lastToolCalls = calls
@@ -767,6 +766,13 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 		}
 	}
 
+	if originalRequest.Stream {
+		// 客户端要求流式:统一输出标准 SSE(工具调用或纯文本都兼容 OpenAI 协议)
+		outputTokens := util.CountToken(lastText)
+		h.writeToolCallingStream(c, *reqModel, lastText, lastToolCalls, lastConversationID,
+			*inputTokens, outputTokens, originalRequest.StreamOptions != nil && originalRequest.StreamOptions.IncludeUsage)
+		return
+	}
 	if len(lastToolCalls) > 0 {
 		c.JSON(200, officialtypes.NewChatCompletionWithToolCalls(
 			lastText, "", lastToolCalls,
@@ -777,6 +783,60 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 	}
 	outputTokens := util.CountToken(lastText)
 	c.JSON(200, officialtypes.NewChatCompletionWithMetadata(lastText, *inputTokens, outputTokens, *reqModel, lastConversationID, lastSentinel))
+}
+
+// writeToolCallingStream 把工具调用/文本结果以标准 OpenAI SSE 流式协议写出。
+// 工具调用场景:role chunk → tool_calls deltas(name 先到,arguments 后续)→
+// finish_reason=tool_calls → [DONE];纯文本场景:role chunk → content 分片 → stop → [DONE]。
+func (h *ChatHandler) writeToolCallingStream(c *gin.Context, model string, text string, calls []officialtypes.ToolCall, conversationID string, inputTokens, outputTokens int, includeUsage bool) {
+	start := time.Now()
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+
+	// 1) role 起始块(OpenAI 协议要求首块带 role)
+	roleChunk := officialtypes.ChatCompletionChunk{
+		ID:      "chatcmpl-QXlha2FBbmROaXhpZUFyZUF3ZXNvbWUK",
+		Object:  "chat.completion.chunk",
+		Created: 0,
+		Model:   model,
+		Choices: []officialtypes.Choices{{
+			Index: 0,
+			Delta: officialtypes.Delta{Role: "assistant"},
+		}},
+	}
+	c.Writer.WriteString("data: " + roleChunk.String() + "\n\n")
+	if len(calls) > 0 {
+		// 2) 逐个输出 tool_calls delta(name 段 → arguments 段)
+		for _, deltas := range toolcall.StreamToToolCallDeltas(calls) {
+			chunk := officialtypes.NewToolCallChunk(model, deltas...)
+			c.Writer.WriteString("data: " + chunk.String() + "\n\n")
+		}
+		// 3) 尾块:finish_reason=tool_calls
+		stop := officialtypes.NewToolCallStopChunk(model, conversationID)
+		c.Writer.WriteString("data: " + stop.String() + "\n\n")
+	} else {
+		// 2) 文本分片输出
+		const sliceSize = 80
+		for i := 0; i < len(text); i += sliceSize {
+			end := i + sliceSize
+			if end > len(text) {
+				end = len(text)
+			}
+			chunk := officialtypes.NewChatCompletionChunk(text[i:end], model)
+			c.Writer.WriteString("data: " + chunk.String() + "\n\n")
+		}
+		// 3) 尾块:finish_reason=stop
+		stop := officialtypes.StopChunkWithConversation("stop", model, conversationID)
+		c.Writer.WriteString("data: " + stop.String() + "\n\n")
+	}
+	// 4) usage 块(可选)
+	if includeUsage {
+		httpstream.WriteUsageChunk(c, model, inputTokens, outputTokens, 0, 0, time.Since(start).Milliseconds(), 0, false)
+	}
+	c.Writer.WriteString("data: [DONE]\n\n")
+	c.Writer.Flush()
 }
 
 func (h *ChatHandler) ChatGPTConversation(c *gin.Context) {
