@@ -211,8 +211,9 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 		return
 	}
 
-	if len(prompt) > 1000 {
-		prompt = prompt[:1000]
+	if len([]rune(prompt)) > 1000 {
+		// 按 rune 截断,避免把多字节 UTF-8 字符切成非法序列
+		prompt = string([]rune(prompt)[:1000])
 	}
 
 	formFile, fileHeader, err := c.Request.FormFile("file")

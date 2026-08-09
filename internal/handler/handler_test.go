@@ -240,3 +240,44 @@ func TestLooksLikePrematureStop(t *testing.T) {
 		}
 	}
 }
+
+// ─── Test: writeToolCallingStream 不破坏多字节 UTF-8 ─────────────
+
+func TestWriteToolCallingStreamPreservesUTF8(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	long := "我目前只能看到项目文件列表（目录结构），还没有获得源代码正文内容，因此不能负责任地声称“已经读完所有源码并完整分析”。仅凭文件名总结会变成猜测。" +
+		"接下来我会按以下顺序逐个读取：manifest.json、background.js、sidepanel/panel.html、content/base.js，然后给出完整分析。"
+	if len(long) <= 200 {
+		t.Fatalf("test text too short: %d bytes", len(long))
+	}
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+	h := &ChatHandler{}
+	h.writeToolCallingStream(c, "auto", long, nil, "conv-1", 10, 50, false)
+
+	var rebuilt string
+	for _, line := range sseDataLines(writer.Body.String()) {
+		if line == "[DONE]" {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			continue
+		}
+		if len(chunk.Choices) > 0 {
+			rebuilt += chunk.Choices[0].Delta.Content
+		}
+	}
+	if strings.Contains(rebuilt, "\uFFFD") {
+		t.Fatalf("rebuilt text contains U+FFFD (byte-sliced UTF-8): %q", rebuilt)
+	}
+	if rebuilt != long {
+		t.Fatalf("rebuilt != original\norig: %q\nnew : %q", long, rebuilt)
+	}
+}

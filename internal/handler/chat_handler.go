@@ -859,13 +859,18 @@ func (h *ChatHandler) writeToolCallingStream(c *gin.Context, model string, text 
 		c.Writer.WriteString("data: " + stop.String() + "\n\n")
 	} else {
 		// 2) 文本分片输出
+		// 注意:必须按 rune 切片而不是按字节 —— 中文等多字节字符跨切块边界
+		// 会被截成非法 UTF-8 序列,json.Marshal 会把它替换成 U+FFFD(�)
+		// (实测:80 字节切片在"源代码"中间截断,回复出现"源���正文内容")。
 		const sliceSize = 80
-		for i := 0; i < len(text); i += sliceSize {
+		runes := []rune(text)
+		for i := 0; i < len(runes); i += sliceSize {
 			end := i + sliceSize
-			if end > len(text) {
-				end = len(text)
+			if end > len(runes) {
+				end = len(runes)
 			}
-			chunk := officialtypes.NewChatCompletionChunk(text[i:end], model)
+			part := string(runes[i:end])
+			chunk := officialtypes.NewChatCompletionChunk(part, model)
 			c.Writer.WriteString("data: " + chunk.String() + "\n\n")
 		}
 		// 3) 尾块:finish_reason=stop
