@@ -16,9 +16,9 @@ tools/authenticator/.proxies.txt.swp
 .gocache
 .atomcode
 .workbuddy/
-CLAUDE.md
-MIGRATION_PLAN.md
 his.md
+# ZCode 会话计划（本地瞬时产物，不跨机、不提交；技能 skills/ 需提交 git）
+.zcode/plans/
 _scratch/
 *.py
 *.json
