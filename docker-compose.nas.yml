@@ -57,6 +57,11 @@ services:
       # ⚠️ Google 反爬最强:代码内置严格限频(2s/账号),只放可丢弃小号。
       - GEMINI_ACCOUNTS=/work/.runtime/tokens/gemini_accounts.json
       - GEMINI_MODELS=${GEMINI_MODELS:-}
+      # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json
+      # (JSON 数组,含 cookie + 签名参数 + 会话),只读挂载;仅当文件非空时注册。
+      # ⚠️ 字节系风控强(元宝前车之鉴):代码内置限频(2s/账号),只放可丢弃小号。
+      - DOUBAO_ACCOUNTS=/work/.runtime/tokens/doubao_accounts.json
+      - DOUBAO_MODELS=${DOUBAO_MODELS:-}
       # 腾讯元宝(yuanbao.tencent.com)网页逆向通道 —— 【已关停,2026-08-14】
       # 两个账号(主号+小号)一天内先后被风控冻结,元宝网页端对非浏览器调用极敏感,
       # 结构性封号风险,不值得继续消耗账号。代码与 docs/YUANBAO.md 保留,
