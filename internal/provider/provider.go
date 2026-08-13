@@ -24,6 +24,9 @@ const (
 	CapVision Capability = "vision"
 	// CapFunctionCall 工具调用(网页逆向下为文本协议模拟,非原生 function calling)。
 	CapFunctionCall Capability = "function_call"
+	// CapSandboxCode 云端沙箱代码执行(智谱 coding 变体:execute_sandbox_code,
+	// 在智谱云端真实执行并回传结果;不是客户端工具调用)。
+	CapSandboxCode Capability = "sandbox_code"
 )
 
 // Model 是 /v1/models 目录里的一个条目,附带能力标注。

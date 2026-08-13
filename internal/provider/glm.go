@@ -68,7 +68,9 @@ func parseGlmModel(id string) *glmModel {
 	case strings.HasSuffix(id, "-chat"):
 		return &glmModel{ID: id, Variant: glmVariantChat, Caps: []Capability{CapReasoning, CapWebSearch, CapVision}}
 	case strings.HasSuffix(id, "-coding"):
-		return &glmModel{ID: id, Variant: glmVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}
+		// 定位:云端沙箱代码执行助手(见 docs/GLM.md §四)。
+		// 智谱模型无 function calling 训练,不标 CapFunctionCall,如实标 CapSandboxCode。
+		return &glmModel{ID: id, Variant: glmVariantCoding, Caps: []Capability{CapSandboxCode, CapReasoning}}
 	default:
 		return nil
 	}
