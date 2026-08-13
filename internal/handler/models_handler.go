@@ -30,20 +30,15 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		Data   []ResData `json:"data"`
 	}
 
+	// ChatGPT 网页逆向实际可用模型(2026-08-14 抓包 /backend-api/models,免费账号视角)。
+	// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
 	models := []string{
 		"auto",
+		"gpt-5-5",
 		"gpt-5-6",
-		"gpt-5-6-thinking",
-		"gpt-5-6-pro",
-		"gpt-5-5-instant",
-		"gpt-5-5-thinking",
-		"gpt-5-5-pro",
-		"gpt-5",
-		"gpt-4o",
-		"gpt-4o-mini",
-		"o3",
-		"o4-mini",
-		"o4-mini-high",
+		"gpt-5-3-mini",
+		"gpt-5-5-mini",
+		"gpt-5-6-mini",
 	}
 
 	var resModelList []ResData
