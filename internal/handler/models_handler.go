@@ -36,7 +36,6 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		"auto",
 		"gpt-5-5",
 		"gpt-5-6",
-		"gpt-5-3-mini",
 		"gpt-5-5-mini",
 		"gpt-5-6-mini",
 	}
