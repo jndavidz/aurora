@@ -196,7 +196,7 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
 
 	// 用 toolcall.Parser 流式解析文本块。
-	parser := toolcall.NewParserWithTags(deepseekTagSet())
+	parser := toolcall.NewParserWithTagsAndTools(deepseekTagSet(), req.Tools)
 	var textBuf strings.Builder
 	var calls []official.ToolCall
 
@@ -363,7 +363,7 @@ func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req
 	roleChunk.Choices[0].Delta.Role = "assistant"
 	writeChunk(roleChunk)
 
-	parser := toolcall.NewParserWithTags(deepseekTagSet())
+	parser := toolcall.NewParserWithTagsAndTools(deepseekTagSet(), req.Tools)
 	var textBuf strings.Builder
 	var emittedCall bool
 	_ = deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {

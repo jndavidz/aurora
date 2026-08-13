@@ -24,12 +24,14 @@ const (
 
 // Parser 是流式 <tool_call> 解析器。每收到一段文本,调用 Feed 拿到增量。
 // 默认使用 DefaultTags(ChatGPT);DeepSeek 等用 NewParserWithTags 指定标签。
+// 提供 tools 时,无 name 的"参数直给"JSON 可按 schema 推断工具名。
 type Parser struct {
 	buffer       string
 	inside       bool
 	emittedCount int
 	emittedText  bool
 	tags         TagSet
+	tools        []official.Tool
 }
 
 // NewParser 构造一个 ChatGPT 默认标签的解析器。零值不可直接使用。
@@ -40,6 +42,39 @@ func NewParser() *Parser {
 // NewParserWithTags 构造指定标签集的解析器(DeepSeek 等)。
 func NewParserWithTags(tags TagSet) *Parser {
 	return &Parser{tags: tags}
+}
+
+// NewParserWithTagsAndTools 构造指定标签与工具列表的解析器。
+// tools 用于"参数直给"格式({file_path:...} 无 name)的工具名推断。
+func NewParserWithTagsAndTools(tags TagSet, tools []official.Tool) *Parser {
+	return &Parser{tags: tags, tools: tools}
+}
+
+// buildToolCallFromRaw 尝试把标签内的纯文本解析成 ToolCall。
+// 优先按 name 字段;无 name 时若提供了 tools,按参数键推断工具名。
+func (p *Parser) buildToolCallFromRaw(raw string) *official.ToolCall {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	// 去掉 markdown 围栏
+	s = stripMarkdownFence(s)
+	idx := strings.Index(s, "{")
+	if idx < 0 {
+		return nil
+	}
+	s = s[idx:]
+	obj, ok := robustJSON(s)
+	if !ok {
+		return nil
+	}
+	if tc := buildToolCallFromObject(obj); tc != nil {
+		return tc
+	}
+	if len(p.tools) > 0 {
+		return InferToolFromParams(obj, p.tools)
+	}
+	return nil
 }
 
 // Feed 把新 chunk 喂入解析器,返回 (textDelta, toolCalls)。
@@ -95,7 +130,7 @@ func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.Tool
 			break
 		}
 		raw := strings.TrimSpace(p.buffer[:endIdx])
-		if tc := buildToolCallFromRaw(raw); tc != nil {
+		if tc := p.buildToolCallFromRaw(raw); tc != nil {
 			toolCalls = append(toolCalls, *tc)
 			p.emittedCount++
 		}
@@ -115,7 +150,7 @@ func (p *Parser) Flush() (textDelta string, toolCalls []official.ToolCall) {
 	}
 	if p.inside {
 		// 还在工具块里 —— 尝试解析剩余内容
-		if tc := buildToolCallFromRaw(remaining); tc != nil {
+		if tc := p.buildToolCallFromRaw(remaining); tc != nil {
 			toolCalls = append(toolCalls, *tc)
 			p.emittedCount++
 			return "", toolCalls
@@ -128,7 +163,7 @@ func (p *Parser) Flush() (textDelta string, toolCalls []official.ToolCall) {
 	}
 	// 不在工具块里 —— 看剩余文本是否整体就是一个 JSON
 	if p.emittedCount == 0 {
-		if tc := buildToolCallFromRaw(remaining); tc != nil {
+		if tc := p.buildToolCallFromRaw(remaining); tc != nil {
 			toolCalls = append(toolCalls, *tc)
 			p.emittedCount++
 			return "", toolCalls
@@ -146,27 +181,6 @@ func looksLikeJSONJunk(s string) bool {
 		return false
 	}
 	return strings.HasPrefix(t, "`") || strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[")
-}
-
-// buildToolCallFromRaw 尝试把 <tool_call> 内的纯文本解析成 ToolCall。
-// 失败时返回 nil(让上层决定是否作为文本回吐)。
-func buildToolCallFromRaw(raw string) *official.ToolCall {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return nil
-	}
-	// 去掉 markdown 围栏
-	s = stripMarkdownFence(s)
-	idx := strings.Index(s, "{")
-	if idx < 0 {
-		return nil
-	}
-	s = s[idx:]
-	obj, ok := robustJSON(s)
-	if !ok {
-		return nil
-	}
-	return buildToolCallFromObject(obj)
 }
 
 func stripMarkdownFence(s string) string {

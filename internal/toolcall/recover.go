@@ -65,28 +65,32 @@ func RecoverFromText(text string, tools []official.Tool) []official.ToolCall {
 	shellName, shellParam := ResolveShellTool(tools)
 	seen := make(map[string]bool)
 	var out []official.ToolCall
-	for _, obj := range iterJSONObjects(text) {
-		var tc *official.ToolCall
-		if name := pickString(obj, "name", "tool", "tool_name", "function"); name != "" {
-			tc = buildToolCallFromObject(obj)
-		} else if shellName != "" {
-			if cmd, ok := obj["cmd"]; ok {
-				if s := cmdToString(cmd); s != "" {
-					raw, _ := json.Marshal(map[string]string{shellParam: s})
-					tc = &official.ToolCall{
-						ID:   generateCallID(),
-						Type: "function",
-						Function: official.ToolCallFunc{
-							Name:      shellName,
-							Arguments: string(raw),
-						},
+		for _, obj := range iterJSONObjects(text) {
+			var tc *official.ToolCall
+			if name := pickString(obj, "name", "tool", "tool_name", "function"); name != "" {
+				tc = buildToolCallFromObject(obj)
+			} else if shellName != "" {
+				if cmd, ok := obj["cmd"]; ok {
+					if s := cmdToString(cmd); s != "" {
+						raw, _ := json.Marshal(map[string]string{shellParam: s})
+						tc = &official.ToolCall{
+							ID:   generateCallID(),
+							Type: "function",
+							Function: official.ToolCallFunc{
+								Name:      shellName,
+								Arguments: string(raw),
+							},
+						}
 					}
 				}
 			}
-		}
-		if tc == nil {
-			continue
-		}
+			// "参数直给"格式(无 name):按参数键匹配工具 schema 推断工具名。
+			if tc == nil {
+				tc = InferToolFromParams(obj, tools)
+			}
+			if tc == nil {
+				continue
+			}
 		key := tc.Function.Name + "\x00" + tc.Function.Arguments
 		if seen[key] {
 			continue
