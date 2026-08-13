@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"aurora/internal/deepseekweb"
@@ -94,13 +95,22 @@ func thinkingEnabled(m *deepseekModel, req *official.ResponsesAPIRequest) bool {
 // - 多轮 history 直接拼接(网页服务端按 session+parent_message_id 记忆,
 //   aurora 每请求新会话,需全量提交)
 func flattenChatInput(req *official.ResponsesAPIRequest, quickMode bool) string {
+	return flattenChatItems(responsesInputItems(req.Input), rawResponsesText(req.Instructions))
+}
+
+// flattenChatInputAPI 从 chat.completions messages 拍平 prompt(同上,共享实现)。
+func flattenChatInputAPI(req *official.APIRequest) string {
+	return flattenChatItems(apiMessagesToItems(req.Messages), "")
+}
+
+// flattenChatItems 双接口共享的 chat prompt 构建(纯文本,跳过工具 item)。
+func flattenChatItems(items []responsesInputItem, instructions string) string {
 	var sb strings.Builder
-	// instructions → system 前缀(仅真人对话语境,无工具说明)
-	if instr := rawResponsesText(req.Instructions); instr != "" {
-		sb.WriteString(instr)
+	if instructions != "" {
+		sb.WriteString(instructions)
 		sb.WriteString("\n\n")
 	}
-	for _, item := range responsesInputItems(req.Input) {
+	for _, item := range items {
 		switch item.Type {
 		case "function_call", "function_call_output":
 			// chat 变体不应出现工具 item;防御性跳过(不注入上游)。
@@ -185,4 +195,138 @@ func (d *DeepSeek) chatNonStream(c *gin.Context, m *deepseekModel, req *official
 	}
 	outResp := official.NewResponsesResponse(fullText, fullReasoning, countInputChars(req), util.CountToken(fullText), util.CountToken(fullReasoning), 0, 0, req.Model)
 	c.JSON(200, outResp)
+}
+
+// ── /v1/chat/completions 支持(输出 chat.completion 格式)──
+
+// chatCompletions 处理 DeepSeek chat 变体(/v1/chat/completions)。
+// 与 chatResponses 同一套上游逻辑(session/PoW/SSE),仅输出格式不同。
+func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *official.APIRequest) {
+	client := d.webClient()
+	if client == nil {
+		c.JSON(502, gin.H{"error": "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?"})
+		return
+	}
+	token := client.NextToken()
+	if token == "" {
+		c.JSON(502, gin.H{"error": "deepseek web token pool is empty"})
+		return
+	}
+
+	prompt := flattenChatInputAPI(req)
+
+	sessionID, err := client.CreateSession(token)
+	if err != nil {
+		c.JSON(502, gin.H{"error": fmt.Sprintf("deepseek create session: %v", err)})
+		return
+	}
+	defer client.DeleteSession(token, sessionID)
+
+	refFileIDs, _ := uploadImagesFromMessages(client, token, req.Messages)
+	modelType := modelTypeFor(m)
+	if len(refFileIDs) > 0 {
+		modelType = "vision"
+	}
+	streamReq := deepseekweb.CompletionRequest{
+		SessionID:       sessionID,
+		Prompt:          prompt,
+		ModelType:       modelType,
+		ThinkingEnabled: thinkingEnabledAPI(m, req),
+		SearchEnabled:   m.Mode == modeQuick,
+		RefFileIDs:      refFileIDs,
+	}
+	if req.Stream {
+		d.chatCompletionsStream(c, m, req, client, token, streamReq)
+		return
+	}
+	d.chatCompletionsNonStream(c, m, req, client, token, streamReq)
+}
+
+// thinkingEnabledAPI chat.completions 版的深度思考开关(reasoning_effort)。
+func thinkingEnabledAPI(m *deepseekModel, req *official.APIRequest) bool {
+	if m.Mode != modeExpert {
+		return false
+	}
+	if req.ReasoningEffort != "" && req.ReasoningEffort == "none" {
+		return false
+	}
+	return true
+}
+
+// chatCompletionsStream 流式输出 chat.completion.chunk SSE。
+func (d *DeepSeek) chatCompletionsStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
+	resp, err := client.Complete(token, streamReq)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	model := req.Model
+	if model == "" {
+		model = "auto"
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := c.Writer.(http.Flusher)
+
+	writeChunk := func(chunk official.ChatCompletionChunk) {
+		c.Writer.WriteString("data: " + chunk.String() + "\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	// role 块
+	roleChunk := official.NewChatCompletionChunk("", model)
+	roleChunk.Choices[0].Delta.Role = "assistant"
+	writeChunk(roleChunk)
+
+	_ = deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
+		if delta.Reasoning != "" {
+			writeChunk(official.NewReasoningChunk(delta.Reasoning, model))
+		}
+		if delta.Text != "" {
+			writeChunk(official.NewChatCompletionChunk(delta.Text, model))
+		}
+	})
+	writeChunk(official.StopChunk("stop", model))
+	c.Writer.WriteString("data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// chatCompletionsNonStream 非流式返回 ChatCompletion JSON。
+func (d *DeepSeek) chatCompletionsNonStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
+	resp, err := client.Complete(token, streamReq)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	var fullText, fullReasoning string
+	res := deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
+		fullText += delta.Text
+		fullReasoning += delta.Reasoning
+	})
+	if res.Err != "" && fullText == "" && fullReasoning == "" {
+		c.JSON(502, gin.H{"error": res.Err})
+		return
+	}
+	inputTokens := countMessagesChars(req.Messages)
+	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, fullReasoning, inputTokens, util.CountToken(fullText), req.Model, "", nil)
+	c.JSON(200, outResp)
+}
+
+// countMessagesChars 粗略统计 messages 字符数(代替 token 统计)。
+func countMessagesChars(messages []official.APIMessage) int {
+	n := 0
+	for _, msg := range messages {
+		n += len(msg.Text())
+	}
+	return n
 }

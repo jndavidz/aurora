@@ -7,17 +7,26 @@
 
 ## 一、定位
 
-aurora 是「网页端 → OpenAI 兼容 API」网关。对外唯一表面统一为 **Responses API(`/v1/responses`)**,
-同时服务 **ChatGPT** 与 **DeepSeek** 两个上游(都是网页逆向)。`/v1/chat/completions` 保留仅作兼容(ChatGPT),新上游只接 responses。
+aurora 是「网页端 → OpenAI 兼容 API」网关。对外提供 **两个 OpenAI 兼容表面**:
+
+- **`/v1/chat/completions`**:主流客户端(测试 HTML、zcode、多数 agent)使用
+- **`/v1/responses`**:pi 等 Responses 客户端使用
+
+两个表面都同时服务 **ChatGPT** 与 **DeepSeek**(都是网页逆向),共享同一套 Provider 逻辑 ——
+Provider 接口含 `Responses()` 与 `ChatCompletions()` 两个方法,内部收敛为
+**同一核心**(输入统一成 messages → 拍平 prompt → session/PoW/SSE → delta 流),
+差异只在输入解析与输出格式(两个薄适配器)。
 
 ```
-OpenAI 兼容客户端(pi / zcode / codebuddy)
-        │  /v1/responses        (pi 的适配器实际打 /v1/models/responses,见别名路由)
+OpenAI 兼容客户端(pi / zcode / aurora-chat.html / codebuddy)
+        │  /v1/chat/completions 或 /v1/responses
         ▼
-   ChatHandler.Responses
+   ChatHandler(Nightmare / Responses)
         │
-        ├─ model ∈ provider 注册表? ── 是 ──▶ Provider.Responses(...)   ← DeepSeek 等新上游
-        │
+        ├─ model ∈ provider 注册表? ── 是 ──▶ Provider.ChatCompletions / .Responses
+        │                                            │
+        │                                            └─ 共享核心:toMessages → buildPrompt → session/PoW/SSE
+        │                                               ↓ 两薄适配器输出
         └─ 否(含 "auto"、gpt-*)──▶ ChatGPT 网页逆向路径(原逻辑,默认兜底)
 ```
 

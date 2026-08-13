@@ -142,3 +142,43 @@ func TestResponsesInputItemsMultiTurn(t *testing.T) {
 		t.Errorf("function_call_output item wrong: %+v", items[2])
 	}
 }
+
+// 双接口共享核心:APIRequest messages 与 Responses input 应产生相同的 prompt。
+func TestSharedPromptCore(t *testing.T) {
+	apiReq := &official.APIRequest{
+		Messages: []official.APIMessage{
+			{Role: "system", Content: official.MessageContent{TextValue: "你是助手"}},
+			{Role: "user", Content: official.MessageContent{TextValue: "读一下"}},
+			{Role: "assistant", ToolCalls: []official.ToolCallRef{{Index: 0, ID: "c1", Type: "function", Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{Name: "read", Arguments: `{"path":"a.txt"}`}}}},
+			{Role: "tool", ToolCallID: "c1", Content: official.MessageContent{TextValue: "内容A"}},
+			{Role: "user", Content: official.MessageContent{TextValue: "总结"}},
+		},
+	}
+	// chat 变体:两种请求形态的 prompt 应一致(纯文本、跳过工具)
+	chatAPI := flattenChatInputAPI(apiReq)
+	respReq := &official.ResponsesAPIRequest{
+		Input: json.RawMessage(`[
+			{"type":"message","role":"user","content":"读一下"},
+			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},
+			{"type":"function_call_output","call_id":"c1","output":"内容A"},
+			{"type":"message","role":"user","content":"总结"}
+		]`),
+		Instructions: json.RawMessage(`"你是助手"`),
+	}
+	chatResp := flattenChatInput(respReq, true)
+	if chatAPI != chatResp {
+		t.Errorf("chat prompt 不一致:\nAPI=%q\nRESP=%q", chatAPI, chatResp)
+	}
+	if strings.Contains(chatAPI, "read") || strings.Contains(chatAPI, "Tool result") {
+		t.Errorf("chat prompt 不得含工具信息: %q", chatAPI)
+	}
+
+	// coding 变体:工具 item 保留
+	codingAPI := buildDeepSeekCodingPromptAPI(apiReq)
+	if !strings.Contains(codingAPI, "<|tool_call_begin|>") || !strings.Contains(codingAPI, "Tool result: 内容A") {
+		t.Errorf("coding prompt 应含工具回放: %q", codingAPI)
+	}
+}

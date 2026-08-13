@@ -2,11 +2,13 @@ package provider
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"aurora/internal/deepseekweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
+	"aurora/util"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -55,20 +57,30 @@ func (d *DeepSeek) codingResponses(c *gin.Context, m *deepseekModel, req *offici
 	d.codingNonStream(c, m, req, client, token, streamReq)
 }
 
-// buildDeepSeekCodingPrompt 拍平 input + 工具指令。
+// buildDeepSeekCodingPrompt 拍平 Responses input + 工具指令。
 // 工具标签使用 DeepSeek 网页的 <|tool_calls_begin|>/<|tool_calls_end|> 系
 // (见 deepseek网页协议整理.md §7.2);提示词细节 [P0] 实测后按网页行为对齐。
 func buildDeepSeekCodingPrompt(req *official.ResponsesAPIRequest) string {
+	return buildCodingPromptItems(responsesInputItems(req.Input), rawResponsesText(req.Instructions), req.Tools, req.ToolChoice)
+}
+
+// buildDeepSeekCodingPromptAPI 从 chat.completions messages 构建 coding prompt(共享实现)。
+func buildDeepSeekCodingPromptAPI(req *official.APIRequest) string {
+	return buildCodingPromptItems(apiMessagesToItems(req.Messages), "", req.Tools, req.ToolChoice)
+}
+
+// buildCodingPromptItems 双接口共享的 coding prompt 构建。
+func buildCodingPromptItems(items []responsesInputItem, instructions string, tools []official.Tool, toolChoice *official.ToolChoice) string {
 	var sb strings.Builder
-	if instr := rawResponsesText(req.Instructions); instr != "" {
-		sb.WriteString(instr)
+	if instructions != "" {
+		sb.WriteString(instructions)
 		sb.WriteString("\n\n")
 	}
-	if len(req.Tools) > 0 {
-		sb.WriteString(toolcall.BuildInstructionsWithTags(deepseekTagSet(), req.Tools, req.ToolChoice))
+	if len(tools) > 0 {
+		sb.WriteString(toolcall.BuildInstructionsWithTags(deepseekTagSet(), tools, toolChoice))
 		sb.WriteString("\n\n")
 	}
-	for _, item := range responsesInputItems(req.Input) {
+	for _, item := range items {
 		switch item.Type {
 		case "function_call":
 			// 回放历史工具调用:用 DeepSeek 标签包裹 arguments。
@@ -86,7 +98,7 @@ func buildDeepSeekCodingPrompt(req *official.ResponsesAPIRequest) string {
 		sb.WriteString("\n\n")
 	}
 	// 末尾强提醒:只输出工具块,不做散文(仿网页 reminder 注入)。
-	if len(req.Tools) > 0 {
+	if len(tools) > 0 {
 		sb.WriteString(deepSeekCodingNudge(deepseekTagSet()))
 	}
 	return strings.TrimSpace(sb.String())
@@ -209,5 +221,137 @@ func (d *DeepSeek) codingNonStream(c *gin.Context, m *deepseekModel, req *offici
 			CallID: toolCalls[0].ID, Name: toolCalls[0].Function.Name, Arguments: toolCalls[0].Function.Arguments,
 		})
 	}
+	c.JSON(200, outResp)
+}
+
+// ── /v1/chat/completions 支持(coding 变体)──
+
+// codingCompletions 处理 DeepSeek coding 变体(/v1/chat/completions)。
+func (d *DeepSeek) codingCompletions(c *gin.Context, m *deepseekModel, req *official.APIRequest) {
+	client := d.webClient()
+	if client == nil {
+		c.JSON(502, gin.H{"error": "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?"})
+		return
+	}
+	token := client.NextToken()
+	if token == "" {
+		c.JSON(502, gin.H{"error": "deepseek web token pool is empty"})
+		return
+	}
+
+	prompt := buildDeepSeekCodingPromptAPI(req)
+
+	sessionID, err := client.CreateSession(token)
+	if err != nil {
+		c.JSON(502, gin.H{"error": fmt.Sprintf("deepseek create session: %v", err)})
+		return
+	}
+	defer client.DeleteSession(token, sessionID)
+
+	streamReq := deepseekweb.CompletionRequest{
+		SessionID:       sessionID,
+		Prompt:          prompt,
+		ModelType:       "default",
+		ThinkingEnabled: true,
+		SearchEnabled:   false,
+	}
+	if req.Stream {
+		d.codingCompletionsStream(c, m, req, client, token, streamReq)
+		return
+	}
+	d.codingCompletionsNonStream(c, m, req, client, token, streamReq)
+}
+
+// codingCompletionsStream 流式:文本协议工具调用 → tool_calls delta / content chunk。
+func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
+	resp, err := client.Complete(token, streamReq)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	model := req.Model
+	if model == "" {
+		model = "auto"
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := c.Writer.(http.Flusher)
+
+	writeChunk := func(chunk official.ChatCompletionChunk) {
+		c.Writer.WriteString("data: " + chunk.String() + "\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	roleChunk := official.NewChatCompletionChunk("", model)
+	roleChunk.Choices[0].Delta.Role = "assistant"
+	writeChunk(roleChunk)
+
+	parser := toolcall.NewParserWithTags(deepseekTagSet())
+	var emittedCall bool
+	_ = deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
+		if delta.Text == "" {
+			return
+		}
+		textDelta, calls := parser.Feed(delta.Text)
+		if textDelta != "" {
+			writeChunk(official.NewChatCompletionChunk(textDelta, model))
+		}
+		for _, tc := range calls {
+			emittedCall = true
+			for _, d := range toolcall.StreamToToolCallDeltas([]official.ToolCall{tc}) {
+				writeChunk(official.NewToolCallChunk(model, d...))
+			}
+		}
+	})
+	textDelta, calls := parser.Flush()
+	if textDelta != "" {
+		writeChunk(official.NewChatCompletionChunk(textDelta, model))
+	}
+	for _, tc := range calls {
+		emittedCall = true
+		for _, d := range toolcall.StreamToToolCallDeltas([]official.ToolCall{tc}) {
+			writeChunk(official.NewToolCallChunk(model, d...))
+		}
+	}
+
+	if emittedCall {
+		writeChunk(official.NewToolCallStopChunk(model, ""))
+	} else {
+		writeChunk(official.StopChunk("stop", model))
+	}
+	c.Writer.WriteString("data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// codingCompletionsNonStream 非流式:解析全文,带 tool_calls 或纯文本返回。
+func (d *DeepSeek) codingCompletionsNonStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
+	resp, err := client.Complete(token, streamReq)
+	if err != nil {
+		c.JSON(502, gin.H{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	var fullText string
+	res := deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
+		fullText += delta.Text
+	})
+	if res.Err != "" && fullText == "" {
+		c.JSON(502, gin.H{"error": res.Err})
+		return
+	}
+
+	toolCalls := toolcall.RecoverFromText(fullText, req.Tools)
+	cleanText := toolcall.StripTags(fullText, deepseekTagSet())
+	inputTokens := countMessagesChars(req.Messages)
+	outResp := official.NewChatCompletionWithToolCalls(cleanText, "", toolCalls, inputTokens, util.CountToken(cleanText), req.Model, "", nil)
 	c.JSON(200, outResp)
 }

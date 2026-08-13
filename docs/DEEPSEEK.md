@@ -93,9 +93,9 @@ DEEPSEEK_PROXY=http://proxy:port
 
 ## 七、对外接口
 
-- **`/v1/responses`**(主):DeepSeek provider 处理 chat / coding 双变体。
+- **`/v1/responses`**(pi 等):DeepSeek provider 处理 chat / coding 双变体。
+- **`/v1/chat/completions`**(zcode / 测试 HTML 等):同样走 DeepSeek provider(chat/coding 双变体),输出 chat.completion 格式。两接口共享同一上游核心,仅输出格式不同。
 - **`/v1/models`**:DeepSeek 模型带 `owned_by: "deepseek"` + `capabilities` 标注。
-- **`/v1/chat/completions`**:不接 DeepSeek(仅 ChatGPT)。
 - **别名路由**:`POST /v1/models/responses` → 同一个 `Responses` handler(pi 的 responses 适配器实际路径)。
 
 ## 八、联调冒烟清单

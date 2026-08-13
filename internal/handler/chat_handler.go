@@ -63,6 +63,15 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		return
 	}
 
+	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider,
+	// 不经过 ChatGPT 账号池 / resolveAccount。
+	if h.providers != nil {
+		if p := h.providers.Resolve(original_request.Model); p != nil {
+			p.ChatCompletions(c, &original_request)
+			return
+		}
+	}
+
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
 	if err != nil {
 		c.JSON(400, gin.H{"error": gin.H{

@@ -75,9 +75,59 @@ func parseInputItem(it rawInputItem) responsesInputItem {
 	}
 }
 
+// apiMessagesToItems 把 chat.completions 的 messages 转成统一的 responsesInputItem 列表,
+// 供两种接口共享 prompt 构建。
+func apiMessagesToItems(messages []official.APIMessage) []responsesInputItem {
+	var out []responsesInputItem
+	for _, msg := range messages {
+		switch msg.Role {
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				for _, tc := range msg.ToolCalls {
+					out = append(out, responsesInputItem{Type: "function_call", Role: "assistant", Text: tc.Function.Arguments})
+				}
+				continue
+			}
+		case "tool", "function":
+			out = append(out, responsesInputItem{Type: "function_call_output", Role: "tool", Text: msg.Text()})
+			continue
+		}
+		text, urls := contentPartsFromMessage(msg.Content)
+		item := responsesInputItem{Type: "message", Role: msg.Role}
+		if item.Role == "" {
+			item.Role = "user"
+		}
+		item.Text = text
+		item.ImageURLs = urls
+		if item.Text == "" && len(item.ImageURLs) == 0 {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// contentPartsFromMessage 从已解析的 MessageContent 提取文本与图片 URL。
+func contentPartsFromMessage(c official.MessageContent) (string, []string) {
+	if len(c.Parts) == 0 {
+		return c.TextValue, nil
+	}
+	var texts []string
+	var urls []string
+	for _, p := range c.Parts {
+		if p.Type == "image_url" && p.ImageURL != nil && p.ImageURL.URL != "" {
+			urls = append(urls, p.ImageURL.URL)
+			continue
+		}
+		if p.Text != "" {
+			texts = append(texts, p.Text)
+		}
+	}
+	return strings.Join(texts, ""), urls
+}
+
 // contentPartsText 从 content 里抽取文本与图片 URL。
-func contentPartsText(raw json.RawMessage) (string, []string) {
-	// 纯字符串
+func contentPartsText(raw json.RawMessage) (string, []string) {	// 纯字符串
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s, nil
@@ -134,12 +184,47 @@ func countInputChars(req *official.ResponsesAPIRequest) int {
 // hasImages 报告 input 是否带图片。
 func hasImages(refFileIDs []string) bool { return len(refFileIDs) > 0 }
 
-// uploadImages 把 input 里的图片上传并 fork 成 vision 版(实测 P0),
+// uploadImages 把 Responses input 里的图片上传并 fork 成 vision 版(实测 P0),
 // 返回 ref_file_ids。流程:upload_file → fetch_files(READY)→ fork_file_task(to_model_type=vision)。
-// 支持 data: URI 与 http(s) URL 两种图片来源。
 func uploadImages(client interface {
 	NextToken() string
 }, token string, req *official.ResponsesAPIRequest) ([]string, error) {
+	var urls []string
+	for _, it := range responsesInputItems(req.Input) {
+		urls = append(urls, it.ImageURLs...)
+	}
+	return uploadImageURLs(client, token, urls)
+}
+
+// uploadImagesFromMessages 从 chat.completions 的 messages 里收集图片并上传。
+func uploadImagesFromMessages(client interface {
+	NextToken() string
+}, token string, messages []official.APIMessage) ([]string, error) {
+	var urls []string
+	for _, msg := range messages {
+		for _, f := range msg.Files() {
+			u := f.Source
+			if u == "" {
+				u = f.ID
+			}
+			if u == "" {
+				u = f.FileID
+			}
+			if u != "" && (strings.HasPrefix(u, "data:") || strings.HasPrefix(u, "http")) {
+				urls = append(urls, u)
+			}
+		}
+	}
+	return uploadImageURLs(client, token, urls)
+}
+
+// uploadImageURLs 上传并 fork 一批图片 URL,返回 ref_file_ids。
+func uploadImageURLs(client interface {
+	NextToken() string
+}, token string, urls []string) ([]string, error) {
+	if len(urls) == 0 {
+		return nil, nil
+	}
 	web, ok := client.(interface {
 		UploadFile(token, filename, contentType string, data []byte) (string, error)
 		FetchFiles(token, fileID string) (string, error)
@@ -149,31 +234,29 @@ func uploadImages(client interface {
 		return nil, nil
 	}
 	var refIDs []string
-	for _, it := range responsesInputItems(req.Input) {
-		for _, imgURL := range it.ImageURLs {
-			data, ct, name, err := fetchImage(imgURL)
-			if err != nil {
-				return nil, err
-			}
-			id, err := web.UploadFile(token, name, ct, data)
-			if err != nil {
-				return nil, err
-			}
-			// fetch_files 确认就绪(最多 6 次 × 500ms)。
-			for i := 0; i < 6; i++ {
-				status, err := web.FetchFiles(token, id)
-				if err == nil && status == "READY" {
-					break
-				}
-				time.Sleep(500 * time.Millisecond)
-			}
-			// fork 成 vision 版(识图 completion 必需)。
-			visionID, err := web.ForkFileToVision(token, id)
-			if err != nil {
-				return nil, err
-			}
-			refIDs = append(refIDs, visionID)
+	for _, imgURL := range urls {
+		data, ct, name, err := fetchImage(imgURL)
+		if err != nil {
+			return nil, err
 		}
+		id, err := web.UploadFile(token, name, ct, data)
+		if err != nil {
+			return nil, err
+		}
+		// fetch_files 确认就绪(最多 6 次 × 500ms)。
+		for i := 0; i < 6; i++ {
+			status, err := web.FetchFiles(token, id)
+			if err == nil && status == "READY" {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		// fork 成 vision 版(识图 completion 必需)。
+		visionID, err := web.ForkFileToVision(token, id)
+		if err != nil {
+			return nil, err
+		}
+		refIDs = append(refIDs, visionID)
 	}
 	return refIDs, nil
 }

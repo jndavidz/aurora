@@ -46,6 +46,9 @@ type Provider interface {
 	Handles(model string) bool
 	// Responses 处理 /v1/responses 请求(流式 + 非流式),直接写 gin.Context。
 	Responses(c *gin.Context, req *official.ResponsesAPIRequest)
+	// ChatCompletions 处理 /v1/chat/completions 请求(流式 + 非流式)。
+	// 输出 chat.completion / chat.completion.chunk 格式,与 Responses 并行。
+	ChatCompletions(c *gin.Context, req *official.APIRequest)
 }
 
 // Registry 持有所有已注册的 Provider,按模型 id 路由。

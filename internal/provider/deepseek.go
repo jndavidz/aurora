@@ -127,3 +127,20 @@ func (d *DeepSeek) Responses(c *gin.Context, req *official.ResponsesAPIRequest) 
 		c.JSON(400, gin.H{"error": "unknown variant"})
 	}
 }
+
+// ChatCompletions 按模型 id 路由 chat / coding 变体,输出 chat.completion 格式。
+func (d *DeepSeek) ChatCompletions(c *gin.Context, req *official.APIRequest) {
+	m, ok := d.byID[req.Model]
+	if !ok {
+		c.JSON(404, gin.H{"error": "model not found"})
+		return
+	}
+	switch m.Variant {
+	case variantChat:
+		d.chatCompletions(c, m, req)
+	case variantCoding:
+		d.codingCompletions(c, m, req)
+	default:
+		c.JSON(400, gin.H{"error": "unknown variant"})
+	}
+}
