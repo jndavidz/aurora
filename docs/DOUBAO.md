@@ -10,7 +10,11 @@
 | id | 变体 | 能力 |
 |---|---|---|
 | `doubao-chat` | chat | 纯真人对话(模型自动用原生搜索/深度思考),**绝不注入工具信息** |
-| `doubao-coding` | coding | 文本协议工具调用(尽力而为,豆包工具能力未实测) |
+
+> 豆包只做 chat 变体,不做 coding:coding 代码已**注释禁用**(`doubao_coding.go`
+> 整体块注释 + `doubao.go` 中相关分支注释),保留待将来恢复。工具调用场景由
+> 其他 provider(DeepSeek/Gemini/Grok 等)承担,豆包纯对话体验更好、不冒文本
+> 协议工具调用的兼容风险。
 
 默认目录见 `defaultDoubaoModels`(DOUBAO_MODELS 未配置时);仅当 `DOUBAO_ACCOUNTS`
 指向的账号 JSON 非空时 provider 才注册。
@@ -60,10 +64,10 @@ internal/doubaoweb/
   client_test.go— 账号池/限频/body 构造单测
   live_test.go  — 真实上游冒烟(DOUBAO_ACCOUNT_FILE)
 internal/provider/
-  doubao.go        — Provider 接口、模型路由
-  doubao_chat.go   — chat 变体(多轮全量回放)
-  doubao_coding.go — coding 变体(文本协议工具)
-  doubao_test.go   — 模型解析/chat 无工具/coding prompt
+  doubao.go      — Provider 接口、模型路由(仅 chat;coding 分支已注释)
+  doubao_chat.go — chat 变体(多轮全量回放)
+  doubao_coding.go — coding 变体(文本协议工具,**已整体注释禁用**,恢复见文件头)
+  doubao_test.go — 模型解析/chat 无工具(coding 用例已注释)
 ```
 
 ## 四、已知固有权衡
@@ -78,9 +82,8 @@ internal/provider/
 
 ```
 DOUBAO_ACCOUNTS=/work/.runtime/tokens/doubao_accounts.json  # 账号池 JSON(不入库)
-DOUBAO_MODELS=                                             # 可选,默认 doubao-chat/coding
+DOUBAO_MODELS=                                             # 可选,默认 doubao-chat
 ```
-
 ## 六、账号提取(一次性)
 
 1. 浏览器登录 www.doubao.com(小号)

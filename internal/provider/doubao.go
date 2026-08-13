@@ -12,8 +12,8 @@ import (
 
 // doubao 模型变体
 const (
-	doubaoVariantChat   = "chat"   // 纯真人对话,不注入工具
-	doubaoVariantCoding = "coding" // 文本协议工具调用
+	doubaoVariantChat = "chat" // 纯真人对话,不注入工具
+	// doubaoVariantCoding = "coding" // 文本协议工具调用(已注释禁用,豆包只做 chat)
 )
 
 type doubaoModel struct {
@@ -33,7 +33,7 @@ type Doubao struct {
 // defaultDoubaoModels 是 DOUBAO_MODELS 未配置时的默认目录。
 var defaultDoubaoModels = []string{
 	"doubao-chat",
-	"doubao-coding",
+	// "doubao-coding", // 已注释禁用(豆包只做 chat)
 }
 
 // NewDoubao 构造豆包 provider。
@@ -63,8 +63,8 @@ func parseDoubaoModel(id string) *doubaoModel {
 	switch {
 	case strings.HasSuffix(id, "-chat"):
 		return &doubaoModel{ID: id, Variant: doubaoVariantChat, Caps: []Capability{CapReasoning, CapWebSearch}}
-	case strings.HasSuffix(id, "-coding"):
-		return &doubaoModel{ID: id, Variant: doubaoVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}
+	// case strings.HasSuffix(id, "-coding"):
+	// 	return &doubaoModel{ID: id, Variant: doubaoVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}
 	default:
 		return nil
 	}
@@ -92,30 +92,34 @@ func (d *Doubao) webClient() *doubaoweb.Client {
 	return d.client
 }
 
-// Responses 按模型 id 路由 chat / coding 变体。
+// Responses 处理豆包 chat 变体(/v1/responses)。
 func (d *Doubao) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
 		c.JSON(404, gin.H{"error": "model not found"})
 		return
 	}
-	if m.Variant == doubaoVariantChat {
-		d.chatResponses(c, m, req)
-	} else {
-		d.codingResponses(c, m, req)
-	}
+	d.chatResponses(c, m, req)
+	// 原 coding 分支(已注释禁用,豆包只做 chat):
+	// if m.Variant == doubaoVariantChat {
+	// 	d.chatResponses(c, m, req)
+	// } else {
+	// 	d.codingResponses(c, m, req)
+	// }
 }
 
-// ChatCompletions 按模型 id 路由 chat / coding 变体。
+// ChatCompletions 处理豆包 chat 变体(/v1/chat/completions)。
 func (d *Doubao) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
 		c.JSON(404, gin.H{"error": "model not found"})
 		return
 	}
-	if m.Variant == doubaoVariantChat {
-		d.chatCompletions(c, m, req)
-	} else {
-		d.codingCompletions(c, m, req)
-	}
+	d.chatCompletions(c, m, req)
+	// 原 coding 分支(已注释禁用,豆包只做 chat):
+	// if m.Variant == doubaoVariantChat {
+	// 	d.chatCompletions(c, m, req)
+	// } else {
+	// 	d.codingCompletions(c, m, req)
+	// }
 }

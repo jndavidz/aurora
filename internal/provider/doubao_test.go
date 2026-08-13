@@ -16,10 +16,11 @@ func TestParseDoubaoModel(t *testing.T) {
 		wantNil bool
 	}{
 		{"doubao-chat", doubaoVariantChat, false},
-		{"doubao-coding", doubaoVariantCoding, false},
+		// coding 变体已注释禁用(豆包只做 chat),下列用例保留作恢复参考:
+		// {"doubao-coding", doubaoVariantCoding, false},
 		{"doubao", "", true},     // 无变体后缀 → nil
 		{"gpt-5-chat", "", true}, // 非 doubao 命名 → nil
-		{"doubao-pro-coding", doubaoVariantCoding, false},
+		// {"doubao-pro-coding", doubaoVariantCoding, false},
 	}
 	for _, c := range cases {
 		m := parseDoubaoModel(c.id)
@@ -45,7 +46,9 @@ func TestNewDoubaoDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultDoubaoModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultDoubaoModels))
 	}
-	if !d.Handles("doubao-chat") || !d.Handles("doubao-coding") {
+	// coding 变体已注释禁用,`doubao-coding` 不再注册(保留作恢复参考):
+	// if !d.Handles("doubao-chat") || !d.Handles("doubao-coding") {
+	if !d.Handles("doubao-chat") {
 		t.Fatal("default models not handled")
 	}
 	d2 := NewDoubao(&config.Config{DoubaoAccounts: "a", DoubaoModels: []string{"doubao-chat", "bogus"}})
@@ -78,28 +81,30 @@ func TestDoubaoMessagesNoToolInjection(t *testing.T) {
 	}
 }
 
-// coding prompt:工具指令 + 回放。
-func TestDoubaoCodingPrompt(t *testing.T) {
-	req := &official.ResponsesAPIRequest{
-		Model: "doubao-coding",
-		Input: json.RawMessage(`[
-			{"type":"message","role":"user","content":"读文件"},
-			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},
-			{"type":"function_call_output","call_id":"c1","output":"内容A"}
-		]`),
-		Tools: []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "read"}}},
-	}
-	prompt := doubaoCodingPromptFromResponses(req)
-	if !strings.Contains(prompt, "TOOLS AVAILABLE") {
-		t.Errorf("coding prompt 应含工具指令: %q", prompt)
-	}
-	if !strings.Contains(prompt, "<tool_call>") || !strings.Contains(prompt, `{"path":"a.txt"}`) {
-		t.Errorf("coding prompt 应回放工具调用: %q", prompt)
-	}
-	if !strings.Contains(prompt, "Tool result: 内容A") {
-		t.Errorf("coding prompt 应回放工具结果: %q", prompt)
-	}
-}
+// coding 变体已注释禁用,测试保留作恢复参考(启用需同时恢复 doubao.go
+// 与 doubao_coding.go 的 coding 部分):
+// // coding prompt:工具指令 + 回放。
+// func TestDoubaoCodingPrompt(t *testing.T) {
+// 	req := &official.ResponsesAPIRequest{
+// 		Model: "doubao-coding",
+// 		Input: json.RawMessage(`[
+// 			{"type":"message","role":"user","content":"读文件"},
+// 			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},
+// 			{"type":"function_call_output","call_id":"c1","output":"内容A"}
+// 		]`),
+// 		Tools: []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "read"}}},
+// 	}
+// 	prompt := doubaoCodingPromptFromResponses(req)
+// 	if !strings.Contains(prompt, "TOOLS AVAILABLE") {
+// 		t.Errorf("coding prompt 应含工具指令: %q", prompt)
+// 	}
+// 	if !strings.Contains(prompt, "<tool_call>") || !strings.Contains(prompt, `{"path":"a.txt"}`) {
+// 		t.Errorf("coding prompt 应回放工具调用: %q", prompt)
+// 	}
+// 	if !strings.Contains(prompt, "Tool result: 内容A") {
+// 		t.Errorf("coding prompt 应回放工具结果: %q", prompt)
+// 	}
+// }
 
 // lastUserText:取最后一条用户消息。
 func TestLastUserText(t *testing.T) {

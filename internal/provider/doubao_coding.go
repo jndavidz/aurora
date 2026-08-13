@@ -1,5 +1,14 @@
 package provider
 
+/*
+// ============================================================================
+// 豆包 coding 变体 —— 已注释禁用(2026-08-14,用户决定:豆包只做 chat)。
+// 工具调用场景由其他 provider(DeepSeek/Gemini/Grok 等)承担。
+// 保留代码待将来需要时恢复:取消本块注释 + 恢复 doubao.go 中
+// doubaoVariantCoding 常量 / defaultDoubaoModels / parseDoubaoModel /
+// Responses 与 ChatCompletions 的 coding 分支即可。
+// ============================================================================
+
 import (
 	"net/http"
 	"strings"
@@ -269,3 +278,5 @@ func (d *Doubao) codingCompletionsNonStream(c *gin.Context, req *official.APIReq
 	outResp := official.NewChatCompletionWithToolCalls(cleanText, "", toolCalls, countMessagesChars(req.Messages), util.CountToken(cleanText), req.Model, "", nil)
 	c.JSON(200, outResp)
 }
+
+*/
