@@ -26,6 +26,20 @@
 
 > 遗留:识图 completion 在不同账号/网络下的稳定性未做大规模验证(浏览器本身在默认会话直接带图也会报"发送至识图模式",需 fork 步骤)。
 
+## 一·五、原生能力实测边界(2026-08-13 三轮真实页面抓包)
+
+DeepSeek 网页版**没有"工具调用"通道**,只有两个原生能力;客户端工具必须走文本协议:
+
+| 能力 | 是否原生 | 实测证据 |
+|---|---|---|
+| 智能搜索 | ✅ 原生 **SEARCH fragment** | 响应 `fragments:[{type:"SEARCH", status:"WIP", queries:[...]}]` + 独立 results 帧(`{"p":"response/fragments/-1/results","v":[...]}`)+ 正文 `[citation:N]` 引用;请求体 `search_enabled:true` 开关 |
+| 识图 | ✅ 原生 `model_type:"vision"` + `ref_file_ids` | 见上表 #8(upload → fork_file_task) |
+| **代码执行 / 工具调用** | ❌ **无** | 算数题响应只有 `frag:RESPONSE`,模型输出 ```python 代码**文本**(无 tool/code/execute fragment);请求体始终无 `tools` 字段 |
+
+**推论(回答"文本协议 vs 原生工具"):**
+- 对 DeepSeek 而言两者**互补**:搜索用原生 SEARCH(真实结果帧 + citation),客户端工具(bash/read 等)用文本协议 —— 因为网页端没有工具通道,文本协议是唯一让模型调客户端工具的路,且模型认标签所以可靠。
+- 与智谱对比:智谱有原生 `execute_sandbox_code`(真实云端沙箱)但**不认外部工具名**,所以智谱客户端工具调用不可靠;DeepSeek 无原生工具但**认文本标签**,所以可靠。两者成败都由"模型认不认"决定,与有无原生工具无关。
+
 ## 二、模型目录(配置驱动)
 
 `DEEPSEEK_MODELS`(逗号分隔)控制暴露的模型 id;不配置时用默认目录。
