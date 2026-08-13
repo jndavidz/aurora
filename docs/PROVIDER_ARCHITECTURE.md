@@ -187,6 +187,24 @@ Provider 层输出两种表面:
 **Chat/Coding 双变体的硬规则**:chat 变体即使客户端带 tools 也**绝不注入任何工具信息**
 (`glm_chat.go` L27 `stripTools=true`,单测 `TestGlmMessagesFromResponsesNoToolInjection` 断言),coding 变体才注入。
 
+### 5.5 ChatGPT 的 -coding 变体与共享收集器(commit 8c694e3)
+
+ChatGPT **不注册为 provider**(§二),它的 coding 变体在 handler 内实现:
+
+- **模型路由** `normalizeCodingModel`(models_handler.go):`gpt-5-6-coding` → 改写
+  `gpt-5-6` 透传上游(真实 slug),响应回显客户端请求的 `-coding` id;无 tools →
+  400 `missing_tools`;非白名单 base 不改写。模型目录 `/v1/models` 含
+  `gpt-5-6-coding` 并标注 `capabilities:["function_call"]`。
+- **共享收集器** `toolCallingRetry`(chat_handler.go):从 `handleToolCalling` 抽出的
+  带重试上游收集(预检 413 + REFUSAL_RETRIES 重试 + SYSTEM OVERRIDE + 拒绝分类器 +
+  RecoverFromText 兜底 + 哑火检测 + 502)。**`handleToolCalling`(chat/completions)与
+  `responsesToolCalling`(/v1/responses)共用同一收集器**,输出格式各自负责。
+- **历史教训**:responses 工具调用曾无重试(`responsesToolCallingStream` 只跑一轮),
+  模型偶发绕开工具直接纯文本回答即"偶发不触发"。已删除该无重试实现,统一走
+  `toolCallingRetry` —— 两条路径行为一致、都可靠。
+- 上游 `chatgpt.com` 不认识结构化 tools 字段,工具调用 100% 走 `<tool_call>` 文本协议
+  (converter 注入 `BuildInstructions` + `FinalNudge`,`conversion/requests/chatgpt/convert.go`)。
+
 ## 六、router.go 分发 + Nightmare 的历史 bug
 
 - `POST /v1/chat/completions` → `chatHandler.Nightmare`(L67)
