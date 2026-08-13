@@ -229,3 +229,33 @@ func TestMergeRecoveredCallsFencedJSON(t *testing.T) {
 		t.Errorf("去重失败: %d", len(dup))
 	}
 }
+
+// Responses 风格工具(顶层 name/description)必须能解析出 Function 字段。
+func TestResponsesStyleToolUnmarshal(t *testing.T) {
+	raw := `[{"type":"function","name":"bash","description":"Execute a bash command","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}]`
+	var tools []official.Tool
+	if err := json.Unmarshal([]byte(raw), &tools); err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools = %d", len(tools))
+	}
+	if tools[0].Function.Name != "bash" {
+		t.Fatalf("Function.Name = %q, want bash(responses 顶层格式)", tools[0].Function.Name)
+	}
+	if tools[0].Function.Description == "" {
+		t.Error("Description 应为空字符串以外")
+	}
+	if len(tools[0].Function.Parameters) == 0 {
+		t.Error("Parameters 不应为空")
+	}
+	// chat.completions 嵌套格式回归
+	raw2 := `[{"type":"function","function":{"name":"read","description":"d","parameters":{"type":"object"}}}]`
+	var tools2 []official.Tool
+	if err := json.Unmarshal([]byte(raw2), &tools2); err != nil {
+		t.Fatal(err)
+	}
+	if tools2[0].Function.Name != "read" {
+		t.Fatalf("嵌套格式 Function.Name = %q", tools2[0].Function.Name)
+	}
+}

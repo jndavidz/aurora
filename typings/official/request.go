@@ -79,6 +79,34 @@ type Tool struct {
 	Function ToolFunction `json:"function"`
 }
 
+// UnmarshalJSON 兼容两种工具格式:
+//   - chat.completions:{"type":"function","function":{"name":...,"description":...,"parameters":...}}
+//   - Responses API:  {"type":"function","name":...,"description":...,"parameters":...}(顶层)
+// pi / ZCode 等 Responses 客户端发顶层格式,缺此兼容会导致 name/description 全空,
+// 渲染出的 TOOLS AVAILABLE 变成 "- :" 占位,模型只能瞎猜工具名(实测踩坑)。
+func (t *Tool) UnmarshalJSON(data []byte) error {
+	type alias Tool
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*t = Tool(a)
+	// Responses 风格:function 嵌套为空时,从顶层 name/description/parameters 补齐。
+	if t.Function.Name == "" {
+		var flat struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		}
+		if err := json.Unmarshal(data, &flat); err == nil && flat.Name != "" {
+			t.Function.Name = flat.Name
+			t.Function.Description = flat.Description
+			t.Function.Parameters = flat.Parameters
+		}
+	}
+	return nil
+}
+
 // ToolFunction 描述一个函数工具的 name / description / JSON schema 参数。
 type ToolFunction struct {
 	Name        string          `json:"name"`
