@@ -23,27 +23,34 @@ const (
 )
 
 // Parser 是流式 <tool_call> 解析器。每收到一段文本,调用 Feed 拿到增量。
+// 默认使用 DefaultTags(ChatGPT);DeepSeek 等用 NewParserWithTags 指定标签。
 type Parser struct {
 	buffer       string
 	inside       bool
 	emittedCount int
 	emittedText  bool
+	tags         TagSet
 }
 
-// NewParser 构造一个解析器。零值不可直接使用。
+// NewParser 构造一个 ChatGPT 默认标签的解析器。零值不可直接使用。
 func NewParser() *Parser {
-	return &Parser{}
+	return &Parser{tags: DefaultTags}
+}
+
+// NewParserWithTags 构造指定标签集的解析器(DeepSeek 等)。
+func NewParserWithTags(tags TagSet) *Parser {
+	return &Parser{tags: tags}
 }
 
 // Feed 把新 chunk 喂入解析器,返回 (textDelta, toolCalls)。
 // textDelta 是本轮新产生的可输出文本(不含 <tool_call> 标签及其内部 JSON);
 // toolCalls 是本轮闭合的 tool_call 列表,顺序与出现顺序一致。
 func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.ToolCall) {
-	p.buffer = normalize(p.buffer + chunk)
+	p.buffer = NormalizeTagged(p.buffer+chunk, p.tags)
 	var text strings.Builder
 	for len(p.buffer) > 0 {
 		if !p.inside {
-			startIdx := strings.Index(p.buffer, StartTag)
+			startIdx := strings.Index(p.buffer, p.tags.StartTag)
 			if startIdx >= 0 {
 				pre := p.buffer[:startIdx]
 				if pre != "" {
@@ -57,14 +64,14 @@ func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.Tool
 					}
 				}
 				p.inside = true
-				p.buffer = p.buffer[startIdx+len(StartTag):]
+				p.buffer = p.buffer[startIdx+len(p.tags.StartTag):]
 				continue
 			}
-			// 没找到 <tool_call>;但 buffer 末尾可能是 "<tool_call>" / "<tool_c" 等
-			// "半个标签",需要保留若干字符避免误切。
+			// 没找到 startTag;但 buffer 末尾可能是 startTag 的"半个标签",
+			// 需要保留若干字符避免误切。
 			flushIndex := len(p.buffer)
-			for i := 1; i < len(StartTag); i++ {
-				if strings.HasSuffix(p.buffer, StartTag[:i]) {
+			for i := 1; i < len(p.tags.StartTag); i++ {
+				if strings.HasSuffix(p.buffer, p.tags.StartTag[:i]) {
 					flushIndex = len(p.buffer) - i
 					break
 				}
@@ -85,8 +92,8 @@ func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.Tool
 			p.buffer = p.buffer[flushIndex:]
 			break
 		}
-		// inside 模式:在 buffer 中寻找 </tool_call>
-		endIdx := strings.Index(p.buffer, EndTag)
+		// inside 模式:在 buffer 中寻找 endTag
+		endIdx := strings.Index(p.buffer, p.tags.EndTag)
 		if endIdx < 0 {
 			break
 		}
@@ -96,7 +103,7 @@ func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.Tool
 			p.emittedCount++
 		}
 		p.inside = false
-		p.buffer = p.buffer[endIdx+len(EndTag):]
+		p.buffer = p.buffer[endIdx+len(p.tags.EndTag):]
 	}
 	return text.String(), toolCalls
 }
@@ -116,9 +123,9 @@ func (p *Parser) Flush() (textDelta string, toolCalls []official.ToolCall) {
 			p.emittedCount++
 			return "", toolCalls
 		}
-		// 解析不出来 —— 把 <tool_call> 标签也作为文本回吐,避免吞掉
+		// 解析不出来 —— 把 startTag 也作为文本回吐,避免吞掉
 		if p.emittedCount == 0 {
-			return StartTag + remaining, nil
+			return p.tags.StartTag + remaining, nil
 		}
 		return "", nil
 	}
@@ -135,23 +142,6 @@ func (p *Parser) Flush() (textDelta string, toolCalls []official.ToolCall) {
 	}
 	return "", nil
 }
-
-// normalize 把模型常见的标签变体(<tool_calls>、<tool call> 等)统一为
-// <tool_call> / </tool_call>。
-func normalize(s string) string {
-	s = toolCallsOpenRe.ReplaceAllString(s, StartTag)
-	s = toolCallsCloseRe.ReplaceAllString(s, EndTag)
-	s = toolCallAltOpenRe.ReplaceAllString(s, StartTag)
-	s = toolCallAltCloseRe.ReplaceAllString(s, EndTag)
-	return s
-}
-
-var (
-	toolCallsOpenRe    = regexp.MustCompile(`(?i)<tool_calls>`)
-	toolCallsCloseRe   = regexp.MustCompile(`(?i)</tool_calls>`)
-	toolCallAltOpenRe  = regexp.MustCompile(`(?i)<tool[_\s]call>`)
-	toolCallAltCloseRe = regexp.MustCompile(`(?i)</tool[_\s]call>`)
-)
 
 func looksLikeJSONJunk(s string) bool {
 	t := strings.TrimSpace(s)

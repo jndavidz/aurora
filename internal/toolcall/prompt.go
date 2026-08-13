@@ -14,6 +14,19 @@ import (
 // 协议输出工具调用。tools 为空时返回 ""。
 // 协议文本与  保持一致,但使用英语(目标用户以英文/中文为主)。
 func BuildInstructions(tools []official.Tool, toolChoice *official.ToolChoice) string {
+	return buildInstructions(DefaultTags, tools, toolChoice)
+}
+
+// BuildInstructionsWithTags 生成使用指定标签集(DeepSeek <|tool_calls_begin|> 系)
+// 的 system prompt 块。
+func BuildInstructionsWithTags(tags TagSet, tools []official.Tool, toolChoice *official.ToolChoice) string {
+	return buildInstructions(tags, tools, toolChoice)
+}
+
+func buildInstructions(tags TagSet, tools []official.Tool, toolChoice *official.ToolChoice) string {
+	if tags.StartTag == "" || tags.EndTag == "" {
+		tags = DefaultTags
+	}
 	if len(tools) == 0 {
 		return ""
 	}
@@ -23,21 +36,21 @@ func BuildInstructions(tools []official.Tool, toolChoice *official.ToolChoice) s
 	sb.WriteString(compactToolsPrompt(tools))
 	sb.WriteString("\n\n# TOOL CALLING FORMAT (MANDATORY)\n")
 	sb.WriteString("To call a tool, output a JSON object wrapped EXACTLY in these tags:\n")
-	sb.WriteString("<tool_call>\n")
+	sb.WriteString(tags.StartTag + "\n")
 	sb.WriteString(`{"name": "tool_name", "arguments": {"param_name": "value"}}`)
-	sb.WriteString("\n</tool_call>\n\n")
+	sb.WriteString("\n" + tags.EndTag + "\n\n")
 	sb.WriteString("EXAMPLE OF MULTIPLE TOOL CALLS (replace <tool_name> with a REAL name from the list above):\n")
-	sb.WriteString("<tool_call>\n")
+	sb.WriteString(tags.StartTag + "\n")
 	sb.WriteString(`{"name": "<tool_name>", "arguments": {"arg1": "value1"}}`)
-	sb.WriteString("\n</tool_call>\n")
-	sb.WriteString("<tool_call>\n")
+	sb.WriteString("\n" + tags.EndTag + "\n")
+	sb.WriteString(tags.StartTag + "\n")
 	sb.WriteString(`{"name": "<tool_name>", "arguments": {"arg1": "value2"}}`)
-	sb.WriteString("\n</tool_call>\n\n")
+	sb.WriteString("\n" + tags.EndTag + "\n\n")
 	sb.WriteString("CRITICAL RULES:\n")
 	sb.WriteString("0. Use ONLY the EXACT tool names listed under TOOLS AVAILABLE. Names are case-sensitive: if the tool is \"bash\", calling it \"Bash\" is WRONG and will fail. Never rename, abbreviate or invent names. If the available tool is \"read\", do NOT call \"read_file\". Copy the name character-for-character, including case.\n")
 	sb.WriteString("1. ONLY use the tags above for tool calling. NEVER output raw JSON without tags.\n")
-	sb.WriteString("2. You can call multiple tools by emitting multiple <tool_call> blocks consecutively.\n")
-	sb.WriteString("3. Do NOT output any other text after your <tool_call> blocks. Wait for the tool response.\n")
+	sb.WriteString("2. You can call multiple tools by emitting multiple " + tags.StartTag + " blocks consecutively.\n")
+	sb.WriteString("3. Do NOT output any other text after your tool call blocks. Wait for the tool response.\n")
 	sb.WriteString("4. The JSON inside the tags MUST be valid and include the 'arguments' field.\n")
 	sb.WriteString("5. If you need to use a tool, do it IMMEDIATELY without preamble.\n")
 	sb.WriteString("6. DO NOT use your internal/native Python tool, Advanced Data Analysis, or Code Interpreter. They run in a remote sandbox on your servers and have NO access to the user's workspace. You MUST use ONLY the custom tools listed under TOOLS AVAILABLE (like 'glob', 'read', 'grep', or 'bash').\n")
@@ -46,7 +59,7 @@ func BuildInstructions(tools []official.Tool, toolChoice *official.ToolChoice) s
 	if forced := toolChoice.ForcedFunctionName(); forced != "" {
 		fmt.Fprintf(&sb, "\nCRITICAL: You MUST call the tool %q in this response. Do not call any other tool, and do not produce a final answer without calling it first.\n", forced)
 	} else if toolChoice != nil && toolChoice.IsForcedNone() {
-		sb.WriteString("\nCRITICAL: The user has DISABLED tool calling in this request. Do not emit any <tool_call> blocks. Just answer in plain text.\n")
+		fmt.Fprintf(&sb, "\nCRITICAL: The user has DISABLED tool calling in this request. Do not emit any %s blocks. Just answer in plain text.\n", tags.StartTag)
 	}
 	return sb.String()
 }

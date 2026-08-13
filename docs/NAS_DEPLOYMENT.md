@@ -240,6 +240,24 @@ nohup ./aurora-linux >> .runtime/logs/aurora_run.log 2>&1 &
 
 ---
 
+## 三之补:DeepSeek 通道(NAS 部署)
+
+> 详见 `docs/DEEPSEEK.md` 与 `docs/ARCHITECTURE.md`。此处只列 NAS 侧要点。
+
+- **开关**:compose 里 `DEEPSEEK_WEB_TOKENS` 非空时,DeepSeek provider 才注册(`/v1/models` 出现 `deepseek-*`)。
+  该值通过宿主机 `.env`(与 compose 同目录)注入,**不入库**:
+  ```bash
+  # /volume2/docker/aurora/.env
+  DEEPSEEK_WEB_TOKENS=/work/.runtime/tokens/deepseek_tokens.txt
+  DEEPSEEK_PROXY=http://<非美区代理>:<port>
+  ```
+- **token 文件**:`deepseek_tokens.txt` 放进 `/volume2/docker/aurora/tokens/`(与 ChatGPT token 同目录,只读挂载到 `/work/.runtime/tokens/`)。每行一个 user_token,**只放可丢弃小号**。
+- **对外**:pi/zcode/codebuddy 走 `/v1/responses`(pi 的实际路径是 `/v1/models/responses`,已加别名路由),模型选 `deepseek-v4-*-chat`(对话)或 `*-coding`(工具调用)。
+- **双端互斥**:DeepSeek 网页 token 与 ChatGPT 的 session token 一样,同一批 token 不能 NAS/PC 同时运行(互相踢登录态);NAS 启用后 PC 端 aurora 停。
+- **WAF**:`DEEPSEEK_PROXY` 务必非美区,否则 CloudFront 202 拦截。
+
+---
+
 ## 七、参考
 
 - PC 端部署: `D:\dev\apps\aurora\部署说明.md`(Drive 同步区,非本仓库)

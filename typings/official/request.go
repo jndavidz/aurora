@@ -370,17 +370,27 @@ type ResponsesAPIRequest struct {
 	Instructions json.RawMessage `json:"instructions"`
 	Stream       bool            `json:"stream"`
 
+	// 工具调用协议(对齐 Responses API):
+	// - Tools: 客户端声明的可调用工具列表(function / web_search)
+	// - ToolChoice: none / auto / required / 指定工具
+	// - ParallelToolCalls: 是否允许并行(默认 true)
+	Tools             []Tool         `json:"tools,omitempty"`
+	ToolChoice        *ToolChoice    `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool          `json:"parallel_tool_calls,omitempty"`
+	StreamOptions     *StreamOptions `json:"stream_options,omitempty"`
+
 	// 标准生成参数
 	Temperature     *float64 `json:"temperature,omitempty"`
 	TopP            *float64 `json:"top_p,omitempty"`
 	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
 
 	// 扩展参数
-	Text      *ResponseFormatText `json:"text,omitempty"`
-	Reasoning *ReasoningConfig    `json:"reasoning,omitempty"`
-	Store     *bool               `json:"store,omitempty"`
-	User      string              `json:"user,omitempty"`
-	Metadata  map[string]string   `json:"metadata,omitempty"`
+	Text               *ResponseFormatText `json:"text,omitempty"`
+	Reasoning          *ReasoningConfig    `json:"reasoning,omitempty"`
+	Store              *bool               `json:"store,omitempty"`
+	PreviousResponseID string              `json:"previous_response_id,omitempty"`
+	User               string              `json:"user,omitempty"`
+	Metadata           map[string]string   `json:"metadata,omitempty"`
 }
 
 // ResponseFormatText 对应 Responses API 的 text.query.format。
@@ -395,9 +405,19 @@ type ReasoningConfig struct {
 	Context string `json:"context,omitempty"` // "auto" | "current_turn" | "all_turns"
 }
 
-type responseInputMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+// responseInputItem 是 Responses API input 数组里的一个条目:
+//   - {"type":"message", role, content}          普通消息
+//   - {"type":"function_call", call_id, name, arguments}
+//   - {"type":"function_call_output", call_id, output}
+// 旧客户端可能不带 type,按 message 处理。
+type responseInputItem struct {
+	Type      string          `json:"type"`
+	Role      string          `json:"role,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
 }
 
 type responseInputContent struct {
@@ -419,6 +439,10 @@ func (r ResponsesAPIRequest) ToAPIRequest() (APIRequest, error) {
 	apiRequest.Store = r.Store
 	apiRequest.User = r.User
 	apiRequest.Metadata = r.Metadata
+	apiRequest.Tools = r.Tools
+	apiRequest.ToolChoice = r.ToolChoice
+	apiRequest.ParallelToolCalls = r.ParallelToolCalls
+	apiRequest.StreamOptions = r.StreamOptions
 
 	// reasoning.effort → reasoning_effort
 	if r.Reasoning != nil {
@@ -471,27 +495,64 @@ func responsesInputToMessages(raw json.RawMessage) ([]APIMessage, error) {
 		return []APIMessage{{Role: "user", Content: content}}, nil
 	}
 
-	var messages []responseInputMessage
-	if err := json.Unmarshal(raw, &messages); err != nil {
+	var items []responseInputItem
+	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, fmt.Errorf("invalid input")
 	}
 
-	result := make([]APIMessage, 0, len(messages))
-	for _, message := range messages {
-		role := message.Role
+	result := make([]APIMessage, 0, len(items))
+	for _, item := range items {
+		if msg, ok := responseInputItemToMessage(item); ok {
+			result = append(result, msg)
+		}
+	}
+	return result, nil
+}
+
+// responseInputItemToMessage 把一个 Responses input item 转成 APIMessage。
+// function_call → assistant tool_calls;function_call_output → role=tool 工具结果。
+func responseInputItemToMessage(item responseInputItem) (APIMessage, bool) {
+	switch item.Type {
+	case "function_call":
+		if item.CallID == "" && item.Name == "" {
+			return APIMessage{}, false
+		}
+		var ref ToolCallRef
+		ref.Index = 0
+		ref.ID = item.CallID
+		ref.Type = "function"
+		ref.Function.Name = item.Name
+		ref.Function.Arguments = item.Arguments
+		return APIMessage{Role: "assistant", ToolCalls: []ToolCallRef{ref}}, true
+
+	case "function_call_output":
+		if item.CallID == "" {
+			return APIMessage{}, false
+		}
+		return APIMessage{
+			Role:       "tool",
+			ToolCallID: item.CallID,
+			Content:    MessageContent{TextValue: rawText(item.Output)},
+		}, true
+
+	case "message", "":
+		role := item.Role
 		if role == "" {
 			role = "user"
 		}
-		content, err := responseContentToMessageContent(message.Content)
+		content, err := responseContentToMessageContent(item.Content)
 		if err != nil {
-			content = MessageContent{TextValue: responsesContentToText(message.Content)}
+			content = MessageContent{TextValue: responsesContentToText(item.Content)}
 		}
 		if content.Text() == "" && len(content.Files()) == 0 {
-			continue
+			return APIMessage{}, false
 		}
-		result = append(result, APIMessage{Role: role, Content: content})
+		return APIMessage{Role: role, Content: content}, true
+
+	default:
+		// 未知 item 类型(如 web_search_call)在 ChatGPT 网页路径下无对应,跳过。
+		return APIMessage{}, false
 	}
-	return result, nil
 }
 
 func responseContentToMessageContent(raw json.RawMessage) (MessageContent, error) {

@@ -15,6 +15,7 @@ import (
 	"aurora/internal/chatgpt"
 	"aurora/internal/config"
 	"aurora/internal/httpstream"
+	"aurora/internal/provider"
 	"aurora/internal/toolcall"
 	chatgpt_types "aurora/typings/chatgpt"
 	officialtypes "aurora/typings/official"
@@ -28,13 +29,15 @@ type ChatHandler struct {
 	accountPool *accounts.Pool
 	sessions    *SessionManager
 	cfg         *config.Config
+	providers   *provider.Registry
 }
 
-func NewChatHandler(pool *accounts.Pool, cfg *config.Config) *ChatHandler {
+func NewChatHandler(pool *accounts.Pool, cfg *config.Config, providers *provider.Registry) *ChatHandler {
 	return &ChatHandler{
 		accountPool: pool,
 		sessions:    NewSessionManager(),
 		cfg:         cfg,
+		providers:   providers,
 	}
 }
 
@@ -273,6 +276,15 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider 处理,
+	// 不经过 ChatGPT 账号池 / resolveAccount。
+	if h.providers != nil {
+		if p := h.providers.Resolve(responsesRequest.Model); p != nil {
+			p.Responses(c, &responsesRequest)
+			return
+		}
+	}
+
 	original_request, err := responsesRequest.ToAPIRequest()
 	if err != nil {
 		c.JSON(400, gin.H{"error": gin.H{
@@ -337,6 +349,12 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	reqModel := original_request.Model
 	if reqModel == "" {
 		reqModel = "auto"
+	}
+
+	// ChatGPT 工具调用(coding):带 tools 的请求走文本协议工具调用,输出 Responses 事件。
+	if toolCallingEnabled(original_request.Tools, h.cfg) {
+		h.responsesToolCalling(c, &original_request, account, client, clientState, reqModel, uid, proxyUrl, input_tokens)
+		return
 	}
 
 	// 提取 instructions / input 用于缓存模拟
@@ -590,6 +608,287 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 }
 
 // writeTimingHeader 在非流式响应中设置 timing 头部（仅非流式路径使用）。
+
+// responsesToolCalling 处理 ChatGPT Responses 的工具调用(coding)路径。
+//
+// 复用现有 <tool_call> 文本协议(handleToolCalling 同源机制):converter 注入
+// BuildInstructions + FinalNudge 提示词,上游回复用 toolcall.Parser 流式解析,
+// 把工具调用转成 Responses 的 function_call item / 正文转成 output_text delta。
+func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, reqModel, uid, proxyUrl string, inputTokens int) {
+	if account == nil || !account.Type.Satisfies(accounts.CapToolCalling) {
+		c.JSON(403, gin.H{"error": "Tool calling requires a logged-in ChatGPT account."})
+		return
+	}
+
+	// 发送上游前清洗历史里的"绕开工具"回复(与 Nightmare 一致)。
+	sanitizeRefusalHistory(originalRequest.Messages)
+	translated_request := chatgptrequestconverter.ConvertAPIRequest(*originalRequest, account, proxyUrl, client)
+
+	streamRequested := originalRequest.Stream && h.cfg.StreamMode
+	if !streamRequested {
+		h.responsesToolCallingNonStream(c, originalRequest, account, client, clientState, translated_request, reqModel, uid, proxyUrl, inputTokens)
+		return
+	}
+	h.responsesToolCallingStream(c, originalRequest, account, client, clientState, translated_request, reqModel, uid, proxyUrl, inputTokens)
+}
+
+// responsesToolCallingStream 流式路径:上游 SSE → toolcall.Parser → Responses 事件。
+func (h *ChatHandler) responsesToolCallingStream(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, translated_request chatgpt_types.ChatGPTRequest, reqModel, uid, proxyUrl string, inputTokens int) {
+	respID := "resp_" + uuid.NewString()
+	messageItemID := "msg_" + uuid.NewString()
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := c.Writer.(http.Flusher)
+
+	c.Writer.WriteString("event: response.created\ndata: " + responsesCreatedEvent(respID, reqModel) + "\n\n")
+	c.Writer.WriteString("event: response.output_item.added\ndata: " + responsesOutputItemAddedEvent(0, messageItemID, "message") + "\n\n")
+	if flusher != nil {
+		c.Writer.WriteHeader(200)
+		flusher.Flush()
+	}
+
+	response, wsConn, _, _, err := conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
+	if err != nil {
+		c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent(err.Error()) + "\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+	defer response.Body.Close()
+	if chatgpt.Handle_request_error(c, response) {
+		if wsConn != nil {
+			wsConn.Close()
+		}
+		c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent("upstream error") + "\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return
+	}
+
+	parser := toolcall.NewParser()
+	callID := "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
+	var fullText strings.Builder
+
+	for i := h.cfg.MaxContinueCount; i > 0; i-- {
+		var continue_info *chatgpt.ContinueInfo
+		result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, true, reqModel, chatgpt.HandlerDetailedOptions{
+			Websocket:   wsConn,
+			ClientState: clientState,
+		})
+		wsConn = nil
+
+		if result.Text != "" {
+			textDelta, calls := parser.Feed(result.Text)
+			if textDelta != "" {
+				fullText.WriteString(textDelta)
+				c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, textDelta) + "\n\n")
+			}
+			for _, tc := range calls {
+				writeResponsesFunctionCallEvent(c, callID, tc)
+			}
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+
+		parentMessageID := result.ParentMessageID
+		continue_info = result.Continue
+		if continue_info != nil {
+			parentMessageID = continue_info.ParentID
+		}
+		clientState.NoteTurnResult(result.ConversationID, parentMessageID)
+		if result.ConversationID != "" {
+			h.sessions.Register(result.ConversationID, clientState)
+		}
+		if continue_info == nil {
+			break
+		}
+		translated_request.Messages = nil
+		translated_request.Action = "continue"
+		translated_request.ConversationID = continue_info.ConversationID
+		translated_request.ParentMessageID = continue_info.ParentID
+
+		response, wsConn, _, _, err = conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
+		if err != nil {
+			c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent(err.Error()) + "\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+		defer response.Body.Close()
+		if chatgpt.Handle_request_error(c, response) {
+			if wsConn != nil {
+				wsConn.Close()
+			}
+			c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent("upstream error") + "\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+	}
+
+	// Flush 残余(未闭合标签)
+	textDelta, calls := parser.Flush()
+	if textDelta != "" {
+		fullText.WriteString(textDelta)
+		c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, textDelta) + "\n\n")
+	}
+	for _, tc := range calls {
+		writeResponsesFunctionCallEvent(c, callID, tc)
+	}
+
+	c.Writer.WriteString("event: response.output_item.done\ndata: " + responsesOutputItemDoneEvent(0, messageItemID, "message", fullText.String()) + "\n\n")
+	output_tokens := util.CountToken(fullText.String())
+	responsesResponse := officialtypes.NewResponsesResponse(fullText.String(), "", inputTokens, output_tokens, 0, 0, 0, reqModel)
+	c.Writer.WriteString("event: response.completed\ndata: " + responsesCompletedEvent(responsesResponse) + "\n\n")
+	c.Writer.WriteString("data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// responsesToolCallingNonStream 非流式路径:全量解析后一次返回。
+func (h *ChatHandler) responsesToolCallingNonStream(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, translated_request chatgpt_types.ChatGPTRequest, reqModel, uid, proxyUrl string, inputTokens int) {
+	response, wsConn, _, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
+	if err != nil {
+		c.JSON(status, gin.H{"error": gin.H{
+			"message": err.Error(),
+			"type":    "request_conversion_error",
+			"param":   "model",
+			"code":    "request_conversion_error",
+		}})
+		return
+	}
+	defer response.Body.Close()
+	if chatgpt.Handle_request_error(c, response) {
+		if wsConn != nil {
+			wsConn.Close()
+		}
+		return
+	}
+
+	var fullText strings.Builder
+	for i := h.cfg.MaxContinueCount; i > 0; i-- {
+		var continue_info *chatgpt.ContinueInfo
+		result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, false, reqModel, chatgpt.HandlerDetailedOptions{
+			Websocket:   wsConn,
+			ClientState: clientState,
+		})
+		wsConn = nil
+		fullText.WriteString(result.Text)
+		parentMessageID := result.ParentMessageID
+		continue_info = result.Continue
+		if continue_info != nil {
+			parentMessageID = continue_info.ParentID
+		}
+		clientState.NoteTurnResult(result.ConversationID, parentMessageID)
+		if result.ConversationID != "" {
+			h.sessions.Register(result.ConversationID, clientState)
+		}
+		if continue_info == nil {
+			break
+		}
+		translated_request.Messages = nil
+		translated_request.Action = "continue"
+		translated_request.ConversationID = continue_info.ConversationID
+		translated_request.ParentMessageID = continue_info.ParentID
+		response, wsConn, _, status, err = conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
+		if err != nil {
+			c.JSON(status, gin.H{"error": gin.H{
+				"message": err.Error(),
+				"type":    "request_conversion_error",
+				"param":   "model",
+				"code":    "request_conversion_error",
+			}})
+			return
+		}
+		defer response.Body.Close()
+		if chatgpt.Handle_request_error(c, response) {
+			if wsConn != nil {
+				wsConn.Close()
+			}
+			return
+		}
+	}
+	if c.Writer.Status() != 200 {
+		return
+	}
+
+	text := fullText.String()
+	toolCalls := toolcall.RecoverFromText(text, originalRequest.Tools)
+	cleanText := toolcall.StripTags(text, toolcall.DefaultTags)
+
+	outResp := officialtypes.NewResponsesResponse(cleanText, "", inputTokens, util.CountToken(cleanText), 0, 0, 0, reqModel)
+	for _, tc := range toolCalls {
+		outResp.Output = append(outResp.Output, officialtypes.ResponsesOutputItem{
+			ID: "fc_" + uuid.NewString(), Type: "function_call", Status: "completed",
+			CallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+		})
+	}
+	c.JSON(200, outResp)
+}
+
+// responsesTextDeltaEventText 构造 response.output_text.delta 事件字符串。
+func responsesTextDeltaEventText(itemID string, outputIndex int, delta string) string {
+	evt := officialtypes.ResponsesTextDeltaEvent{
+		Type:         "response.output_text.delta",
+		ItemID:       itemID,
+		OutputIndex:  outputIndex,
+		ContentIndex: 0,
+		Delta:        delta,
+	}
+	return evt.String()
+}
+
+// writeResponsesFunctionCallEvent 输出一条 function_call 的完整事件序列
+// (output_item.added → arguments.delta → arguments.done → output_item.done)。
+func writeResponsesFunctionCallEvent(c *gin.Context, callID string, tc officialtypes.ToolCall) {
+	fcID := "fc_" + uuid.NewString()
+	callID = strings.TrimPrefix(callID, "call_")
+	actualCallID := "call_" + callID
+
+	added := map[string]interface{}{
+		"type": "response.output_item.added", "output_index": 0,
+		"item": map[string]interface{}{
+			"id": fcID, "type": "function_call", "status": "in_progress",
+			"call_id": actualCallID, "name": tc.Function.Name, "arguments": "",
+		},
+	}
+	b, _ := json.Marshal(added)
+	c.Writer.WriteString("event: response.output_item.added\ndata: " + string(b) + "\n\n")
+
+	argDelta := map[string]interface{}{
+		"type": "response.function_call_arguments.delta", "item_id": fcID,
+		"output_index": 0, "delta": tc.Function.Arguments,
+	}
+	b, _ = json.Marshal(argDelta)
+	c.Writer.WriteString("event: response.function_call_arguments.delta\ndata: " + string(b) + "\n\n")
+
+	argDone := map[string]interface{}{
+		"type": "response.function_call_arguments.done", "item_id": fcID,
+		"output_index": 0, "arguments": tc.Function.Arguments,
+	}
+	b, _ = json.Marshal(argDone)
+	c.Writer.WriteString("event: response.function_call_arguments.done\ndata: " + string(b) + "\n\n")
+
+	done := map[string]interface{}{
+		"type": "response.output_item.done", "output_index": 0,
+		"item": map[string]interface{}{
+			"id": fcID, "type": "function_call", "status": "completed",
+			"call_id": actualCallID, "name": tc.Function.Name, "arguments": tc.Function.Arguments,
+		},
+	}
+	b, _ = json.Marshal(done)
+	c.Writer.WriteString("event: response.output_item.done\ndata: " + string(b) + "\n\n")
+}
+
 
 func (h *ChatHandler) Files(c *gin.Context) {
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)

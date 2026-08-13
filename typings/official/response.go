@@ -388,12 +388,18 @@ type ResponsesOutputTokensDetails struct {
 }
 
 // ResponsesOutputItem 对齐 OpenAI ResponseOutputItem 的最小形态。
+// Type 取值:"message" | "reasoning" | "function_call" | "web_search_call"。
 type ResponsesOutputItem struct {
 	ID      string                 `json:"id"`
-	Type    string                 `json:"type"` // "message" | "reasoning"
+	Type    string                 `json:"type"` // "message" | "reasoning" | "function_call" | "web_search_call"
 	Status  string                 `json:"status,omitempty"`
 	Role    string                 `json:"role,omitempty"`
-	Content []ResponsesContentPart `json:"content"`
+	Content []ResponsesContentPart `json:"content,omitempty"`
+
+	// function_call item 专用字段
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type ResponsesContentPart struct {
@@ -419,6 +425,32 @@ type ResponsesReasoningDeltaEvent struct {
 }
 
 func (e ResponsesReasoningDeltaEvent) String() string {
+	b, _ := json.Marshal(e)
+	return string(b)
+}
+
+// ResponsesFunctionCallDeltaEvent 流式工具调用参数增量事件。
+type ResponsesFunctionCallDeltaEvent struct {
+	Type        string `json:"type"` // "response.function_call_arguments.delta"
+	ItemID      string `json:"item_id"`
+	OutputIndex int    `json:"output_index"`
+	Delta       string `json:"delta"`
+}
+
+func (e ResponsesFunctionCallDeltaEvent) String() string {
+	b, _ := json.Marshal(e)
+	return string(b)
+}
+
+// ResponsesFunctionCallDoneEvent 流式工具调用参数收尾事件。
+type ResponsesFunctionCallDoneEvent struct {
+	Type        string `json:"type"` // "response.function_call_arguments.done"
+	ItemID      string `json:"item_id"`
+	OutputIndex int    `json:"output_index"`
+	Arguments   string `json:"arguments"`
+}
+
+func (e ResponsesFunctionCallDoneEvent) String() string {
 	b, _ := json.Marshal(e)
 	return string(b)
 }

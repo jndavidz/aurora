@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -26,6 +27,12 @@ type Config struct {
 	ProxyURL           string
 	HTTPProxy          string
 	DebugSentinel      bool
+
+	// DeepSeek 网页逆向(chat.deepseek.com)通道配置。
+	DeepSeekWebBase   string   // 网页端 base,默认 https://chat.deepseek.com
+	DeepSeekWebTokens string   // 网页 token 注入池文件路径(每行一个 user_token)
+	DeepSeekModels    []string // 暴露的模型目录(exposed id 列表)
+	DeepSeekProxy     string   // 网页通道出口代理(非美区,绕 WAF)
 }
 
 func Load() Config {
@@ -50,7 +57,26 @@ func Load() Config {
 		ProxyURL:           os.Getenv("PROXY_URL"),
 		HTTPProxy:          os.Getenv("http_proxy"),
 		DebugSentinel:      getBoolEnv("DEBUG_SENTINEL", false),
+
+		DeepSeekWebBase:   getEnv("DEEPSEEK_WEB_BASE", "https://chat.deepseek.com"),
+		DeepSeekWebTokens: os.Getenv("DEEPSEEK_WEB_TOKENS"),
+		DeepSeekModels:    splitCSV(os.Getenv("DEEPSEEK_MODELS")),
+		DeepSeekProxy:     os.Getenv("DEEPSEEK_PROXY"),
 	}
+}
+
+// splitCSV 把逗号分隔的字符串拆成非空切片;空串返回 nil。
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func getEnv(key, defaultVal string) string {
