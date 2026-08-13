@@ -11,6 +11,10 @@
 # 注意:必须先 COPY go.mod/go.sum 再 go mod download,
 # 这样 buildx 才能在 go.sum 变化时失效此层缓存,触发重新下载。
 ARG GO_VERSION=1.26.0
+# 运行基础镜像(须在首个 FROM 前声明,全局 ARG 才对 FROM 可见)。
+# 默认 docker.io 的 alpine:NAS 构建时 gcr.io 常不可达(BuildKit TLS 超时,
+# 见 NAS_DEPLOYMENT.md §3.8);如需 distroless,构建时传 ARG RUNTIME_BASE=gcr.io/distroless/static-debian12:nonroot
+ARG RUNTIME_BASE=alpine:3.20
 
 # ---- 阶段 1: 编译 ----
 FROM golang:${GO_VERSION}-alpine AS build
@@ -43,8 +47,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags='-s -w -buildid=' -o /out/aurora .
 
-# ---- 阶段 2: 运行镜像(distroless,~2MB,无 shell 更安全)----
-FROM gcr.io/distroless/static-debian12:nonroot
+# ---- 阶段 2: 运行镜像 ----
+# 创建 uid 65532 的 nonroot 用户,与 distroless nonroot 对齐(NAS volume 权限按此 uid 准备)。
+FROM ${RUNTIME_BASE}
+RUN adduser -D -u 65532 nonroot
 COPY --from=build /out/aurora /aurora
 EXPOSE 8080
 USER nonroot:nonroot

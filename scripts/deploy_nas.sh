@@ -15,7 +15,7 @@ TOKEN_SRC=/volume2/dev/apps/aurora/.runtime/tokens  # Drive 同步过来的 toke
 DOCKER=/usr/local/bin/docker          # NAS 上 docker 默认不在 PATH,用全路径
 AUTH=david                            # 与 compose 内 Authorization 一致
 NAS_IP=10.10.10.2
-PORT=8080
+PORT=65432   # compose 映射 65432→8080(容器内 8080,宿主 65432)
 # ────────────────────────────────────────────────────────────
 
 # 定位仓库根(脚本可在任意目录调用)

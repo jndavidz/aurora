@@ -24,8 +24,9 @@ services:
       - TOOL_CALLING_ENABLED=true   # local-toolfix 工具调用修复总开关
       - REFUSAL_RETRIES=1       # pi 场景:普通对话不带 <tool_call> 时立即返回,不重试(ZCode 场景才需 5)
       - DEBUG_TOOL_LOG=/work/.runtime/logs/tool_debug.log   # 工具调用 trace,local-toolfix 专属
-      # DeepSeek 网页逆向通道(见 docs/DEEPSEEK.md)。token 经 host .env 注入,不入库。
-      - DEEPSEEK_WEB_TOKENS=${DEEPSEEK_WEB_TOKENS:-}
+      # DeepSeek 网页逆向通道(见 docs/DEEPSEEK.md)。token 放 tokens/deepseek_tokens.txt,
+      # 只读挂载到 /work/.runtime/tokens/;路径硬编码(部署脚本会清 .env,勿用 ${} 间接)。
+      - DEEPSEEK_WEB_TOKENS=/work/.runtime/tokens/deepseek_tokens.txt
       - DEEPSEEK_MODELS=${DEEPSEEK_MODELS:-}
       - DEEPSEEK_WEB_BASE=${DEEPSEEK_WEB_BASE:-https://chat.deepseek.com}
       - DEEPSEEK_PROXY=${DEEPSEEK_PROXY:-}
