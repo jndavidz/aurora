@@ -123,6 +123,26 @@ func lastItemIsToolResult(items []responsesInputItem) bool {
 	return false
 }
 
+// mergeRecoveredCalls 在标签解析之外,兜底扫描未加标签的 JSON 工具调用。
+// 实测(ZCode):模型有时不输出 <|tool▁calls▁begin|> 标签,而是输出
+// ```{"name":...,"arguments":...}```(markdown 围栏)或裸 JSON —— 标签解析器
+// 会漏掉,RecoverFromText 能兜底扫出。按 name+arguments 去重。
+func mergeRecoveredCalls(parsed []official.ToolCall, text string, tools []official.Tool) []official.ToolCall {
+	out := parsed
+	seen := make(map[string]bool, len(parsed))
+	for _, c := range parsed {
+		seen[c.Function.Name+"\x00"+c.Function.Arguments] = true
+	}
+	for _, c := range toolcall.RecoverFromText(text, tools) {
+		key := c.Function.Name + "\x00" + c.Function.Arguments
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // deepseekTagSet 返回 DeepSeek 网页的工具标签(文本协议)。
 // 网页实测(2026-08-13):模型遵循 <|tool▁calls▁begin|>(▁=U+2581)形式;
 // NormalizeTagged 已覆盖 <tool_calls_begin|>、ASCII 下划线等变体。
@@ -197,6 +217,9 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 		})
 	}
 	calls = append(calls, parsed...)
+
+	// 兜底:标签解析漏掉的未加标签 JSON 工具调用(markdown 围栏/裸 JSON)。
+	calls = mergeRecoveredCalls(calls, textBuf.String(), req.Tools)
 
 	// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
 	// 协议要求 output_index 每 item 唯一递增,且 item 按序完成(此前两者都挤在 0,
@@ -333,6 +356,7 @@ func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req
 	writeChunk(roleChunk)
 
 	parser := toolcall.NewParserWithTags(deepseekTagSet())
+	var textBuf strings.Builder
 	var emittedCall bool
 	_ = deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
 		if delta.Text == "" {
@@ -340,6 +364,7 @@ func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req
 		}
 		textDelta, calls := parser.Feed(delta.Text)
 		if textDelta != "" {
+			textBuf.WriteString(textDelta)
 			writeChunk(official.NewChatCompletionChunk(textDelta, model))
 		}
 		for _, tc := range calls {
@@ -351,9 +376,18 @@ func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req
 	})
 	textDelta, calls := parser.Flush()
 	if textDelta != "" {
+		textBuf.WriteString(textDelta)
 		writeChunk(official.NewChatCompletionChunk(textDelta, model))
 	}
 	for _, tc := range calls {
+		emittedCall = true
+		for _, d := range toolcall.StreamToToolCallDeltas([]official.ToolCall{tc}) {
+			writeChunk(official.NewToolCallChunk(model, d...))
+		}
+	}
+
+	// 兜底:标签解析漏掉的未加标签 JSON 工具调用(markdown 围栏/裸 JSON)。
+	for _, tc := range mergeRecoveredCalls(nil, textBuf.String(), req.Tools) {
 		emittedCall = true
 		for _, d := range toolcall.StreamToToolCallDeltas([]official.ToolCall{tc}) {
 			writeChunk(official.NewToolCallChunk(model, d...))

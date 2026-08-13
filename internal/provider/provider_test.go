@@ -210,3 +210,22 @@ func TestToolResultNudge(t *testing.T) {
 		t.Errorf("用户消息结尾不应含工具结果强 nudge:\n%s", prompt2)
 	}
 }
+
+// 兜底解析:模型输出 markdown 围栏 JSON(不带 <|tool▁calls▁begin|> 标签)时,
+// mergeRecoveredCalls 应能扫出工具调用(ZCode 实测失败场景)。
+func TestMergeRecoveredCallsFencedJSON(t *testing.T) {
+	tools := []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "bash"}}}
+	text := "让我先查看项目结构。``` {\"name\": \"bash\", \"arguments\": {\"command\": \"find . -type f | head -100\"}}```"
+	calls := mergeRecoveredCalls(nil, text, tools)
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(calls))
+	}
+	if calls[0].Function.Name != "bash" || !strings.Contains(calls[0].Function.Arguments, "find") {
+		t.Errorf("解析错误: %+v", calls[0])
+	}
+	// 去重:已解析的与兜底的不重复
+	dup := mergeRecoveredCalls(calls, text, tools)
+	if len(dup) != 1 {
+		t.Errorf("去重失败: %d", len(dup))
+	}
+}
