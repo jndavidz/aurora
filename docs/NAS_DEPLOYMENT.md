@@ -132,7 +132,7 @@ services:
       - Authorization=david
       - FREE_ACCOUNTS=false     # 代码默认 false;env.template 写 true 是模板值,生产保持关
       - TOOL_CALLING_ENABLED=true   # local-toolfix 工具调用修复总开关
-      - REFUSAL_RETRIES=5       # 拒绝/推诿重试次数(local-toolfix 专属)
+      - REFUSAL_RETRIES=1       # pi 场景:普通对话不带 <tool_call> 时立即返回,不重试;ZCode 场景才需 5(重试循环见 chat_handler.go handleToolCalling)
       - DEBUG_TOOL_LOG=/work/.runtime/logs/tool_debug.log   # 工具调用 trace,local-toolfix 专属
     volumes:
       - /volume2/docker/aurora/tokens:/work/.runtime/tokens:ro   # token 只读,命中 tokenFilePath 隔离目录
