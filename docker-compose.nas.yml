@@ -1,0 +1,29 @@
+# NAS 本地构建 local-toolfix 镜像用 compose
+# 部署到 /volume2/docker/aurora/,由 scripts/deploy_nas.sh 重命名为 docker-compose.yml
+# 与官方 docker-compose.yml(ghcr 镜像)并存,避免覆盖
+version: '3'
+
+services:
+  app:
+    image: aurora:local-toolfix        # 本地构建 tag,不用官方 ghcr 镜像
+    container_name: aurora
+    restart: unless-stopped
+    build:                             # ← 必须有 build 段,否则 --build 被静默忽略
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GOPROXY: https://goproxy.cn,direct   # 国内构建加速;CI 不传则用默认 proxy.golang.org
+    working_dir: /work                  # 命中 local-toolfix 的 ./.runtime/tokens 隔离目录(见 §二)
+    ports:
+      - '8080:8080'
+    environment:
+      - SERVER_HOST=0.0.0.0      # 默认即 0.0.0.0(config.go:33),显式声明确保局域网可达
+      - SERVER_PORT=8080
+      - Authorization=david
+      - FREE_ACCOUNTS=false     # 代码默认 false;env.template 写 true 是模板值,生产保持关
+      - TOOL_CALLING_ENABLED=true   # local-toolfix 工具调用修复总开关
+      - REFUSAL_RETRIES=5       # 拒绝/推诿重试次数(local-toolfix 专属)
+      - DEBUG_TOOL_LOG=/work/.runtime/logs/tool_debug.log   # 工具调用 trace,local-toolfix 专属
+    volumes:
+      - /volume2/docker/aurora/tokens:/work/.runtime/tokens:ro   # token 只读,命中 tokenFilePath 隔离目录
+      - /volume2/docker/aurora/logs:/work/.runtime/logs          # 调试日志(可选)

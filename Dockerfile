@@ -16,6 +16,11 @@ ARG GO_VERSION=1.26.0
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
 
+# 可选:构建时注入 GOPROXY(国内/NAS 构建用 goproxy.cn 加速);
+# 不传则空,Go 用默认 proxy.golang.org(CI 国外构建不受影响)
+ARG GOPROXY=
+ENV GOPROXY=${GOPROXY}
+
 # 1) 先拷贝 module 清单(几乎不变,缓存命中率最高)
 COPY go.mod go.sum ./
 # 2) 用 cache mount 拉 module,持久化到 /go/pkg/mod

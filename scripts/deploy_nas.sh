@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# NAS 一键部署 aurora(local-toolfix 本地构建镜像)
+# 参考 kugou_api/docs/nas-build-guide.md 的 deploy 范式
+#
+# 流程:tar 打包源码 → ssh 到 NAS → 清空部署目录(保留 tokens/logs)→ 解压
+#       → docker compose up -d --build → curl /v1/models 探活
+#
+# 用法:cd /d/repos/aurora && ./scripts/deploy_nas.sh
+set -euo pipefail
+
+# ── 配置(按本机 AGENTS.md 网络拓扑)──────────────────────────
+NAS_HOST=zxsadmin@10.10.10.2          # SSH 免密,密钥 D:\dev\data\ssh\id_ed25519
+DEPLOY_DIR=/volume2/docker/aurora      # 构建上下文(非 Drive 同步区)
+TOKEN_SRC=/volume2/dev/apps/aurora/.runtime/tokens  # Drive 同步过来的 token 源
+DOCKER=/usr/local/bin/docker          # NAS 上 docker 默认不在 PATH,用全路径
+AUTH=david                            # 与 compose 内 Authorization 一致
+NAS_IP=10.10.10.2
+PORT=8080
+# ────────────────────────────────────────────────────────────
+
+# 定位仓库根(脚本可在任意目录调用)
+REPO=$(git rev-parse --show-toplevel)
+cd "$REPO"
+
+SSH="ssh -o BatchMode=yes $NAS_HOST"
+
+echo -e "\033[36m==> 1/4 打包源码并传输(tar,排除敏感/无关项)\033[0m"
+tar -czf - \
+  --exclude=.git --exclude=.zcode --exclude=.claude --exclude=.idea --exclude=.vscode \
+  --exclude=.github --exclude=.env --exclude='.env.*' \
+  --exclude='*.log' --exclude='*.pid' --exclude='*.seed' --exclude='*.har' --exclude='*.exe' \
+  --exclude=.runtime --exclude=bin --exclude=dist --exclude=target --exclude=_scratch \
+  --exclude='*.test' --exclude='*.out' --exclude='*.prof' --exclude='*.pprof' \
+  . | $SSH "
+set -e
+mkdir -p $DEPLOY_DIR/tokens $DEPLOY_DIR/logs
+cd $DEPLOY_DIR
+# 清空旧源码(保留 tokens/ logs/)
+find . -mindepth 1 -maxdepth 1 ! -name tokens ! -name logs -exec rm -rf {} +
+# 首次或 token 缺失:从同步区拷入独立副本
+if [ ! -s tokens/session_tokens.txt ]; then
+  echo '  tokens 缺失,从 $TOKEN_SRC 拷入'
+  cp $TOKEN_SRC/*.txt tokens/ 2>/dev/null || true
+  chmod 644 tokens/*.txt 2>/dev/null || true
+fi
+# 解压新源码
+tar -xzf -
+# compose 文件就位:仓库内 docker-compose.nas.yml → docker-compose.yml
+[ -f docker-compose.nas.yml ] && mv -f docker-compose.nas.yml docker-compose.yml
+echo '  已解压到 $DEPLOY_DIR'
+ls -la $DEPLOY_DIR | head -20
+"
+
+echo -e "\033[36m==> 2/4 构建并启动容器(BuildKit 缓存命中则秒级)\033[0m"
+$SSH "cd $DEPLOY_DIR && DOCKER_BUILDKIT=1 $DOCKER compose up -d --build"
+
+echo -e "\033[36m==> 3/4 等待服务就绪(3s)\033[0m"
+sleep 3
+
+echo -e "\033[36m==> 4/4 验证 /v1/models\033[0m"
+RESP=$(curl -s -w '\n[HTTP %{http_code}]' -H "Authorization: Bearer $AUTH" "http://$NAS_IP:$PORT/v1/models" || true)
+echo "$RESP" | head -c 800
+echo
+case "$RESP" in
+  *'[HTTP 200]'*)
+    echo -e "\033[32m✓ 部署成功,账号池就绪\033[0m"
+    ;;
+  *)
+    echo -e "\033[31m✗ 验证失败,拉取容器日志:\033[0m"
+    $SSH "$DOCKER logs --tail 60 aurora" || true
+    exit 1
+    ;;
+esac

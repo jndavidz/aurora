@@ -21,6 +21,9 @@ bin/
 dist/
 target/
 
+# 部署脚本不进镜像
+scripts/
+
 # 保留 README 供 Docker 镜像元数据使用
 *.md
 !README.md
