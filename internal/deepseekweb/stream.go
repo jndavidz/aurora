@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -23,6 +24,45 @@ type StreamResult struct {
 	Err           string
 }
 
+// 正文引用标记(联网搜索时模型在正文里嵌入的引用占位符,网页端渲染成引用卡片)。
+// 形态: `[citation:1]`、`[citation:7]`(纯文本,可多个连排)。
+var (
+	citationFullRe = regexp.MustCompile(`\[\s*citation\s*:\s*[^\]]*\]`)
+	citationTailRe = regexp.MustCompile(`\[\s*citation\s*:[^\]]*$`) // 尾部未闭合片段
+)
+
+// stripCitationMarkers 移除一段完整文本里的全部 citation 标记。
+func stripCitationMarkers(s string) string {
+	return citationFullRe.ReplaceAllString(s, "")
+}
+
+// citationStripper 是流式安全的引用标记剥离器:标记可能跨帧到达,
+// 未闭合的标记片段留待下一帧补全,避免误删正文或泄漏标记片段。
+type citationStripper struct {
+	pending string
+}
+
+// Feed 输入一段增量,返回可安全输出的剥离后文本。
+func (s *citationStripper) Feed(chunk string) string {
+	s.pending += chunk
+	clean := citationFullRe.ReplaceAllString(s.pending, "")
+	// 若尾部有未闭合的 `[citation:` 片段,收回 pending,只输出其前的干净文本。
+	// (i[1] == len(clean) 表示未闭合片段一直延伸到末尾)
+	if i := citationTailRe.FindStringIndex(clean); i != nil && i[1] == len(clean) {
+		s.pending = clean[i[0]:]
+		return clean[:i[0]]
+	}
+	s.pending = ""
+	return clean
+}
+
+// Flush 清空遗留的 pending(正常为空;异常截断时做完整剥离)。
+func (s *citationStripper) Flush() string {
+	clean := stripCitationMarkers(s.pending)
+	s.pending = ""
+	return clean
+}
+
 // ConsumeStream 消费 completion 的 SSE 响应,逐帧回调 onDelta。
 //
 // 帧格式:每帧 `\n\n` 分隔,含 event: 与 data: 行;data 为 p/o/v JSON-Patch。
@@ -32,6 +72,19 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 	var res StreamResult
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
+	// 正文/思维链各用独立剥离器,流式增量过剥(引用标记可能跨帧)。
+	var textStripper, reasoningStripper citationStripper
+	origDelta := onDelta
+	onDelta = func(d Delta) {
+		if d.Text != "" {
+			d.Text = textStripper.Feed(d.Text)
+		}
+		if d.Reasoning != "" {
+			d.Reasoning = reasoningStripper.Feed(d.Reasoning)
+		}
+		origDelta(d)
+	}
 
 	var eventName string
 	var dataLines []string
@@ -66,6 +119,12 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 		}
 	}
 	flush()
+
+	// 非流式汇总也过一遍剥离(onDelta 只覆盖流式路径)。
+	// res.Text 累积的是原始增量(含 citation 标记),整体剥一次即可;
+	// reasoning 同理。
+	res.Text = stripCitationMarkers(res.Text)
+	res.Reasoning = stripCitationMarkers(res.Reasoning)
 
 	if res.ResponseMsgID == "" && res.RequestMsgID == "" && res.Text == "" && res.Reasoning == "" && !res.Finished {
 		res.Err = "empty stream"
