@@ -27,7 +27,7 @@ func (d *Glm) chatResponses(c *gin.Context, m *glmModel, req *official.Responses
 	messages := glmMessagesFromResponses(req, true) // chat 变体剥离 tools
 	streamReq := glmweb.CompletionRequest{
 		Messages:     messages,
-		ChatMode:     "thinking",
+		ChatMode:     m.Mode, // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
 		IsNetworking: true,
 	}
 	if req.Stream {
@@ -162,7 +162,7 @@ func (d *Glm) chatCompletions(c *gin.Context, m *glmModel, req *official.APIRequ
 	messages := glmMessagesFromAPI(req)
 	streamReq := glmweb.CompletionRequest{
 		Messages:     messages,
-		ChatMode:     "thinking",
+		ChatMode:     m.Mode, // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
 		IsNetworking: true,
 	}
 	if req.Stream {

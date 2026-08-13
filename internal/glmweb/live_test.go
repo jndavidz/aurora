@@ -38,7 +38,7 @@ func TestLiveCompletion(t *testing.T) {
 		Messages: []Message{
 			{Role: "user", Content: []Content{{Type: "text", Text: "你好,用一句话介绍你自己"}}},
 		},
-		ChatMode:     "thinking",
+		ChatMode:     "speed",
 		IsNetworking: false,
 	})
 	if err != nil {

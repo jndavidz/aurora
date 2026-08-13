@@ -13,15 +13,17 @@ func TestParseGlmModel(t *testing.T) {
 	cases := []struct {
 		id      string
 		variant string
+		mode    string
 		wantNil bool
 	}{
-		{"glm-5.2-chat", glmVariantChat, false},
-		{"glm-5.2-coding", glmVariantCoding, false},
-		{"glm-5-chat", glmVariantChat, false},
-		{"glm-5-coding", glmVariantCoding, false},
-		{"glm-5.2", "", true},       // 无变体后缀 → nil
-		{"gpt-5-chat", "", true},    // 非 glm 命名 → nil
-		{"glm-5.2-coding-x", "", true},
+		{"glm-5.2-chat", glmVariantChat, "speed", false},
+		{"glm-5.2-chat-thinking", glmVariantChat, "thinking", false},
+		{"glm-5.2-coding", glmVariantCoding, "", false},
+		{"glm-5-chat", "", "", true},   // 已下线(用户决定只留 5.2)
+		{"glm-5-coding", "", "", true}, // 已下线
+		{"glm-5.2", "", "", true},      // 无变体后缀 → nil
+		{"gpt-5-chat", "", "", true},   // 非 glm 命名 → nil
+		{"glm-5.2-coding-x", "", "", true},
 	}
 	for _, c := range cases {
 		m := parseGlmModel(c.id)
@@ -38,6 +40,9 @@ func TestParseGlmModel(t *testing.T) {
 		if m.Variant != c.variant {
 			t.Errorf("%s: variant = %s, want %s", c.id, m.Variant, c.variant)
 		}
+		if m.Mode != c.mode {
+			t.Errorf("%s: mode = %q, want %q", c.id, m.Mode, c.mode)
+		}
 	}
 }
 
@@ -47,7 +52,7 @@ func TestNewGlmDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultGlmModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultGlmModels))
 	}
-	if !d.Handles("glm-5.2-chat") || !d.Handles("glm-5-coding") {
+	if !d.Handles("glm-5.2-chat") || !d.Handles("glm-5.2-chat-thinking") || !d.Handles("glm-5.2-coding") {
 		t.Fatal("default models not handled")
 	}
 	if d.Handles("glm-9-chat") {

@@ -19,6 +19,7 @@ const (
 type glmModel struct {
 	ID      string
 	Variant string
+	Mode    string // glmweb ChatMode:"speed"(快速)|"thinking"(思考),仅 chat 变体用
 	Caps    []Capability
 }
 
@@ -34,10 +35,9 @@ type Glm struct {
 
 // defaultGlmModels 是 GLM_MODELS 未配置时的默认目录。
 var defaultGlmModels = []string{
-	"glm-5.2-chat",
+	"glm-5.2-chat",          // 快速挡(默认)
+	"glm-5.2-chat-thinking", // 思考挡
 	"glm-5.2-coding",
-	"glm-5-chat",
-	"glm-5-coding",
 }
 
 // NewGlm 构造智谱 provider。
@@ -60,13 +60,19 @@ func NewGlm(cfg *config.Config) *Glm {
 
 func parseGlmModel(id string) *glmModel {
 	id = strings.TrimSpace(id)
-	// 前缀保护:-chat/-coding 后缀太通用(gpt-5-chat 等),必须 glm- 开头。
-	if !strings.HasPrefix(id, "glm-") {
+	// 前缀保护:必须 glm- 开头 + 版本白名单。
+	// glm-5 系列已下线(用户 2026-08-14 决定只留 5.2),只接受 glm-5.2- 前缀。
+	if !strings.HasPrefix(id, "glm-5.2-") {
 		return nil
 	}
 	switch {
+	case strings.HasSuffix(id, "-chat-thinking"):
+		// 思考挡(chat_mode=thinking):深度思考 + 联网搜索 + 识图。
+		return &glmModel{ID: id, Variant: glmVariantChat, Mode: "thinking", Caps: []Capability{CapReasoning, CapWebSearch, CapVision}}
 	case strings.HasSuffix(id, "-chat"):
-		return &glmModel{ID: id, Variant: glmVariantChat, Caps: []Capability{CapReasoning, CapWebSearch, CapVision}}
+		// 快速挡(chat_mode=speed,默认):联网搜索 + 识图,无深度思考。
+		// 用户 2026-08-14 决定默认快速而非 thinking。
+		return &glmModel{ID: id, Variant: glmVariantChat, Mode: "speed", Caps: []Capability{CapWebSearch, CapVision}}
 	case strings.HasSuffix(id, "-coding"):
 		// 定位:云端沙箱代码执行助手(见 docs/GLM.md §四)。
 		// 智谱模型无 function calling 训练,不标 CapFunctionCall,如实标 CapSandboxCode。

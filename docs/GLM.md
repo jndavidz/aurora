@@ -6,8 +6,14 @@
 
 | id | 变体 | 能力 |
 |---|---|---|
-| `glm-5.2-chat` / `glm-5-chat` | chat | 纯真人对话(深度思考 + 联网搜索 + 识图),**绝不注入工具信息** |
-| `glm-5.2-coding` / `glm-5-coding` | coding | 工具调用(围栏 JSON 文本协议 + 原生 tool_calls 双通道) |
+| `glm-5.2-chat` | chat(快速挡) | 纯真人对话(快速模式 + 联网搜索 + 识图),**绝不注入工具信息** |
+| `glm-5.2-chat-thinking` | chat(思考挡) | 纯真人对话(深度思考 + 联网搜索 + 识图),**绝不注入工具信息** |
+| `glm-5.2-coding` | coding | 工具调用(围栏 JSON 文本协议 + 原生 tool_calls 双通道) |
+
+> 2026-08-14 用户决定:glm-5 系列(`glm-5-chat`/`glm-5-coding`)下线,只留 5.2;
+> `glm-5.2-chat` 拆成两个挡位 —— `glm-5.2-chat`(快速,speed)与
+> `glm-5.2-chat-thinking`(思考,thinking),由模型 id 决定 `chat_mode`。
+> 解析白名单:只接受 `glm-5.2-` 前缀。
 
 默认目录见 `defaultGlmModels`(GLM_MODELS 未配置时);仅当 `GLM_WEB_TOKENS` 指向的 token 池文件非空时 provider 才注册。
 
@@ -75,8 +81,11 @@ internal/toolcall/
 智谱网页版是**"全部工具智能体"**结构:模型原生带真实沙箱工具
 (`execute_sandbox_code` 等),后端真的会执行并回传结果。这带来:
 
-1. **chat 变体完美**。深度思考 + 联网搜索 + 识图都是原生能力,模型自然使用,
-   已验证端到端(ChatMode:"thinking" + IsNetworking:true)。
+1. **chat 变体**。联网搜索 + 识图是原生能力,模型自然使用。
+   2026-08-14 起默认 **快速模式**(ChatMode:"speed",用户决定默认快速而非深度思考);
+   之前为 "thinking"。⚠️ 实测联网搜索触发是**概率性**的:同一 query 重复问,
+   有时触发(带 `【turn*search*】` 引用)、有时模型拒绝("无法实时联网")——上游
+   模型行为,非 aurora 代码问题(请求体 `is_networking:true` 已正确透传)。
 
 2. **coding 变体无法可靠工具调用 —— 模型级能力边界,非提示词可解**。
    经 20+ 组实测(2026-08-13 二次深挖),穷尽以下方案**全部无效**:
