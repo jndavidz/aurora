@@ -182,3 +182,31 @@ func TestSharedPromptCore(t *testing.T) {
 		t.Errorf("coding prompt 应含工具回放: %q", codingAPI)
 	}
 }
+
+// 角色感知 nudge:最后是工具结果时,提示词必须含"继续调工具"强提醒。
+func TestToolResultNudge(t *testing.T) {
+	// 最后一条是工具结果 → 强 nudge
+	items := []responsesInputItem{
+		{Type: "message", Role: "user", Text: "读文件"},
+		{Type: "function_call", Role: "assistant", Text: `{"path":"a.txt"}`},
+		{Type: "function_call_output", Role: "tool", Text: "内容A"},
+	}
+	if !lastItemIsToolResult(items) {
+		t.Fatal("应识别为工具结果结尾")
+	}
+	tools := []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "read"}}}
+	prompt := buildCodingPromptItems(items, "", tools, nil)
+	if !strings.Contains(prompt, "A file LISTING is NOT the file content") {
+		t.Errorf("工具结果后应含强 nudge:\n%s", prompt)
+	}
+
+	// 最后是用户消息 → 通用 nudge(不含强提醒)
+	items2 := []responsesInputItem{{Type: "message", Role: "user", Text: "读文件"}}
+	if lastItemIsToolResult(items2) {
+		t.Fatal("用户消息结尾不应算工具结果")
+	}
+	prompt2 := buildCodingPromptItems(items2, "", tools, nil)
+	if strings.Contains(prompt2, "A file LISTING is NOT the file content") {
+		t.Errorf("用户消息结尾不应含工具结果强 nudge:\n%s", prompt2)
+	}
+}

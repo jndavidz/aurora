@@ -97,11 +97,30 @@ func buildCodingPromptItems(items []responsesInputItem, instructions string, too
 		}
 		sb.WriteString("\n\n")
 	}
-	// 末尾强提醒:只输出工具块,不做散文(仿网页 reminder 注入)。
+	// 末尾强提醒:角色感知——最后是工具结果时用更强的"继续调工具"提醒,
+	// 否则用通用"只输出工具块"提醒(仿网页 reminder 注入)。
 	if len(tools) > 0 {
-		sb.WriteString(deepSeekCodingNudge(deepseekTagSet()))
+		if lastItemIsToolResult(items) {
+			sb.WriteString(deepSeekToolResultNudge(deepseekTagSet()))
+		} else {
+			sb.WriteString(deepSeekCodingNudge(deepseekTagSet()))
+		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// lastItemIsToolResult 报告最后一条有效消息是否是工具结果(决定 nudge 强度)。
+func lastItemIsToolResult(items []responsesInputItem) bool {
+	for i := len(items) - 1; i >= 0; i-- {
+		it := items[i]
+		if it.Type == "function_call_output" {
+			return true
+		}
+		if it.Type == "message" && it.Text != "" {
+			return false
+		}
+	}
+	return false
 }
 
 // deepseekTagSet 返回 DeepSeek 网页的工具标签(文本协议)。
@@ -118,6 +137,18 @@ func deepseekTagSet() toolcall.TagSet {
 // 强制模型只输出标签块,不做散文描述。
 func deepSeekCodingNudge(tags toolcall.TagSet) string {
 	return "\n\n[SYSTEM INSTRUCTION: To call a tool, output ONLY the " + tags.StartTag + " block with valid JSON inside, and nothing else — no prose, no explanation, no preamble. Then stop and wait for the tool result. If the task is not finished, in your next reply output only the next tool call block.]"
+}
+
+// deepSeekToolResultNudge 是最后一条消息为工具结果时的强提醒:
+// 防"工具链断裂"——模型拿到工具结果后不继续调工具,反而输出计划/进度报告/凭文件名猜测。
+// 对齐 ChatGPT local-toolfix 的 FinalNudge(tool) 分支。
+func deepSeekToolResultNudge(tags toolcall.TagSet) string {
+	return "\n\n[SYSTEM INSTRUCTION — 工具结果已返回:\n" +
+		"The tool output above is the REAL result produced by running your tool call on the user's actual machine. Treat it as ground truth and as the current state of the workspace.\n" +
+		"You have DIRECT read access to every file through the tools — the tool output IS the real file content.\n" +
+		"A file LISTING is NOT the file content. If the task requires reading files, you are NOT done until you have read each relevant file with the read tool. Summarizing from a file tree or file names is GUESSING and is WRONG.\n" +
+		"NEVER ask the user to provide, paste, or upload file contents — you can read them yourself.\n" +
+		"A progress report, a reading plan, or a promise like 'I will read next' is NOT a valid reply and NOT a final answer. If the task is not finished, emit the next " + tags.StartTag + " block in THIS reply now — there is no later turn unless you call a tool now.]"
 }
 
 // codingStream 流式:文本协议工具调用 → function_call item / output_text delta。
