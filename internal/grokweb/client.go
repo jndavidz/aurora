@@ -184,6 +184,17 @@ func (c *Client) Complete(req CompletionRequest, onDelta func(Delta)) StreamResu
 					onDelta(Delta{Text: ev.Delta})
 				}
 			}
+		case "response.grok.output":
+			// 流错误(如 usage_limit_reached 用量限制)在这里上报,
+			// 否则会静默走到 response.done 返回 200 空正文(客户端"无反应")。
+			if ev.Output.StreamError.Kind != "" {
+				msg := ev.Output.StreamError.Message
+				if msg == "" {
+					msg = ev.Output.StreamError.Kind
+				}
+				res.Err = fmt.Sprintf("grok %s: %s", ev.Output.StreamError.Kind, msg)
+				return res
+			}
 		case "response.done":
 			if ev.Response.ID != "" {
 				res.ResponseID = ev.Response.ID
@@ -216,6 +227,14 @@ type eventEnvelope struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 	} `json:"response"`
+	// response.grok.output 的流错误(如 usage_limit_reached)。
+	Output struct {
+		StreamError struct {
+			Kind     string `json:"kind"`
+			Message  string `json:"message"`
+			Severity string `json:"severity"`
+		} `json:"stream_error"`
+	} `json:"output"`
 	Error *struct {
 		Type    string `json:"type"`
 		Code    string `json:"code"`
