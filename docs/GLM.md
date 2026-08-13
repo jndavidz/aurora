@@ -78,24 +78,43 @@ internal/toolcall/
 1. **chat 变体完美**。深度思考 + 联网搜索 + 识图都是原生能力,模型自然使用,
    已验证端到端(ChatMode:"thinking" + IsNetworking:true)。
 
-2. **coding 变体的工具调用不可靠**。实测(多次):
-   - 模型不认 ChatGPT `<tool_call>`、DeepSeek `<|tool▁calls▁begin|>` 标签,会忽略并散文回答
-   - 对自定义工具(list_files 等)**,概率性**输出 markdown 围栏 JSON
-     (````json {"name":"list_files","arguments":{...}} ````),或直接调用自己的沙箱工具
-   - `bash`/`shell`/`python` 类工具名**必触发**内置沙箱锚定 —— 模型自认有 `/mnt/data`
-     权限,编造执行结果,任何提示词都无法覆盖
-   - 提示词示例必须是**智谱原生 tool_calls 结构**(`{"type":"tool_calls","tool_calls":{...}}`),
-     普通 `{"name":..}` 示例模型不当回事
+2. **coding 变体无法可靠工具调用 —— 模型级能力边界,非提示词可解**。
+   经 20+ 组实测(2026-08-13 二次深挖),穷尽以下方案**全部无效**:
+   - ChatGPT `<tool_call>`、DeepSeek `<|tool▁calls▁begin|>` 标签 → 忽略并散文回答
+   - 智谱原生 `{"type":"tool_calls","tool_calls":{...}}` 结构示例 → 不稳定(约 1/3,
+     且纯属温度采样,同提示词多次结果随机)
+   - markdown 围栏 JSON 示例 / 裸 JSON 示例 → 模型不当回事
+   - 强约束(禁沙箱、禁模拟、只调 TOOLS AVAILABLE)→ 模型更困惑
+   - few-shot(消息历史放成功范例)→ 无效,默认助手 100% 仍调沙箱
+   - 6 种 `chat_mode`(""/thinking/speed/chat/auto/normal)→ 全部仍触发沙箱
+   - 无沙箱 agent(如 `669fb16ffdf0683c86f7d903`)→ 不调沙箱但换成 browser 工具,
+     且被固定为图生视频用途,仍不遵循外部工具指令
+   - 请求体注入 `tools`/`functions`/`tool_definitions` 字段 → 模型不识别
+     (网页端协议无 function calling,与官方 API open.bigmodel.cn 是两套)
 
-3. **实现对策**:
-   - 提示词用智谱原生结构示例 + 显式"无沙箱、禁模拟、只调 TOOLS AVAILABLE"
-   - FenceParser 拦截围栏 JSON(模型遵约时),StreamToToolCallDeltas 输出
+   **根因**:智谱网页版模型**没有 function calling 训练**,只训练过"内置工具智能体"
+   (search / execute_sandbox_code / draw / browser 等)。它对"输出一个任意外部工具调用
+   让外部系统执行"没有概念 —— 它要么用自己的沙箱真实执行(见下),要么诚实拒绝
+   ("作为 GLM 大语言模型,我没有访问本地文件系统的权限")。这与 DeepSeek(有标签协议
+   训练)、ChatGPT(有 function calling)本质不同。
+
+3. **有价值的替代能力:云端沙箱执行**。
+   `execute_sandbox_code` 是 **assistant 级配置**(默认助手 65940acff94777010aa6b796
+   带沙箱,特定 agent 不带),且是**真实云端执行** —— 后端真跑代码并回传结果。
+   实测 coding 变体问"用 python 算 1 到 100 的和"返回 `5050`(正确)。
+   因此智谱 coding 变体的真实定位是**"云端代码执行助手"**:
+   - ✅ 适合:算数、写脚本并验证、数据分析(执行在智谱云端沙箱)
+   - ❌ 不适合:读用户代码仓库、改本地文件(需要客户端工具,智谱做不到)
+
+4. **实现对策**(尽力而为 + 合理降级):
+   - FenceParser 拦截围栏 JSON(模型偶尔输出时能抓到,概率低但无害)
    - 原生 tool_calls 通道解析后**只转发客户端声明过的工具**(`toolNameInList` 过滤),
-     智谱内置工具(execute_sandbox_code/search/finish)不泄漏给客户端
-   - 结果:模型偶尔(约 1/3)输出可用工具调用;其余时候散文回答或只调内置工具
+     `execute_sandbox_code`/`search`/`finish` 不暴露给客户端(客户端执行不了智谱沙箱)
+   - 模型调沙箱时,aurora 正常返回其文本结果(沙箱执行能力对客户端透明)
 
-> 结论:智谱 coding 适合轻量工具场景;需要稳定工具调用的 coding agent
-> (zcode/pi)仍建议用 DeepSeek / ChatGPT provider。chat 场景(搜索/思考/识图)智谱体验最好。
+> 结论:智谱 **chat 场景(搜索/思考/识图)体验最好**;**coding 场景**不要依赖智谱输出
+> 客户端工具调用(做不到),需要稳定工具调用的 coding agent(zcode/pi)请用
+> DeepSeek / ChatGPT provider。
 
 ## 五、环境变量
 
