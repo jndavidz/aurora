@@ -30,6 +30,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.GlmWebTokens != "" {
 		registry.Register(provider.NewGlm(cfg))
 	}
+	if cfg.KimiWebTokens != "" {
+		registry.Register(provider.NewKimi(cfg))
+	}
 	if cfg.QianwenWebTokens != "" {
 		registry.Register(provider.NewQianwen(cfg))
 	}

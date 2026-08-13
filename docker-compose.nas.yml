@@ -36,6 +36,12 @@ services:
       - GLM_MODELS=${GLM_MODELS:-}
       - GLM_WEB_BASE=${GLM_WEB_BASE:-https://chatglm.cn}
       - GLM_PROXY=${GLM_PROXY:-}
+      # Kimi(www.kimi.com)网页逆向通道。token 放 tokens/kimi_tokens.txt(每行一个
+      # refresh_token,从 localStorage 提取),只读挂载;仅当文件非空时 Kimi provider 注册。
+      - KIMI_WEB_TOKENS=/work/.runtime/tokens/kimi_tokens.txt
+      - KIMI_MODELS=${KIMI_MODELS:-}
+      - KIMI_WEB_BASE=${KIMI_WEB_BASE:-https://www.kimi.com}
+      - KIMI_PROXY=${KIMI_PROXY:-}
       # 千问(www.qianwen.com)网页逆向通道。token 放 tokens/qianwen_tokens.txt(每行一个
       # tongyi_sso_ticket),只读挂载;仅当文件非空时 Qianwen provider 注册。
       - QIANWEN_WEB_TOKENS=/work/.runtime/tokens/qianwen_tokens.txt

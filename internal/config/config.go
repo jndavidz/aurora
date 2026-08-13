@@ -40,6 +40,12 @@ type Config struct {
 	GlmModels    []string // 暴露的模型目录
 	GlmProxy     string   // 网页通道出口代理
 
+	// Kimi(www.kimi.com)网页逆向通道配置。
+	KimiWebBase   string   // 网页端 base,默认 https://www.kimi.com
+	KimiWebTokens string   // 网页 token 注入池文件路径(每行一个 refresh_token)
+	KimiModels    []string // 暴露的模型目录
+	KimiProxy     string   // 网页通道出口代理
+
 	// 千问(www.qianwen.com)网页逆向通道配置。
 	QianwenWebBase   string   // 网页端 base,默认 https://chat2.qianwen.com
 	QianwenWebTokens string   // 网页 token 注入池文件路径(每行一个 tongyi_sso_ticket)
@@ -94,6 +100,11 @@ func Load() Config {
 		GlmWebTokens: os.Getenv("GLM_WEB_TOKENS"),
 		GlmModels:    splitCSV(os.Getenv("GLM_MODELS")),
 		GlmProxy:     os.Getenv("GLM_PROXY"),
+
+		KimiWebBase:   getEnv("KIMI_WEB_BASE", "https://www.kimi.com"),
+		KimiWebTokens: os.Getenv("KIMI_WEB_TOKENS"),
+		KimiModels:    splitCSV(os.Getenv("KIMI_MODELS")),
+		KimiProxy:     os.Getenv("KIMI_PROXY"),
 
 		QianwenWebBase:   getEnv("QIANWEN_WEB_BASE", "https://chat2.qianwen.com"),
 		QianwenWebTokens: os.Getenv("QIANWEN_WEB_TOKENS"),
