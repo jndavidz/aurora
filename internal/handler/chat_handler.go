@@ -72,6 +72,22 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		}
 	}
 
+	// ChatGPT -coding 变体:改写为基础模型(透传上游用真实 slug),强制工具调用。
+	// 响应仍回显客户端请求的 -coding id(reqModel 用 requestedModel)。
+	requestedModel := original_request.Model
+	if base, coding := normalizeCodingModel(original_request.Model); coding {
+		if len(original_request.Tools) == 0 {
+			c.JSON(400, gin.H{"error": gin.H{
+				"message": "coding 模型(gpt-5-6-coding)需要携带 tools 参数",
+				"type":    "invalid_request_error",
+				"param":   "tools",
+				"code":    "missing_tools",
+			}})
+			return
+		}
+		original_request.Model = base
+	}
+
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
 	if err != nil {
 		c.JSON(400, gin.H{"error": gin.H{
@@ -123,7 +139,7 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	clientState.ConversationID = translated_request.ConversationID
 	clientState.ParentMessageID = translated_request.ParentMessageID
 
-	reqModel := original_request.Model
+	reqModel := requestedModel
 	if reqModel == "" {
 		reqModel = "auto"
 	}
@@ -305,6 +321,22 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	// ChatGPT -coding 变体:改写为基础模型(透传上游用真实 slug),强制工具调用。
+	// 响应仍回显客户端请求的 -coding id(reqModel 用 requestedModel)。
+	requestedModel := original_request.Model
+	if base, coding := normalizeCodingModel(original_request.Model); coding {
+		if len(original_request.Tools) == 0 {
+			c.JSON(400, gin.H{"error": gin.H{
+				"message": "coding 模型(gpt-5-6-coding)需要携带 tools 参数",
+				"type":    "invalid_request_error",
+				"param":   "tools",
+				"code":    "missing_tools",
+			}})
+			return
+		}
+		original_request.Model = base
+	}
+
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
 	if err != nil {
 		c.JSON(400, gin.H{"error": gin.H{
@@ -355,7 +387,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	}
 	clientState.ConversationID = translated_request.ConversationID
 	clientState.ParentMessageID = translated_request.ParentMessageID
-	reqModel := original_request.Model
+	reqModel := requestedModel
 	if reqModel == "" {
 		reqModel = "auto"
 	}
@@ -620,9 +652,10 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 
 // responsesToolCalling 处理 ChatGPT Responses 的工具调用(coding)路径。
 //
-// 复用现有 <tool_call> 文本协议(handleToolCalling 同源机制):converter 注入
-// BuildInstructions + FinalNudge 提示词,上游回复用 toolcall.Parser 流式解析,
-// 把工具调用转成 Responses 的 function_call item / 正文转成 output_text delta。
+// 复用 toolCallingRetry 的 <tool_call> 文本协议收集(与 handleToolCalling 同源):
+// 上游非流式收集全文 + REFUSAL_RETRIES 重试 + 拒绝分类器 + RecoverFromText 兜底,
+// 解析出工具调用后按 Responses 事件(流式)或 JSON(非流式)输出。
+// 修复:原流式路径无重试,模型偶发绕开工具直接纯文本回答即"偶发不触发"。
 func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, reqModel, uid, proxyUrl string, inputTokens int) {
 	if account == nil || !account.Type.Satisfies(accounts.CapToolCalling) {
 		c.JSON(403, gin.H{"error": "Tool calling requires a logged-in ChatGPT account."})
@@ -631,222 +664,74 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 
 	// 发送上游前清洗历史里的"绕开工具"回复(与 Nightmare 一致)。
 	sanitizeRefusalHistory(originalRequest.Messages)
-	translated_request := chatgptrequestconverter.ConvertAPIRequest(*originalRequest, account, proxyUrl, client)
 
 	streamRequested := originalRequest.Stream && h.cfg.StreamMode
-	if !streamRequested {
-		h.responsesToolCallingNonStream(c, originalRequest, account, client, clientState, translated_request, reqModel, uid, proxyUrl, inputTokens)
-		return
-	}
-	h.responsesToolCallingStream(c, originalRequest, account, client, clientState, translated_request, reqModel, uid, proxyUrl, inputTokens)
-}
 
-// responsesToolCallingStream 流式路径:上游 SSE → toolcall.Parser → Responses 事件。
-func (h *ChatHandler) responsesToolCallingStream(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, translated_request chatgpt_types.ChatGPTRequest, reqModel, uid, proxyUrl string, inputTokens int) {
-	respID := "resp_" + uuid.NewString()
-	messageItemID := "msg_" + uuid.NewString()
-
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	flusher, _ := c.Writer.(http.Flusher)
-
-	c.Writer.WriteString("event: response.created\ndata: " + responsesCreatedEvent(respID, reqModel) + "\n\n")
-	c.Writer.WriteString("event: response.output_item.added\ndata: " + responsesOutputItemAddedEvent(0, messageItemID, "message") + "\n\n")
-	if flusher != nil {
-		c.Writer.WriteHeader(200)
-		flusher.Flush()
-	}
-
-	response, wsConn, _, _, err := conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
-	if err != nil {
-		c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent(err.Error()) + "\n\n")
+	// 流式:先写 response.created + output_item.added(message) 事件头,再收集。
+	var respID, messageItemID string
+	var flusher http.Flusher
+	if streamRequested {
+		respID = "resp_" + uuid.NewString()
+		messageItemID = "msg_" + uuid.NewString()
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		flusher, _ = c.Writer.(http.Flusher)
+		c.Writer.WriteString("event: response.created\ndata: " + responsesCreatedEvent(respID, reqModel) + "\n\n")
+		c.Writer.WriteString("event: response.output_item.added\ndata: " + responsesOutputItemAddedEvent(0, messageItemID, "message") + "\n\n")
 		if flusher != nil {
+			c.Writer.WriteHeader(200)
 			flusher.Flush()
 		}
-		return
-	}
-	defer response.Body.Close()
-	if chatgpt.Handle_request_error(c, response) {
-		if wsConn != nil {
-			wsConn.Close()
-		}
-		c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent("upstream error") + "\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-		return
 	}
 
-	parser := toolcall.NewParser()
-	var fullText strings.Builder
-	var calls []officialtypes.ToolCall
-
-	for i := h.cfg.MaxContinueCount; i > 0; i-- {
-		var continue_info *chatgpt.ContinueInfo
-		result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, true, reqModel, chatgpt.HandlerDetailedOptions{
-			Websocket:   wsConn,
-			ClientState: clientState,
-		})
-		wsConn = nil
-
-		if result.Text != "" {
-			textDelta, parsed := parser.Feed(result.Text)
-			if textDelta != "" {
-				fullText.WriteString(textDelta)
-				c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, textDelta) + "\n\n")
-			}
-			calls = append(calls, parsed...)
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-
-		parentMessageID := result.ParentMessageID
-		continue_info = result.Continue
-		if continue_info != nil {
-			parentMessageID = continue_info.ParentID
-		}
-		clientState.NoteTurnResult(result.ConversationID, parentMessageID)
-		if result.ConversationID != "" {
-			h.sessions.Register(result.ConversationID, clientState)
-		}
-		if continue_info == nil {
-			break
-		}
-		translated_request.Messages = nil
-		translated_request.Action = "continue"
-		translated_request.ConversationID = continue_info.ConversationID
-		translated_request.ParentMessageID = continue_info.ParentID
-
-		response, wsConn, _, _, err = conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
-		if err != nil {
-			c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent(err.Error()) + "\n\n")
+	out, terr := h.toolCallingRetry(c, originalRequest, &client, account, &clientState, &reqModel, &uid, &proxyUrl, &inputTokens)
+	if terr != nil {
+		if streamRequested {
+			// header 已写 200,只能发 response.failed 事件。
+			c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent(terr.msg) + "\n\n")
 			if flusher != nil {
 				flusher.Flush()
 			}
 			return
 		}
-		defer response.Body.Close()
-		if chatgpt.Handle_request_error(c, response) {
-			if wsConn != nil {
-				wsConn.Close()
-			}
-			c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent("upstream error") + "\n\n")
-			if flusher != nil {
-				flusher.Flush()
-			}
-			return
-		}
-	}
-
-	// Flush 残余(未闭合标签)
-	textDelta, parsed := parser.Flush()
-	if textDelta != "" {
-		fullText.WriteString(textDelta)
-		c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, textDelta) + "\n\n")
-	}
-	calls = append(calls, parsed...)
-
-	// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
-	c.Writer.WriteString("event: response.output_item.done\ndata: " + responsesOutputItemDoneEvent(0, messageItemID, "message", fullText.String()) + "\n\n")
-
-	output_tokens := util.CountToken(fullText.String())
-	responsesResponse := officialtypes.NewResponsesResponse(fullText.String(), "", inputTokens, output_tokens, 0, 0, 0, reqModel)
-	for i, tc := range calls {
-		idx := i + 1
-		fcID := "fc_" + uuid.NewString()
-		callID := tc.ID
-		if callID == "" {
-			callID = "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
-		}
-		writeResponsesFunctionCallEvent(c, idx, fcID, callID, tc)
-		responsesResponse.Output = append(responsesResponse.Output, officialtypes.ResponsesOutputItem{
-			ID: fcID, Type: "function_call", Status: "completed",
-			CallID: callID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
-		})
-	}
-	c.Writer.WriteString("event: response.completed\ndata: " + responsesCompletedEvent(responsesResponse) + "\n\n")
-	c.Writer.WriteString("data: [DONE]\n\n")
-	if flusher != nil {
-		flusher.Flush()
-	}
-}
-
-// responsesToolCallingNonStream 非流式路径:全量解析后一次返回。
-func (h *ChatHandler) responsesToolCallingNonStream(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, translated_request chatgpt_types.ChatGPTRequest, reqModel, uid, proxyUrl string, inputTokens int) {
-	response, wsConn, _, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
-	if err != nil {
-		c.JSON(status, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "request_conversion_error",
-			"param":   "model",
-			"code":    "request_conversion_error",
-		}})
+		c.JSON(terr.status, gin.H{"error": gin.H{"message": terr.msg, "type": terr.typ, "param": nil, "code": terr.code}})
 		return
 	}
-	defer response.Body.Close()
-	if chatgpt.Handle_request_error(c, response) {
-		if wsConn != nil {
-			wsConn.Close()
+
+	outputTokens := util.CountToken(out.text)
+	if streamRequested {
+		if out.text != "" {
+			c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, out.text) + "\n\n")
+		}
+		// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
+		c.Writer.WriteString("event: response.output_item.done\ndata: " + responsesOutputItemDoneEvent(0, messageItemID, "message", out.text) + "\n\n")
+
+		responsesResponse := officialtypes.NewResponsesResponse(out.text, "", inputTokens, outputTokens, 0, 0, 0, reqModel)
+		for i, tc := range out.calls {
+			idx := i + 1
+			fcID := "fc_" + uuid.NewString()
+			callID := tc.ID
+			if callID == "" {
+				callID = "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
+			}
+			writeResponsesFunctionCallEvent(c, idx, fcID, callID, tc)
+			responsesResponse.Output = append(responsesResponse.Output, officialtypes.ResponsesOutputItem{
+				ID: fcID, Type: "function_call", Status: "completed",
+				CallID: callID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+			})
+		}
+		c.Writer.WriteString("event: response.completed\ndata: " + responsesCompletedEvent(responsesResponse) + "\n\n")
+		c.Writer.WriteString("data: [DONE]\n\n")
+		if flusher != nil {
+			flusher.Flush()
 		}
 		return
 	}
 
-	var fullText strings.Builder
-	for i := h.cfg.MaxContinueCount; i > 0; i-- {
-		var continue_info *chatgpt.ContinueInfo
-		result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, false, reqModel, chatgpt.HandlerDetailedOptions{
-			Websocket:   wsConn,
-			ClientState: clientState,
-		})
-		wsConn = nil
-		fullText.WriteString(result.Text)
-		parentMessageID := result.ParentMessageID
-		continue_info = result.Continue
-		if continue_info != nil {
-			parentMessageID = continue_info.ParentID
-		}
-		clientState.NoteTurnResult(result.ConversationID, parentMessageID)
-		if result.ConversationID != "" {
-			h.sessions.Register(result.ConversationID, clientState)
-		}
-		if continue_info == nil {
-			break
-		}
-		translated_request.Messages = nil
-		translated_request.Action = "continue"
-		translated_request.ConversationID = continue_info.ConversationID
-		translated_request.ParentMessageID = continue_info.ParentID
-		response, wsConn, _, status, err = conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
-		if err != nil {
-			c.JSON(status, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "request_conversion_error",
-				"param":   "model",
-				"code":    "request_conversion_error",
-			}})
-			return
-		}
-		defer response.Body.Close()
-		if chatgpt.Handle_request_error(c, response) {
-			if wsConn != nil {
-				wsConn.Close()
-			}
-			return
-		}
-	}
-	if c.Writer.Status() != 200 {
-		return
-	}
-
-	text := fullText.String()
-	toolCalls := toolcall.RecoverFromText(text, originalRequest.Tools)
-	cleanText := toolcall.StripTags(text, toolcall.DefaultTags)
-
-	outResp := officialtypes.NewResponsesResponse(cleanText, "", inputTokens, util.CountToken(cleanText), 0, 0, 0, reqModel)
-	for _, tc := range toolCalls {
+	outResp := officialtypes.NewResponsesResponse(out.text, "", inputTokens, outputTokens, 0, 0, 0, reqModel)
+	for _, tc := range out.calls {
 		outResp.Output = append(outResp.Output, officialtypes.ResponsesOutputItem{
 			ID: "fc_" + uuid.NewString(), Type: "function_call", Status: "completed",
 			CallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
@@ -854,6 +739,7 @@ func (h *ChatHandler) responsesToolCallingNonStream(c *gin.Context, originalRequ
 	}
 	c.JSON(200, outResp)
 }
+
 
 // responsesTextDeltaEventText 构造 response.output_text.delta 事件字符串。
 func responsesTextDeltaEventText(itemID string, outputIndex int, delta string) string {
@@ -979,12 +865,32 @@ func (h *ChatHandler) Files(c *gin.Context) {
 	c.JSON(200, uploaded)
 }
 
-// handleToolCalling 工具调用模式的主流程（对齐 initialize/handlers.go:handleToolCalling）
-func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, client **bogdanfinn.TlsClient, account *accounts.Account, clientState **chatgpt.ChatClientState, reqModel *string, uid *string, proxyUrl *string, inputTokens *int) {
-	if account == nil || !account.Type.Satisfies(accounts.CapToolCalling) {
-		c.JSON(403, gin.H{"error": "Tool calling requires a logged-in ChatGPT account."})
-		return
-	}
+// toolCallingOutcome 是 toolCallingRetry 带重试收集的最终结果。
+type toolCallingOutcome struct {
+	text           string
+	calls          []officialtypes.ToolCall
+	conversationID string
+	sentinel       []map[string]interface{}
+}
+
+// toolCallingError 是 toolCallingRetry 的结构化错误:不直接写响应,
+// 由调用方按输出协议输出(chat/completions 写 JSON,responses 写 failed 事件)。
+type toolCallingError struct {
+	status int
+	typ    string
+	code   string
+	msg    string
+}
+
+// toolCallingRetry 带重试地收集上游回复全文并解析工具调用,供 chat/completions
+// (handleToolCalling)与 /v1/responses (responsesToolCalling)共用。包含:
+//   - 历史大小预检(413,免费模型超大请求静默空回复)
+//   - REFUSAL_RETRIES 重试循环(SYSTEM OVERRIDE 逼重试)
+//   - 拒绝/停顿/环境推诿分类器 + RecoverFromText 兜底
+//   - 上游哑火检测(连续空回复停手)+ 502 兜底(no_valid_reply)
+//
+// 返回 (outcome, nil) 成功;(nil, err) 失败(调用方负责输出错误)。
+func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *officialtypes.APIRequest, client **bogdanfinn.TlsClient, account *accounts.Account, clientState **chatgpt.ChatClientState, reqModel *string, uid *string, proxyUrl *string, inputTokens *int) (*toolCallingOutcome, *toolCallingError) {
 	tools := originalRequest.Tools
 	maxRefusalRetries := h.cfg.RefusalRetries
 	if maxRefusalRetries <= 0 {
@@ -1007,13 +913,12 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 	if historyChars+toolSchemaChars > maxHistoryChars {
 		fmt.Fprintf(os.Stderr, "[chatgpt] request too large (history=%d chars + tools=%d chars > %d), refusing upstream call\n",
 			historyChars, toolSchemaChars, maxHistoryChars)
-		c.JSON(413, gin.H{"error": gin.H{
-			"message": fmt.Sprintf("对话历史过大(%d 字符,上限约 %d),免费模型单轮上下文有限,请新建会话或精简历史;长任务请分阶段进行。", historyChars+toolSchemaChars, maxHistoryChars),
-			"type":    "history_too_large",
-			"param":   nil,
-			"code":    "history_too_large",
-		}})
-		return
+		return nil, &toolCallingError{
+			status: 413,
+			typ:    "history_too_large",
+			code:   "history_too_large",
+			msg:    fmt.Sprintf("对话历史过大(%d 字符,上限约 %d),免费模型单轮上下文有限,请新建会话或精简历史;长任务请分阶段进行。", historyChars+toolSchemaChars, maxHistoryChars),
+		}
 	}
 
 	baseTranslated := chatgptrequestconverter.ConvertAPIRequest(*originalRequest, account, *proxyUrl, *client)
@@ -1081,13 +986,12 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 
 		response, wsConn, _, status, err := conversationClientOrder(client, account, translated, *proxyUrl, false, *clientState, h.accountPool)
 		if err != nil {
-			c.JSON(status, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "request_conversion_error",
-				"param":   "model",
-				"code":    "request_conversion_error",
-			}})
-			return
+			return nil, &toolCallingError{
+				status: status,
+				typ:    "request_conversion_error",
+				code:   "request_conversion_error",
+				msg:    err.Error(),
+			}
 		}
 		result := chatgpt.HandlerDetailedWithOptions(c, response, *client, account, *uid, translated, false, *reqModel, chatgpt.HandlerDetailedOptions{
 			Websocket:        wsConn,
@@ -1205,32 +1109,53 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 		}
 		fmt.Fprintf(os.Stderr, "[chatgpt] no valid reply after %d/%d attempts (tools=%d, messages=%d, historyText=%d chars) -> 502\n",
 			attemptsMade, maxRefusalRetries, len(originalRequest.Tools), len(originalRequest.Messages), reqTextChars)
-		c.JSON(502, gin.H{"error": gin.H{
-			"message": "未获得有效回复(上游空回复或模型反复绕开工具/推诿环境)。请重试;若频繁出现,等 1~2 分钟或新建会话。",
-			"type":    "no_valid_reply",
-			"param":   nil,
-			"code":    "no_valid_reply",
-		}})
+		return nil, &toolCallingError{
+			status: 502,
+			typ:    "no_valid_reply",
+			code:   "no_valid_reply",
+			msg:    "未获得有效回复(上游空回复或模型反复绕开工具/推诿环境)。请重试;若频繁出现,等 1~2 分钟或新建会话。",
+		}
+	}
+
+	return &toolCallingOutcome{
+		text:           finalText,
+		calls:          lastToolCalls,
+		conversationID: lastConversationID,
+		sentinel:       lastSentinel,
+	}, nil
+}
+
+// handleToolCalling 工具调用模式的主流程(chat/completions)。
+// 重试/兜底逻辑在 toolCallingRetry,此处只负责输出。
+func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, client **bogdanfinn.TlsClient, account *accounts.Account, clientState **chatgpt.ChatClientState, reqModel *string, uid *string, proxyUrl *string, inputTokens *int) {
+	if account == nil || !account.Type.Satisfies(accounts.CapToolCalling) {
+		c.JSON(403, gin.H{"error": "Tool calling requires a logged-in ChatGPT account."})
+		return
+	}
+
+	out, terr := h.toolCallingRetry(c, originalRequest, client, account, clientState, reqModel, uid, proxyUrl, inputTokens)
+	if terr != nil {
+		c.JSON(terr.status, gin.H{"error": gin.H{"message": terr.msg, "type": terr.typ, "param": nil, "code": terr.code}})
 		return
 	}
 
 	if originalRequest.Stream {
 		// 客户端要求流式:统一输出标准 SSE(工具调用或纯文本都兼容 OpenAI 协议)
-		outputTokens := util.CountToken(finalText)
-		h.writeToolCallingStream(c, *reqModel, finalText, lastToolCalls, lastConversationID,
+		outputTokens := util.CountToken(out.text)
+		h.writeToolCallingStream(c, *reqModel, out.text, out.calls, out.conversationID,
 			*inputTokens, outputTokens, originalRequest.StreamOptions != nil && originalRequest.StreamOptions.IncludeUsage)
 		return
 	}
-	if len(lastToolCalls) > 0 {
+	if len(out.calls) > 0 {
 		c.JSON(200, officialtypes.NewChatCompletionWithToolCalls(
-			finalText, "", lastToolCalls,
-			*inputTokens, util.CountToken(finalText),
-			*reqModel, lastConversationID, lastSentinel,
+			out.text, "", out.calls,
+			*inputTokens, util.CountToken(out.text),
+			*reqModel, out.conversationID, out.sentinel,
 		))
 		return
 	}
-	outputTokens := util.CountToken(finalText)
-	c.JSON(200, officialtypes.NewChatCompletionWithMetadata(finalText, *inputTokens, outputTokens, *reqModel, lastConversationID, lastSentinel))
+	outputTokens := util.CountToken(out.text)
+	c.JSON(200, officialtypes.NewChatCompletionWithMetadata(out.text, *inputTokens, outputTokens, *reqModel, out.conversationID, out.sentinel))
 }
 
 // writeToolCallingStream 把工具调用/文本结果以标准 OpenAI SSE 流式协议写出。
