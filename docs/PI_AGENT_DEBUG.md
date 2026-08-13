@@ -1,6 +1,6 @@
 # pi agent 连 NAS aurora 排障记录(2026-08-13)
 
-> 状态:**调查完成,修复已就绪但未部署**(部署动作被用户叫停,以本文档交接给新对话)。
+> 状态:**调查完成;REFUSAL_RETRIES=1 实际已部署并验证生效**(见 §5.1)。
 > 关联:`docs/NAS_DEPLOYMENT.md`(部署方案)、`docker-compose.nas.yml`(NAS 容器编排)。
 
 ---
@@ -108,7 +108,13 @@ pi 配置文件 `C:\Users\david\.pi\agent\models.json` 中 Aurora 条目:
   tool_calls JSON**,只识别 `<tool_call>` 文本块。这是与 pi(标准 OpenAI 客户端)协议的
   根本错位,但本次用 REFUSAL_RETRIES=1 可绕开(见 §5),不动协议本身。
 
-## 五、已做的修复(未部署)
+## 五、已做的修复(已部署并验证)
+
+> **2026-08-13 补充**:交接时用户叫停部署,但取消发生时 ssh 到 NAS 的
+> `compose up -d --build` 已同步执行完毕 —— 容器实际已用新配置重建
+> (创建时间 `2026-08-13T03:29:19Z`,镜像 ID `sha256:7845831a...` 不变)。
+> 只读验证结果:单次 `POST /v1/chat/completions` **10.53s 返回 200,日志无
+> `no tool call in reply, retrying`**,修复确认生效。
 
 `docker-compose.nas.yml` + `docs/NAS_DEPLOYMENT.md`:
 
@@ -125,8 +131,7 @@ pi 配置文件 `C:\Users\david\.pi\agent\models.json` 中 Aurora 条目:
 
 ## 六、遗留问题(新对话可继续)
 
-1. **部署验证**:改动未部署。下一步在 PC 跑 `cd /d/repos/aurora && ./scripts/deploy_nas.sh`
-   (构建缓存命中,秒级),再验证 pi 对话延迟。
+1. **部署验证**:✅ 已完成(见 §5 补充),对话延迟 45s → 10.5s。
 2. **413 history 过大**:`internal/handler/chat_handler.go:683` 硬编码
    `const maxHistoryChars = 100000`;pi 长历史会话(实测 263055 字符)直接 413。
    若要支持 pi 的长任务,需调大该上限(重新构建镜像)或 pi 侧精简上下文。
