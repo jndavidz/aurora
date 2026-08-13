@@ -36,6 +36,16 @@ services:
       - GLM_MODELS=${GLM_MODELS:-}
       - GLM_WEB_BASE=${GLM_WEB_BASE:-https://chatglm.cn}
       - GLM_PROXY=${GLM_PROXY:-}
+      # 千问(www.qianwen.com)网页逆向通道。token 放 tokens/qianwen_tokens.txt(每行一个
+      # tongyi_sso_ticket),只读挂载;仅当文件非空时 Qianwen provider 注册。
+      - QIANWEN_WEB_TOKENS=/work/.runtime/tokens/qianwen_tokens.txt
+      - QIANWEN_MODELS=${QIANWEN_MODELS:-}
+      - QIANWEN_WEB_BASE=${QIANWEN_WEB_BASE:-https://chat2.qianwen.com}
+      - QIANWEN_PROXY=${QIANWEN_PROXY:-}
+      # Grok(grok.com)网页逆向通道。cookie 池放 tokens/grok_cookies.txt(每行
+      # uid|cookie 串),只读挂载;仅当文件非空时 Grok provider 注册。
+      - GROK_COOKIES=/work/.runtime/tokens/grok_cookies.txt
+      - GROK_MODELS=${GROK_MODELS:-}
     volumes:
       - /volume2/docker/aurora/tokens:/work/.runtime/tokens:ro   # token 只读,命中 tokenFilePath 隔离目录
       - /volume2/docker/aurora/logs:/work/.runtime/logs          # 调试日志(可选)

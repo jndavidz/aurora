@@ -1,7 +1,7 @@
 # aurora 多 Provider 架构(Responses 统一表面)
 
 > 更新时间: 2026-08-13
-> 关联: `docs/DEEPSEEK.md`(DeepSeek 接入)、`docs/GLM.md`(智谱清言接入)、`docs/NAS_DEPLOYMENT.md`(部署)。
+> 关联: `docs/DEEPSEEK.md`(DeepSeek 接入)、`docs/GLM.md`(智谱清言接入)、`docs/GROK.md`(Grok 接入)、`docs/NAS_DEPLOYMENT.md`(部署)。
 
 ---
 
@@ -12,7 +12,7 @@ aurora 是「网页端 → OpenAI 兼容 API」网关。对外提供 **两个 Op
 - **`/v1/chat/completions`**:主流客户端(测试 HTML、zcode、多数 agent)使用
 - **`/v1/responses`**:pi 等 Responses 客户端使用
 
-两个表面都同时服务 **ChatGPT**、**DeepSeek** 与 **智谱(GLm)**(都是网页逆向),共享同一套 Provider 逻辑 ——
+两个表面都同时服务 **ChatGPT**、**DeepSeek**、**智谱(GLm)** 与 **Grok**(都是网页逆向),共享同一套 Provider 逻辑 ——
 Provider 接口含 `Responses()` 与 `ChatCompletions()` 两个方法,内部收敛为
 **同一核心**(输入统一成 messages → 拍平 prompt → session/PoW/SSE → delta 流),
 差异只在输入解析与输出格式(两个薄适配器)。
@@ -91,20 +91,22 @@ type Registry struct{ ... }                             // Register / Resolve / 
 | `internal/deepseekweb/` | DeepSeek 网页协议客户端(会话/PoW/SSE 双解析/识图) |
 | `internal/provider/glm*.go` | 智谱 provider(chat/coding 双变体) |
 | `internal/glmweb/` | 智谱网页协议客户端(签名/refresh/SSE 原生 tool_calls) |
-| `internal/toolcall/fence.go` | FenceParser 围栏 JSON 拦截(智谱 coding 用) |
+| `internal/provider/grok*.go` | Grok provider(chat/coding 双变体,WS 协议) |
+| `internal/grokweb/` | Grok 网页协议客户端(WebSocket + Realtime 事件流) |
+| `internal/toolcall/fence.go` | FenceParser 围栏 JSON 拦截(智谱/Grok coding 用) |
 | `internal/handler/chat_handler.go` | `Responses` 入口 provider 分派 + ChatGPT responses 工具调用 |
 | `internal/handler/router.go` | Registry 构建注册 + 别名路由 `POST /v1/models/responses`(pi 适配器实际路径) |
 | `internal/handler/models_handler.go` | 聚合 ChatGPT 硬编码列表 + provider 模型(含能力标注) |
-| `internal/config/config.go` | DeepSeek / 智谱环境变量(`DEEPSEEK_WEB_*`、`GLM_WEB_*`、`GLM_MODELS`) |
+| `internal/config/config.go` | DeepSeek / 智谱 / Grok 环境变量(`DEEPSEEK_WEB_*`、`GLM_WEB_*`、`GROK_COOKIES`、`GROK_MODELS`) |
 | `internal/toolcall/` | 标签参数化(`TagSet`,ChatGPT / DeepSeek 双标签)+ FenceParser |
 | `typings/official/` | Responses 请求/响应/事件扩展(tools、function_call item、function_call_arguments 事件) |
 
 ## 七、能力如实标注
 
-`/v1/models` 里每个 provider 模型带 `capabilities` 数组(web_search / reasoning / vision / function_call)。
+`/v1/models` 里每个 provider 模型带 `capabilities` 数组(web_search / reasoning / vision / function_call / sandbox_code)。
 用途:让客户端与文档知道**哪些能力是官方直通、哪些是网页降级**——例如 ChatGPT 网页逆向的
-联网搜索受账号/套餐限制,DeepSeek 快速模式识图与联网搜索互斥,智谱 coding 变体的工具调用
-因模型自带沙箱而**概率性生效**(见 GLM.md §四),均如实标注,避免客户端误用。
+联网搜索受账号/套餐限制,DeepSeek 快速模式识图与联网搜索互斥,智谱/Grok coding 变体的工具调用
+因模型自带沙箱而不可靠(标 `sandbox_code` 而非 `function_call`),均如实标注,避免客户端误用。
 
 ## 八、已明确不做 / 后续
 

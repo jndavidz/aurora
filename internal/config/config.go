@@ -39,6 +39,16 @@ type Config struct {
 	GlmWebTokens string   // 网页 token 注入池文件路径(每行一个 chatglm_refresh_token)
 	GlmModels    []string // 暴露的模型目录
 	GlmProxy     string   // 网页通道出口代理
+
+	// 千问(www.qianwen.com)网页逆向通道配置。
+	QianwenWebBase   string   // 网页端 base,默认 https://chat2.qianwen.com
+	QianwenWebTokens string   // 网页 token 注入池文件路径(每行一个 tongyi_sso_ticket)
+	QianwenModels    []string // 暴露的模型目录
+	QianwenProxy     string   // 网页通道出口代理
+
+	// Grok(grok.com)网页逆向通道配置。
+	GrokCookies string   // 网页 cookie 池文件路径(每行 uid|cookie 串)
+	GrokModels  []string // 暴露的模型目录
 }
 
 func Load() Config {
@@ -73,6 +83,14 @@ func Load() Config {
 		GlmWebTokens: os.Getenv("GLM_WEB_TOKENS"),
 		GlmModels:    splitCSV(os.Getenv("GLM_MODELS")),
 		GlmProxy:     os.Getenv("GLM_PROXY"),
+
+		QianwenWebBase:   getEnv("QIANWEN_WEB_BASE", "https://chat2.qianwen.com"),
+		QianwenWebTokens: os.Getenv("QIANWEN_WEB_TOKENS"),
+		QianwenModels:    splitCSV(os.Getenv("QIANWEN_MODELS")),
+		QianwenProxy:     os.Getenv("QIANWEN_PROXY"),
+
+		GrokCookies: os.Getenv("GROK_COOKIES"),
+		GrokModels:  splitCSV(os.Getenv("GROK_MODELS")),
 	}
 }
 
