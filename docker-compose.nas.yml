@@ -46,13 +46,15 @@ services:
       # uid|cookie 串),只读挂载;仅当文件非空时 Grok provider 注册。
       - GROK_COOKIES=/work/.runtime/tokens/grok_cookies.txt
       - GROK_MODELS=${GROK_MODELS:-}
-      # 腾讯元宝(yuanbao.tencent.com)网页逆向通道。token 池放 tokens/yuanbao_tokens.txt
-      # (每行一条 "<x-uskey>\t<cookie header>"),只读挂载;仅当文件非空时 Yuanbao provider 注册。
-      - YUANBAO_WEB_TOKENS=/work/.runtime/tokens/yuanbao_tokens.txt
-      - YUANBAO_MODELS=${YUANBAO_MODELS:-}
-      - YUANBAO_WEB_BASE=${YUANBAO_WEB_BASE:-https://yuanbao.tencent.com}
-      - YUANBAO_AGENT_ID=${YUANBAO_AGENT_ID:-naQivTmsDa}
-      - YUANBAO_PROXY=${YUANBAO_PROXY:-}
+      # 腾讯元宝(yuanbao.tencent.com)网页逆向通道 —— 【已关停,2026-08-14】
+      # 两个账号(主号+小号)一天内先后被风控冻结,元宝网页端对非浏览器调用极敏感,
+      # 结构性封号风险,不值得继续消耗账号。代码与 docs/YUANBAO.md 保留,
+      # 恢复需:取消本段注释 + 提供新 token 到 tokens/yuanbao_tokens.txt。
+      # - YUANBAO_WEB_TOKENS=/work/.runtime/tokens/yuanbao_tokens.txt
+      # - YUANBAO_MODELS=${YUANBAO_MODELS:-}
+      # - YUANBAO_WEB_BASE=${YUANBAO_WEB_BASE:-https://yuanbao.tencent.com}
+      # - YUANBAO_AGENT_ID=${YUANBAO_AGENT_ID:-naQivTmsDa}
+      # - YUANBAO_PROXY=${YUANBAO_PROXY:-}
     volumes:
       - /volume2/docker/aurora/tokens:/work/.runtime/tokens:ro   # token 只读,命中 tokenFilePath 隔离目录
       - /volume2/docker/aurora/logs:/work/.runtime/logs          # 调试日志(可选)
