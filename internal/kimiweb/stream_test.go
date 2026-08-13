@@ -102,3 +102,46 @@ func TestConsumeStreamEmpty(t *testing.T) {
 		t.Error("empty stream should report Err")
 	}
 }
+
+// TestStripCitationMarkers 验证引用标记剥离(用 2026-08-14 抓包的真实天气搜索正文)。
+func TestStripCitationMarkers(t *testing.T) {
+	in := "article🛠web_search:1#5🛠web_search:1#0🎨\n\n根据最新天气预报，**今天北京**的天气情况如下：\n" +
+		"- **天气状况**：晴转多云 cite🛠web_search:1#5:~:text=今明两天北京仍多分散性阵雨或雷阵雨。🛠\n" +
+		"- **最高气温**：约 **30℃** cite🛠web_search:1#5:~:text=今天开始北京最高气温回升至30℃左右\n" +
+		"- 出门注意携带雨具 🛠web_search:1#5🛠\n"
+	want := "\n\n根据最新天气预报，**今天北京**的天气情况如下：\n" +
+		"- **天气状况**：晴转多云 \n" +
+		"- **最高气温**：约 **30℃** \n" +
+		"- 出门注意携带雨具 \n"
+	got := stripCitationMarkers(in)
+	if got != want {
+		t.Errorf("strip result:\n got  %q\n want %q", got, want)
+	}
+}
+
+// TestCitationStripperStreaming 验证流式剥离:标记跨帧到达时也能完整剥离。
+func TestCitationStripperStreaming(t *testing.T) {
+	in := "开头正文 cite🛠web_search:1#5:~:text=引用内容🛠 结尾正文"
+	var s citationStripper
+	var out string
+	// 逐字符喂入(模拟极细碎帧),模拟跨帧标记
+	for _, ch := range in {
+		out += s.Feed(string(ch))
+	}
+	out += s.Flush()
+	if out != "开头正文  结尾正文" {
+		t.Errorf("streamed strip = %q, want 开头正文  结尾正文", out)
+	}
+	if strings.ContainsAny(out, "\U0001F6E0\U0001F3A8\uE3A0\uE3A8") {
+		t.Errorf("output still contains marker chars: %q", out)
+	}
+}
+
+// TestCitationStripperNormalText 验证无标记时剥离器原样输出。
+func TestCitationStripperNormalText(t *testing.T) {
+	var s citationStripper
+	out := s.Feed("这是一段普通文本") + s.Flush()
+	if out != "这是一段普通文本" {
+		t.Errorf("normal text altered: %q", out)
+	}
+}

@@ -13,6 +13,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// kimiSearchTool 是联网搜索的原生工具(chat 变体默认开启,同网页端;正文里的
+// 🛠...🛠 引用标记由 kimiweb.ConsumeStream 剥离)。
+var kimiSearchTool = []kimiweb.Tool{{Type: "TOOL_TYPE_SEARCH", Search: map[string]any{}}}
+
 // chatResponses 处理 Kimi chat 变体(/v1/responses)。
 //
 // 与 GLM/DeepSeek 差异:Kimi Chat RPC 只收单条 message(singular),不认 messages
@@ -29,6 +33,7 @@ func (d *Kimi) chatResponses(c *gin.Context, m *kimiModel, req *official.Respons
 	streamReq := kimiweb.CompletionRequest{
 		Text:     text,
 		Thinking: true,
+		Tools:    kimiSearchTool, // 开启联网搜索(快速模式 K2.6)
 	}
 	if req.Stream {
 		d.chatResponsesStream(c, req, client, streamReq)
@@ -188,6 +193,7 @@ func (d *Kimi) chatCompletions(c *gin.Context, m *kimiModel, req *official.APIRe
 	streamReq := kimiweb.CompletionRequest{
 		Text:     text,
 		Thinking: true,
+		Tools:    kimiSearchTool, // 开启联网搜索(快速模式 K2.6)
 	}
 	if req.Stream {
 		d.chatCompletionsStream(c, req, client, streamReq)

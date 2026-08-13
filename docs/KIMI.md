@@ -53,7 +53,8 @@ Resp: {"accessToken":"...","refreshToken":"..."}   # 两者都轮换
 ## 四、变体行为
 
 ### chat(纯对话)
-- 单条拍平消息 + `thinking:true`,tools 全空(不开联网搜索,避免正文引用标记污染),剥离客户端 tools。
+- 单条拍平消息 + `thinking:true`,**默认开启联网搜索**(`TOOL_TYPE_SEARCH`,同网页端),剥离客户端 tools。
+- 正文里的引用标记(`🛠...🛠` / `🎨` / `` / ``,联网搜索时模型嵌入的引用占位符)由 `kimiweb.ConsumeStream` 流式剥离(标记可能跨帧,内置 citationStripper)。
 - 原生工具调用(模型自带 ipython 等)**不外露**:模型服务端执行后把结果折进正文,provider 只流文本/思考。
 
 ### coding(工具上下文注入 + 原生工具透传)
@@ -100,6 +101,6 @@ curl -s localhost:18080/v1/chat/completions -H "Authorization: Bearer test" -H "
    - coding 变体因此只能:客户端工具注入上下文(尽力而为)+ 原生工具透传(ipython / web_search 等,客户端声明同名工具时转发)。
 2. **access_token 只有 15 分钟**:必须有刷新流(auth.kimi.com RefreshToken),刷新会轮换 refresh_token(进程内生效,池文件不重写——与 GLM 相同的漂移问题)。
 3. **降级通知 TYPE_MODEL_DEGRADE**:高峰期自动切 K2.6 快速(部分用户视角等价场景),无害,忽略。
-4. **不开联网搜索**:chat/coding 的 tools 均传空,避免正文引用标记(🛠web_search:1#5🛠 等)污染输出;需要搜索时把 `TOOL_TYPE_SEARCH` 加进 kimiweb.CompletionRequest.Tools 并处理引用标记。
+4. **联网搜索默认开启(chat 变体)**:引用标记已内置剥离,无需额外处理;coding 变体保持关闭(原生工具透传,避免引用污染工具流)。如需 coding 也开搜索,把 `TOOL_TYPE_SEARCH` 加进 `kimiweb.CompletionRequest.Tools` 即可。
 5. **网页逆向是结构性封号风险**(同元宝教训):token 只放可丢弃小号、主号永不入池、会话用完即删。
 6. **K3 后续**:换 `scenario`(如 SCENARIO_K3)再抓一次包即可接入思考模式;届时工具协议可能不同,需重新确认。
