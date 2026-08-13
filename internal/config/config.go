@@ -49,6 +49,13 @@ type Config struct {
 	// Grok(grok.com)网页逆向通道配置。
 	GrokCookies string   // 网页 cookie 池文件路径(每行 uid|cookie 串)
 	GrokModels  []string // 暴露的模型目录
+
+	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
+	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
+	YuanbaoWebTokens string   // 网页 token 注入池文件路径(每行一条 "<x-uskey>\t<cookie header>")
+	YuanbaoModels    []string // 暴露的模型目录(hy3-* / yb-deepseek-*)
+	YuanbaoAgentID   string   // 元宝主 agent id,默认 naQivTmsDa(页面 /chat/<agentId>)
+	YuanbaoProxy     string   // 网页通道出口代理
 }
 
 func Load() Config {
@@ -91,6 +98,12 @@ func Load() Config {
 
 		GrokCookies: os.Getenv("GROK_COOKIES"),
 		GrokModels:  splitCSV(os.Getenv("GROK_MODELS")),
+
+		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
+		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),
+		YuanbaoModels:    splitCSV(os.Getenv("YUANBAO_MODELS")),
+		YuanbaoAgentID:   getEnv("YUANBAO_AGENT_ID", "naQivTmsDa"),
+		YuanbaoProxy:     os.Getenv("YUANBAO_PROXY"),
 	}
 }
 

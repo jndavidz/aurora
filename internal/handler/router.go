@@ -36,6 +36,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.GrokCookies != "" {
 		registry.Register(provider.NewGrok(cfg))
 	}
+	if cfg.YuanbaoWebTokens != "" {
+		registry.Register(provider.NewYuanbao(cfg))
+	}
 
 	chatHandler := NewChatHandler(accountPool, cfg, registry)
 	imageHandler := NewImageHandler(accountPool, cfg)
