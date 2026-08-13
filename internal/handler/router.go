@@ -27,6 +27,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.DeepSeekWebTokens != "" {
 		registry.Register(provider.NewDeepSeek(cfg))
 	}
+	if cfg.GlmWebTokens != "" {
+		registry.Register(provider.NewGlm(cfg))
+	}
 
 	chatHandler := NewChatHandler(accountPool, cfg, registry)
 	imageHandler := NewImageHandler(accountPool, cfg)

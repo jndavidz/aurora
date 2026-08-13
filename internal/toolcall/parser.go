@@ -294,6 +294,13 @@ func buildToolCallFromObject(obj map[string]any) *official.ToolCall {
 	}
 	name := pickString(obj, "name", "tool", "tool_name", "function")
 	if name == "" {
+		// 智谱原生结构:{"type":"tool_calls","tool_calls":{"name":..,"arguments":".."}}
+		// name/arguments 在嵌套对象里。
+		if nested, ok := obj["tool_calls"].(map[string]any); ok {
+			if n := pickString(nested, "name", "tool", "tool_name", "function"); n != "" {
+				return buildToolCallFromObject(nested)
+			}
+		}
 		return nil
 	}
 	args := extractArguments(obj)

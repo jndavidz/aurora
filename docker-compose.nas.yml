@@ -30,6 +30,12 @@ services:
       - DEEPSEEK_MODELS=${DEEPSEEK_MODELS:-}
       - DEEPSEEK_WEB_BASE=${DEEPSEEK_WEB_BASE:-https://chat.deepseek.com}
       - DEEPSEEK_PROXY=${DEEPSEEK_PROXY:-}
+      # 智谱清言(chatglm.cn)网页逆向通道。token 放 tokens/glm_tokens.txt(每行一个
+      # chatglm_refresh_token),只读挂载;仅当文件非空时 Glm provider 注册。
+      - GLM_WEB_TOKENS=/work/.runtime/tokens/glm_tokens.txt
+      - GLM_MODELS=${GLM_MODELS:-}
+      - GLM_WEB_BASE=${GLM_WEB_BASE:-https://chatglm.cn}
+      - GLM_PROXY=${GLM_PROXY:-}
     volumes:
       - /volume2/docker/aurora/tokens:/work/.runtime/tokens:ro   # token 只读,命中 tokenFilePath 隔离目录
       - /volume2/docker/aurora/logs:/work/.runtime/logs          # 调试日志(可选)

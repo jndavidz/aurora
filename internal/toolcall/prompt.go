@@ -33,7 +33,7 @@ func buildInstructions(tags TagSet, tools []official.Tool, toolChoice *official.
 	var sb strings.Builder
 	sb.WriteString("# TOOLS AVAILABLE\n")
 	sb.WriteString("You have access to the following tools. Use the EXACT tool name from the list below — do NOT rename, abbreviate or invent names.\n\n")
-	sb.WriteString(compactToolsPrompt(tools))
+	sb.WriteString(CompactToolsPrompt(tools))
 	sb.WriteString("\n\n# TOOL CALLING FORMAT (MANDATORY)\n")
 	sb.WriteString("To call a tool, output a JSON object wrapped EXACTLY in these tags:\n")
 	sb.WriteString(tags.StartTag + "\n")
@@ -64,8 +64,8 @@ func buildInstructions(tags TagSet, tools []official.Tool, toolChoice *official.
 	return sb.String()
 }
 
-// compactToolsPrompt 把工具列表渲染成人可读的多行描述。
-func compactToolsPrompt(tools []official.Tool) string {
+// CompactToolsPrompt 把工具列表渲染成人可读的多行描述。
+func CompactToolsPrompt(tools []official.Tool) string {
 	var sb strings.Builder
 	for _, t := range tools {
 		if t.Type != "function" {

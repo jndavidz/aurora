@@ -33,6 +33,12 @@ type Config struct {
 	DeepSeekWebTokens string   // 网页 token 注入池文件路径(每行一个 user_token)
 	DeepSeekModels    []string // 暴露的模型目录(exposed id 列表)
 	DeepSeekProxy     string   // 网页通道出口代理(非美区,绕 WAF)
+
+	// 智谱清言(chatglm.cn)网页逆向通道配置。
+	GlmWebBase   string   // 网页端 base,默认 https://chatglm.cn
+	GlmWebTokens string   // 网页 token 注入池文件路径(每行一个 chatglm_refresh_token)
+	GlmModels    []string // 暴露的模型目录
+	GlmProxy     string   // 网页通道出口代理
 }
 
 func Load() Config {
@@ -62,6 +68,11 @@ func Load() Config {
 		DeepSeekWebTokens: os.Getenv("DEEPSEEK_WEB_TOKENS"),
 		DeepSeekModels:    splitCSV(os.Getenv("DEEPSEEK_MODELS")),
 		DeepSeekProxy:     os.Getenv("DEEPSEEK_PROXY"),
+
+		GlmWebBase:   getEnv("GLM_WEB_BASE", "https://chatglm.cn"),
+		GlmWebTokens: os.Getenv("GLM_WEB_TOKENS"),
+		GlmModels:    splitCSV(os.Getenv("GLM_MODELS")),
+		GlmProxy:     os.Getenv("GLM_PROXY"),
 	}
 }
 
