@@ -105,3 +105,20 @@ func TestStreamURL(t *testing.T) {
 		t.Errorf("streamURL wrong: %s", u)
 	}
 }
+
+// sanitizeText:剥离 googleusercontent card_content 引用占位符。
+func TestSanitizeText(t *testing.T) {
+	in := "http://googleusercontent.com/card_content/0\n根据天气数据,东京多云。\nhttp://googleusercontent.com/card_content/1\n明日有雨。"
+	got := sanitizeText(in)
+	if strings.Contains(got, "googleusercontent") {
+		t.Errorf("sanitize 未剥离引用链接: %q", got)
+	}
+	if !strings.Contains(got, "根据天气数据") || !strings.Contains(got, "明日有雨") {
+		t.Errorf("sanitize 误删正文: %q", got)
+	}
+	// 无引用时原样
+	plain := "普通回复"
+	if sanitizeText(plain) != plain {
+		t.Errorf("sanitize 不应改普通文本: %q", sanitizeText(plain))
+	}
+}

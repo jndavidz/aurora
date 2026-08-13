@@ -197,9 +197,19 @@ func (c *Client) Complete(req CompletionRequest, onDelta func(Delta)) StreamResu
 				res.Done = true
 			}
 			if text != "" && text != lastText {
-				delta := text[len(lastText):]
-				lastText = text
-				res.Text = text
+				cleanText := sanitizeText(text)
+				// 防御:清洗可能移除中途出现的卡片链接,导致 lastText 不是 cleanText 前缀。
+				if len(cleanText) < len(lastText) || cleanText[:len(lastText)] != lastText {
+					lastText = cleanText
+					if onDelta != nil {
+						onDelta(Delta{Text: cleanText})
+					}
+					res.Text = cleanText
+					continue
+				}
+				delta := cleanText[len(lastText):]
+				lastText = cleanText
+				res.Text = cleanText
 				if onDelta != nil {
 					onDelta(Delta{Text: delta})
 				}
@@ -359,6 +369,26 @@ func parsePayload(payload string) (text, rcid string, done bool) {
 		}
 	}
 	return text, rcid, done
+}
+
+// sanitizeText 清洗 Gemini 回复里的网页端占位符:
+//   - http://googleusercontent.com/card_content/N —— 搜索卡片引用占位符,
+//     网页端渲染成卡片,API 转发时是裸链接,剥离(可能多行/多处)。
+func sanitizeText(s string) string {
+	lines := strings.Split(s, "\n")
+	var out []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "http://googleusercontent.com/card_content/") ||
+			strings.HasPrefix(trimmed, "https://googleusercontent.com/card_content/") {
+			continue
+		}
+		out = append(out, l)
+	}
+	s = strings.Join(out, "\n")
+	// 兜底:行内也可能出现(罕见),直接替换
+	s = strings.ReplaceAll(s, "http://googleusercontent.com/card_content/", "")
+	return s
 }
 
 func truncate(s string, n int) string {
