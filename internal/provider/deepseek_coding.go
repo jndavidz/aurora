@@ -132,7 +132,6 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 	w := newSSEWriter(c)
 	respID := "resp_" + uuid.NewString()
 	messageItemID := "msg_" + uuid.NewString()
-	callID := "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
 
 	w.event("response.created", createdEvent(respID, req.Model))
 	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
@@ -140,25 +139,13 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 	// 用 toolcall.Parser 流式解析文本块。
 	parser := toolcall.NewParserWithTags(deepseekTagSet())
 	var textBuf strings.Builder
-
-	emitCall := func(fcID string, tc official.ToolCall) {
-		w.event("response.output_item.added", outputItemAddedEvent(0, functionCallItem(fcID, callID, tc.Function.Name, "", "in_progress")))
-		w.event("response.function_call_arguments.delta", map[string]any{
-			"type": "response.function_call_arguments.delta", "item_id": fcID,
-			"output_index": 0, "delta": tc.Function.Arguments,
-		})
-		w.event("response.function_call_arguments.done", map[string]any{
-			"type": "response.function_call_arguments.done", "item_id": fcID,
-			"output_index": 0, "arguments": tc.Function.Arguments,
-		})
-		w.event("response.output_item.done", outputItemDoneEvent(0, functionCallItem(fcID, callID, tc.Function.Name, tc.Function.Arguments, "completed")))
-	}
+	var calls []official.ToolCall
 
 	deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
 		if delta.Text == "" {
 			return
 		}
-		textDelta, calls := parser.Feed(delta.Text)
+		textDelta, parsed := parser.Feed(delta.Text)
 		if textDelta != "" {
 			textBuf.WriteString(textDelta)
 			w.event("response.output_text.delta", map[string]any{
@@ -166,13 +153,11 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 				"output_index": 0, "content_index": 0, "delta": textDelta,
 			})
 		}
-		for _, tc := range calls {
-			emitCall("fc_"+uuid.NewString(), tc)
-		}
+		calls = append(calls, parsed...)
 	})
 
 	// 流结束:Flush 残余(未闭合标签)
-	textDelta, calls := parser.Flush()
+	textDelta, parsed := parser.Flush()
 	if textDelta != "" {
 		textBuf.WriteString(textDelta)
 		w.event("response.output_text.delta", map[string]any{
@@ -180,13 +165,37 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 			"output_index": 0, "content_index": 0, "delta": textDelta,
 		})
 	}
-	for _, tc := range calls {
-		emitCall("fc_"+uuid.NewString(), tc)
-	}
+	calls = append(calls, parsed...)
 
-	// 汇总事件
+	// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
+	// 协议要求 output_index 每 item 唯一递增,且 item 按序完成(此前两者都挤在 0,
+	// 且 message.done 后发,严格客户端无法注册工具调用)。
 	w.event("response.output_item.done", outputItemDoneEvent(0, messageItem(messageItemID, textBuf.String(), "completed")))
+
+	// 组装最终响应:message + function_call items。
 	outResp := official.NewResponsesResponse(textBuf.String(), "", countInputChars(req), len(textBuf.String()), 0, 0, 0, req.Model)
+	for i, tc := range calls {
+		idx := i + 1
+		fcID := "fc_" + uuid.NewString()
+		callID := tc.ID
+		if callID == "" {
+			callID = "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
+		}
+		w.event("response.output_item.added", outputItemAddedEvent(idx, functionCallItem(fcID, callID, tc.Function.Name, "", "in_progress")))
+		w.event("response.function_call_arguments.delta", map[string]any{
+			"type": "response.function_call_arguments.delta", "item_id": fcID,
+			"output_index": idx, "delta": tc.Function.Arguments,
+		})
+		w.event("response.function_call_arguments.done", map[string]any{
+			"type": "response.function_call_arguments.done", "item_id": fcID,
+			"output_index": idx, "arguments": tc.Function.Arguments,
+		})
+		w.event("response.output_item.done", outputItemDoneEvent(idx, functionCallItem(fcID, callID, tc.Function.Name, tc.Function.Arguments, "completed")))
+		outResp.Output = append(outResp.Output, official.ResponsesOutputItem{
+			ID: fcID, Type: "function_call", Status: "completed",
+			CallID: callID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+		})
+	}
 	w.event("response.completed", completedEvent(outResp))
 }
 

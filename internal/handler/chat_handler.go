@@ -680,8 +680,8 @@ func (h *ChatHandler) responsesToolCallingStream(c *gin.Context, originalRequest
 	}
 
 	parser := toolcall.NewParser()
-	callID := "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
 	var fullText strings.Builder
+	var calls []officialtypes.ToolCall
 
 	for i := h.cfg.MaxContinueCount; i > 0; i-- {
 		var continue_info *chatgpt.ContinueInfo
@@ -692,14 +692,12 @@ func (h *ChatHandler) responsesToolCallingStream(c *gin.Context, originalRequest
 		wsConn = nil
 
 		if result.Text != "" {
-			textDelta, calls := parser.Feed(result.Text)
+			textDelta, parsed := parser.Feed(result.Text)
 			if textDelta != "" {
 				fullText.WriteString(textDelta)
 				c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, textDelta) + "\n\n")
 			}
-			for _, tc := range calls {
-				writeResponsesFunctionCallEvent(c, callID, tc)
-			}
+			calls = append(calls, parsed...)
 		}
 		if flusher != nil {
 			flusher.Flush()
@@ -744,18 +742,31 @@ func (h *ChatHandler) responsesToolCallingStream(c *gin.Context, originalRequest
 	}
 
 	// Flush 残余(未闭合标签)
-	textDelta, calls := parser.Flush()
+	textDelta, parsed := parser.Flush()
 	if textDelta != "" {
 		fullText.WriteString(textDelta)
 		c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, textDelta) + "\n\n")
 	}
-	for _, tc := range calls {
-		writeResponsesFunctionCallEvent(c, callID, tc)
-	}
+	calls = append(calls, parsed...)
 
+	// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
 	c.Writer.WriteString("event: response.output_item.done\ndata: " + responsesOutputItemDoneEvent(0, messageItemID, "message", fullText.String()) + "\n\n")
+
 	output_tokens := util.CountToken(fullText.String())
 	responsesResponse := officialtypes.NewResponsesResponse(fullText.String(), "", inputTokens, output_tokens, 0, 0, 0, reqModel)
+	for i, tc := range calls {
+		idx := i + 1
+		fcID := "fc_" + uuid.NewString()
+		callID := tc.ID
+		if callID == "" {
+			callID = "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
+		}
+		writeResponsesFunctionCallEvent(c, idx, fcID, callID, tc)
+		responsesResponse.Output = append(responsesResponse.Output, officialtypes.ResponsesOutputItem{
+			ID: fcID, Type: "function_call", Status: "completed",
+			CallID: callID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+		})
+	}
 	c.Writer.WriteString("event: response.completed\ndata: " + responsesCompletedEvent(responsesResponse) + "\n\n")
 	c.Writer.WriteString("data: [DONE]\n\n")
 	if flusher != nil {
@@ -857,17 +868,14 @@ func responsesTextDeltaEventText(itemID string, outputIndex int, delta string) s
 }
 
 // writeResponsesFunctionCallEvent 输出一条 function_call 的完整事件序列
-// (output_item.added → arguments.delta → arguments.done → output_item.done)。
-func writeResponsesFunctionCallEvent(c *gin.Context, callID string, tc officialtypes.ToolCall) {
-	fcID := "fc_" + uuid.NewString()
-	callID = strings.TrimPrefix(callID, "call_")
-	actualCallID := "call_" + callID
-
+// (output_item.added → arguments.delta → arguments.done → output_item.done),
+// 使用给定的 output_index 与 item/call id。
+func writeResponsesFunctionCallEvent(c *gin.Context, outputIndex int, fcID, callID string, tc officialtypes.ToolCall) {
 	added := map[string]interface{}{
-		"type": "response.output_item.added", "output_index": 0,
+		"type": "response.output_item.added", "output_index": outputIndex,
 		"item": map[string]interface{}{
 			"id": fcID, "type": "function_call", "status": "in_progress",
-			"call_id": actualCallID, "name": tc.Function.Name, "arguments": "",
+			"call_id": callID, "name": tc.Function.Name, "arguments": "",
 		},
 	}
 	b, _ := json.Marshal(added)
@@ -875,29 +883,28 @@ func writeResponsesFunctionCallEvent(c *gin.Context, callID string, tc officialt
 
 	argDelta := map[string]interface{}{
 		"type": "response.function_call_arguments.delta", "item_id": fcID,
-		"output_index": 0, "delta": tc.Function.Arguments,
+		"output_index": outputIndex, "delta": tc.Function.Arguments,
 	}
 	b, _ = json.Marshal(argDelta)
 	c.Writer.WriteString("event: response.function_call_arguments.delta\ndata: " + string(b) + "\n\n")
 
 	argDone := map[string]interface{}{
 		"type": "response.function_call_arguments.done", "item_id": fcID,
-		"output_index": 0, "arguments": tc.Function.Arguments,
+		"output_index": outputIndex, "arguments": tc.Function.Arguments,
 	}
 	b, _ = json.Marshal(argDone)
 	c.Writer.WriteString("event: response.function_call_arguments.done\ndata: " + string(b) + "\n\n")
 
 	done := map[string]interface{}{
-		"type": "response.output_item.done", "output_index": 0,
+		"type": "response.output_item.done", "output_index": outputIndex,
 		"item": map[string]interface{}{
 			"id": fcID, "type": "function_call", "status": "completed",
-			"call_id": actualCallID, "name": tc.Function.Name, "arguments": tc.Function.Arguments,
+			"call_id": callID, "name": tc.Function.Name, "arguments": tc.Function.Arguments,
 		},
 	}
 	b, _ = json.Marshal(done)
 	c.Writer.WriteString("event: response.output_item.done\ndata: " + string(b) + "\n\n")
 }
-
 
 func (h *ChatHandler) Files(c *gin.Context) {
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)
