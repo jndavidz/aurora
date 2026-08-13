@@ -71,39 +71,41 @@ func buildDeepSeekCodingPrompt(req *official.ResponsesAPIRequest) string {
 	for _, item := range responsesInputItems(req.Input) {
 		switch item.Type {
 		case "function_call":
-			sb.WriteString("Assistant: <|tool_call_begin|>" + item.Text + "<|tool_call_end|>")
+			// 回放历史工具调用:用 DeepSeek 标签包裹 arguments。
+			sb.WriteString("<|tool_call_begin|>" + item.Text + "<|tool_call_end|>")
 		case "function_call_output":
+			// 工具结果:简短标签标注(网页用角色锚点 token,我们退化为文本标签)。
 			sb.WriteString("Tool result: " + item.Text)
 		default:
-			role := item.Role
-			if role == "" {
-				role = "user"
-			}
 			text := item.Text
 			if text == "" {
 				continue
 			}
-			switch role {
-			case "system":
-				sb.WriteString(text)
-			case "assistant":
-				sb.WriteString("Assistant: " + text)
-			default:
-				sb.WriteString("User: " + text)
-			}
+			sb.WriteString(text)
 		}
 		sb.WriteString("\n\n")
+	}
+	// 末尾强提醒:只输出工具块,不做散文(仿网页 reminder 注入)。
+	if len(req.Tools) > 0 {
+		sb.WriteString(deepSeekCodingNudge(deepseekTagSet()))
 	}
 	return strings.TrimSpace(sb.String())
 }
 
 // deepseekTagSet 返回 DeepSeek 网页的工具标签(文本协议)。
-// [P0] 标签精确写法(含全角变体)需按网页实测微调。
+// 网页实测(2026-08-13):模型遵循 <|tool▁calls▁begin|>(▁=U+2581)形式;
+// NormalizeTagged 已覆盖 <tool_calls_begin|>、ASCII 下划线等变体。
 func deepseekTagSet() toolcall.TagSet {
 	return toolcall.TagSet{
-		StartTag: "<|tool_calls_begin|>",
-		EndTag:   "<|tool_calls_end|>",
+		StartTag: "<|tool\u2581calls\u2581begin|>",
+		EndTag:   "<|tool\u2581calls\u2581end|>",
 	}
+}
+
+// deepSeekCodingNudge 是 coding 变体末尾的强提醒(仿网页 reminder 注入):
+// 强制模型只输出标签块,不做散文描述。
+func deepSeekCodingNudge(tags toolcall.TagSet) string {
+	return "\n\n[SYSTEM INSTRUCTION: To call a tool, output ONLY the " + tags.StartTag + " block with valid JSON inside, and nothing else — no prose, no explanation, no preamble. Then stop and wait for the tool result. If the task is not finished, in your next reply output only the next tool call block.]"
 }
 
 // codingStream 流式:文本协议工具调用 → function_call item / output_text delta。

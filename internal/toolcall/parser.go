@@ -67,14 +67,11 @@ func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.Tool
 				p.buffer = p.buffer[startIdx+len(p.tags.StartTag):]
 				continue
 			}
-			// 没找到 startTag;但 buffer 末尾可能是 startTag 的"半个标签",
+			// 没找到 startTag;但 buffer 末尾可能是某个开标签变体的"半个标签",
 			// 需要保留若干字符避免误切。
 			flushIndex := len(p.buffer)
-			for i := 1; i < len(p.tags.StartTag); i++ {
-				if strings.HasSuffix(p.buffer, p.tags.StartTag[:i]) {
-					flushIndex = len(p.buffer) - i
-					break
-				}
+			if keep := keepPartialTagTail(p.buffer, openTagVariants(p.tags)); keep > 0 {
+				flushIndex = len(p.buffer) - keep
 			}
 			pre := p.buffer[:flushIndex]
 			if pre != "" {

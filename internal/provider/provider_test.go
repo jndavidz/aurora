@@ -115,6 +115,10 @@ func TestFlattenChatInputSkipsToolItems(t *testing.T) {
 	if !strings.Contains(prompt, "读一下") || !strings.Contains(prompt, "总结") {
 		t.Errorf("chat prompt lost messages:\n%s", prompt)
 	}
+	// 不加角色前缀(实测 DeepSeek 网页 prompt 是纯文本)。
+	if strings.Contains(prompt, "User:") || strings.Contains(prompt, "Assistant:") {
+		t.Errorf("chat prompt must not contain role text prefixes:\n%s", prompt)
+	}
 }
 
 // 多轮 input 重放:function_call/function_call_output 保留(供 coding 变体回放)。

@@ -39,15 +39,22 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 	}
 	defer client.DeleteSession(token, sessionID)
 
-	// 识图:提取 input 里的图片,上传取 ref_file_ids。
+	// 识图:提取 input 里的图片,上传并 fork 成 vision 版。
 	refFileIDs, _ := uploadImages(client, token, req)
+
+	// 带图时 completion 用 model_type=vision + fork 后的 ref_file_ids
+	// (实测 P0:网页点"发送至识图模式"后发的正是这个形态,parent 可空)。
+	modelType := modelTypeFor(m)
+	if len(refFileIDs) > 0 {
+		modelType = "vision"
+	}
 
 	streamReq := deepseekweb.CompletionRequest{
 		SessionID:       sessionID,
 		Prompt:          prompt,
-		ModelType:       modelTypeFor(m),
+		ModelType:       modelType,
 		ThinkingEnabled: thinkingEnabled(m, req),
-		SearchEnabled:   m.Mode == modeQuick && !hasImages(refFileIDs),
+		SearchEnabled:   m.Mode == modeQuick,
 		RefFileIDs:      refFileIDs,
 	}
 	// 续轮:需 parent_message_id —— 简化首版不续轮,每次新会话(可接受)。
@@ -82,8 +89,10 @@ func thinkingEnabled(m *deepseekModel, req *official.ResponsesAPIRequest) bool {
 
 // flattenChatInput 把 Responses input 拍平成网页 prompt 的真人对话文本。
 // - chat 变体:完全忽略 tools/tool_choice
-// - function_call/function_call_output item 在 chat 变体里不存在(客户端不会发)
-// - 多轮 history 用角色前缀(User:/Assistant:)拼入(网页无服务端历史,需全量提交)
+// - 不加 "User:"/"Assistant:" 前缀:网页真实请求的 prompt 是纯文本(角色锚点
+//   由模型专用 token 承担),实测加前缀会被模型当成乱码/怪文本。
+// - 多轮 history 直接拼接(网页服务端按 session+parent_message_id 记忆,
+//   aurora 每请求新会话,需全量提交)
 func flattenChatInput(req *official.ResponsesAPIRequest, quickMode bool) string {
 	var sb strings.Builder
 	// instructions → system 前缀(仅真人对话语境,无工具说明)
@@ -97,22 +106,11 @@ func flattenChatInput(req *official.ResponsesAPIRequest, quickMode bool) string 
 			// chat 变体不应出现工具 item;防御性跳过(不注入上游)。
 			continue
 		default:
-			role := item.Role
-			if role == "" {
-				role = "user"
-			}
 			text := item.Text
 			if text == "" {
 				continue
 			}
-			switch role {
-			case "system":
-				sb.WriteString(text)
-			case "assistant":
-				sb.WriteString("Assistant: " + text)
-			default:
-				sb.WriteString("User: " + text)
-			}
+			sb.WriteString(text)
 			sb.WriteString("\n\n")
 		}
 	}

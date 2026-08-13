@@ -10,16 +10,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
 const (
 	defaultBase   = "https://chat.deepseek.com"
-	userAgent     = "DeepSeek/2.0.0 Android/12"
-	clientVersion = "2.0.0"
+	webUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+	clientVersion = "2.3.0"
 )
 
 // Client 持有一个网页 token 池并复用 HTTP 连接。
@@ -136,13 +138,18 @@ func (c *Client) doJSON(token, path string, body any) (json.RawMessage, error) {
 	return ar.Data.BizData, nil
 }
 
+// setHeaders 设置与真实网页客户端一致的请求头。
+// 实测(P0):WAF 需浏览器级 User-Agent + Origin + Referer;x-client-platform 是 web;
+// 认证 = Authorization: Bearer <userToken>(userToken 存在网页 localStorage["userToken"].value)。
 func (c *Client) setHeaders(req *http.Request, token string) {
 	req.Header.Set("Host", strings.TrimPrefix(c.baseURL, "https://"))
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", webUserAgent)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("x-client-platform", "android")
+	req.Header.Set("Origin", c.baseURL)
+	req.Header.Set("Referer", c.baseURL+"/")
+	req.Header.Set("x-client-platform", "web")
 	req.Header.Set("x-client-version", clientVersion)
 	req.Header.Set("x-client-locale", "zh_CN")
 	req.Header.Set("accept-charset", "UTF-8")
@@ -187,17 +194,31 @@ type CompletionRequest struct {
 
 // Complete 发起一次 completion,返回原始 SSE 响应(调用方负责 Close + 解析)。
 // 返回的 *http.Response 的 Body 是 p/o/v JSON-Patch 流。
+//
+// 实测(P0):completion 前必须先 create_pow_challenge 并带 x-ds-pow-response,
+// 否则 40300 MISSING_HEADER;请求体不含 stream 字段(SSE 是默认),含 preempt。
 func (c *Client) Complete(token string, req CompletionRequest) (*http.Response, error) {
 	body := map[string]any{
-		"chat_session_id":  req.SessionID,
+		"chat_session_id":   req.SessionID,
 		"parent_message_id": req.ParentMessageID,
-		"prompt":           req.Prompt,
-		"thinking_enabled": req.ThinkingEnabled,
-		"search_enabled":   req.SearchEnabled,
-		"stream":           true,
+		"model_type":        req.ModelType,
+		"prompt":            req.Prompt,
+		"ref_file_ids":      []string{},
+		"thinking_enabled":  req.ThinkingEnabled,
+		"search_enabled":    req.SearchEnabled,
+		"action":            nil,
+		"preempt":           false,
 	}
-	if req.ModelType != "" {
-		body["model_type"] = req.ModelType
+	if req.ModelType == "" {
+		body["model_type"] = nil
+	}
+	// parent_message_id 实测(P0):服务端要 u32 整数(或 null),不能是字符串。
+	if req.ParentMessageID == "" {
+		body["parent_message_id"] = nil
+	} else if n, err := strconv.Atoi(req.ParentMessageID); err == nil {
+		body["parent_message_id"] = n
+	} else {
+		body["parent_message_id"] = req.ParentMessageID
 	}
 	if len(req.RefFileIDs) > 0 {
 		body["ref_file_ids"] = req.RefFileIDs
@@ -209,9 +230,14 @@ func (c *Client) Complete(token string, req CompletionRequest) (*http.Response, 
 	}
 	c.setHeaders(httpReq, token)
 	httpReq.Header.Set("Accept", "text/event-stream")
-	// [P0] PoW:多数实现需先 create_pow_challenge 解 challenge 并带 x-ds-pow-response。
-	// challenge 为空(免 PoW 账号/区域)时直接放行。
-	httpReq.Header.Set("x-ds-pow-response", c.solvePow(token))
+
+	// PoW:先取 challenge 再求解(DeepSeekHashV1,23 轮 Keccak)。
+	powHeader, err := c.fetchAndSolvePow(token, "/api/v0/chat/completion")
+	if err != nil {
+		return nil, fmt.Errorf("pow: %w", err)
+	}
+	httpReq.Header.Set("x-ds-pow-response", powHeader)
+
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -224,10 +250,122 @@ func (c *Client) Complete(token string, req CompletionRequest) (*http.Response, 
 	return resp, nil
 }
 
-// solvePow [P0] 返回 PoW 响应头值。当前为占位:免 PoW 场景返回空;
-// 需 PoW 的账号/区域在 P0 验证后移植 masterzerno pow.go 实现 DeepSeekHashV1。
-func (c *Client) solvePow(token string) string {
-	return ""
+// fetchAndSolvePow 请求 create_pow_challenge 并求解,返回 x-ds-pow-response 头值。
+func (c *Client) fetchAndSolvePow(token, targetPath string) (string, error) {
+	raw, err := c.doJSON(token, "/api/v0/chat/create_pow_challenge", map[string]string{"target_path": targetPath})
+	if err != nil {
+		return "", err
+	}
+	return SolvePowForPath(raw)
+}
+
+// UploadFile 上传一个文件(识图),返回 file_id。
+// 实测(P0):POST /api/v0/file/upload_file(multipart,需先解该 target_path 的 PoW),
+// 响应 biz_data.id 即 completion 的 ref_file_ids 元素。
+func (c *Client) UploadFile(token, filename, contentType string, data []byte) (string, error) {
+	powHeader, err := c.fetchAndSolvePow(token, "/api/v0/file/upload_file")
+	if err != nil {
+		return "", fmt.Errorf("upload pow: %w", err)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		return "", err
+	}
+	if _, err := fw.Write(data); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/v0/file/upload_file", &buf)
+	if err != nil {
+		return "", err
+	}
+	c.setHeaders(req, token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("x-ds-pow-response", powHeader)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	var ar apiResponse
+	if err := json.Unmarshal(body, &ar); err != nil {
+		return "", fmt.Errorf("decode upload envelope: %w", err)
+	}
+	if err := ar.err(); err != nil {
+		return "", err
+	}
+	var v struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(ar.Data.BizData, &v); err != nil || v.ID == "" {
+		return "", fmt.Errorf("upload: missing file id (raw=%s)", truncate(string(ar.Data.BizData), 200))
+	}
+	return v.ID, nil
+}
+
+// FetchFiles 确认上传的文件已就绪(浏览器上传后调 fetch_files 等 READY)。
+// 返回状态;status==READY 即可用。
+func (c *Client) FetchFiles(token, fileID string) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/api/v0/file/fetch_files?file_ids="+url.QueryEscape(fileID), nil)
+	if err != nil {
+		return "", err
+	}
+	c.setHeaders(req, token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	var ar apiResponse
+	if err := json.Unmarshal(body, &ar); err != nil {
+		return "", fmt.Errorf("decode fetch_files: %w", err)
+	}
+	if err := ar.err(); err != nil {
+		return "", err
+	}
+	var v struct {
+		Status string `json:"status"`
+	}
+	_ = json.Unmarshal(ar.Data.BizData, &v)
+	if v.Status == "" {
+		v.Status = "READY" // 结构不符时乐观放行
+	}
+	return v.Status, nil
+}
+
+// ForkFileToVision 把已上传文件 fork 成 vision 版(实测 P0:识图 completion
+// 的 ref_file_ids 必须是 fork 后的新 file_id;缺这步服务端报"发送至识图模式")。
+func (c *Client) ForkFileToVision(token, fileID string) (string, error) {
+	raw, err := c.doJSON(token, "/api/v0/file/fork_file_task", map[string]string{
+		"file_id":       fileID,
+		"to_model_type": "vision",
+	})
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil || v.ID == "" {
+		return "", fmt.Errorf("fork_file_task: missing file id (raw=%s)", truncate(string(raw), 200))
+	}
+	return v.ID, nil
 }
 
 // StopStream [P0] 中断生成。协议待验证(chat/stop_stream 或 chat_session/delete)。

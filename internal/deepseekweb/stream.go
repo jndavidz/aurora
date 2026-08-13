@@ -115,14 +115,28 @@ func applyPayload(payload, event string, onDelta func(Delta), res *StreamResult)
 	switch {
 	case hasV && hasP && hasO:
 		applyPatch(strings.Trim(string(p), `"`), strings.Trim(string(v), `"`), raw, onDelta, res)
-	case hasV && !hasP:
-		// V4 初始快照:无 p,含 v.response.fragments
-		applyV4Snapshot(v, onDelta, res)
+	case hasV && !hasP && !hasO:
+		// 纯 v 帧:可能是 V4 初始快照(对象)或纯文本 delta(字符串)。
+		applyBareV(v, onDelta, res)
 	}
 }
 
+// applyBareV 处理纯 v 帧:
+//   - v 是对象 → V4 初始快照(v.response.fragments)
+//   - v 是字符串 → 当前 fragment 的纯文本 delta
+func applyBareV(v json.RawMessage, onDelta func(Delta), res *StreamResult) {
+	var s string
+	if err := json.Unmarshal(v, &s); err == nil {
+		if s != "" {
+			res.Text += s
+			onDelta(Delta{Text: s})
+		}
+		return
+	}
+	applyV4Snapshot(v, onDelta, res)
+}
+
 // applyV4Snapshot 处理 V4 初始快照 v.response.fragments[]。
-// [P0] fragments 结构 {type: THINK|RESPONSE, content} 需官网实测确认。
 func applyV4Snapshot(v json.RawMessage, onDelta func(Delta), res *StreamResult) {
 	var top struct {
 		Response struct {
@@ -156,9 +170,14 @@ func emitFragment(typ, content string, onDelta func(Delta), res *StreamResult) {
 
 // applyPatch 处理 p/o/v 增量。v 可能仍是 JSON 字符串/对象。
 // 覆盖:V3 response/content、response/thinking_content;V4 fragments APPEND 与
-// fragments/-1/content delta;response/status 收尾。
+// fragments/-1/content delta;BATCH(子补丁列表);response/status 收尾。
 func applyPatch(path, vstr string, raw map[string]json.RawMessage, onDelta func(Delta), res *StreamResult) {
 	switch {
+	case path == "response" && isBatch(raw["v"]):
+		// BATCH op:{"p":"response","o":"BATCH","v":[{"p":...,"v":...},...]}
+		applyBatch(raw["v"], onDelta, res)
+		return
+
 	case strings.HasPrefix(path, "response/status"):
 		if strings.Trim(vstr, `"`) == "FINISHED" || strings.Trim(vstr, `"`) == "INCOMPLETE" {
 			res.Finished = true
@@ -184,6 +203,35 @@ func applyPatch(path, vstr string, raw map[string]json.RawMessage, onDelta func(
 			onDelta(Delta{Text: content})
 		}
 		return
+	}
+}
+
+// isBatch 报告 v 是否是 BATCH 的子补丁数组([{"p":...,"v":...}]).
+func isBatch(v json.RawMessage) bool {
+	var list []struct {
+		P string          `json:"p"`
+		V json.RawMessage `json:"v"`
+	}
+	return json.Unmarshal(v, &list) == nil
+}
+
+// applyBatch 依次应用 BATCH 里的子补丁。
+func applyBatch(v json.RawMessage, onDelta func(Delta), res *StreamResult) {
+	var list []struct {
+		P string          `json:"p"`
+		V json.RawMessage `json:"v"`
+	}
+	if err := json.Unmarshal(v, &list); err != nil {
+		return
+	}
+	for _, sub := range list {
+		subV := sub.V
+		var s string
+		if err := json.Unmarshal(subV, &s); err == nil {
+			applyPatch(sub.P, s, map[string]json.RawMessage{"v": subV}, onDelta, res)
+			continue
+		}
+		applyPatch(sub.P, string(subV), map[string]json.RawMessage{"v": subV}, onDelta, res)
 	}
 }
 

@@ -8,20 +8,23 @@
 
 ## 一、状态
 
-**架构已完成,协议字段待官网实测(P0)**。代码中标注 `[P0]` 的位置均依据逆向资料(deepseek网页协议整理.md §9 验证清单)实现,需抓包逐项确认后才算可用:
+**P0 网页协议验证已完成(2026-08-13,真实小号 + 浏览器抓包 + 端到端实测)。**
+`deepseek网页协议整理.md` 的参考实现有多处过时,以下为**实测结论**(已落进代码):
 
-| # | 待验证项 | 位置 | 影响 |
-|---|---|---|---|
-| 1 | `model_type` 枚举(default/expert/vision?) | `internal/provider/deepseek_chat.go:modelTypeFor` | chat 快速/专家模式 |
-| 2 | `search_enabled` / `thinking_enabled` 字段与取值 | `internal/provider/deepseek_chat.go` | 联网搜索/深度思考 |
-| 3 | 识图图片上传端点与 `ref_file_ids` | `internal/provider/input.go:uploadImages`(当前返回空) | 识图不可用 |
-| 4 | PoW(`create_pow_challenge` + `x-ds-pow-response`,DeepSeekHashV1) | `internal/deepseekweb/client.go:solvePow`(当前占位空) | 需 PoW 的账号/区域 403 |
-| 5 | session create 响应字段(`chat_session.id` vs `id`) | `client.go:CreateSession` | 会话创建 |
-| 6 | SSE V4 fragments 结构(THINK/RESPONSE、APPEND 双层数组) | `internal/deepseekweb/stream.go` | 流式解析 |
-| 7 | 是否必等 `event: ready` | `client.go:Complete` | 时序 |
-| 8 | 中止用 `stop_stream` 还是 delete session | `client.go:StopStream`(占位) | 会话清理 |
+| # | 验证项 | 实测结论(与文档差异) |
+|---|---|---|
+| 1 | 认证 | ✅ **`Authorization: Bearer <localStorage["userToken"].value>`**(不透明 token,会轮换);**不是**文档说的 `user_token` cookie。cookie 非必需 |
+| 2 | 请求头 | ✅ `x-client-platform: web`、`x-client-version: 2.3.0`(文档写 android/2.0.0 已过时);需 Chrome UA + Origin + Referer(过 WAF) |
+| 3 | PoW | ✅ **必选**(缺 `x-ds-pow-response` → 40300 MISSING_HEADER)。`DeepSeekHashV1` = **23 轮 Keccak-f[1600]**(跳过第 0 轮),rate=136(SHA3-256 海绵);解 `H(salt_expireAt_nonce)==challenge`;difficulty 144000。已过官方测试向量 |
+| 4 | session | ✅ `POST /chat_session/create` body `{}`;响应 `data.biz_data.chat_session.id`;用完 delete |
+| 5 | completion | ✅ body:`{chat_session_id, parent_message_id(整数或 null), model_type(null|"default"|"vision"), prompt, ref_file_ids, thinking_enabled, search_enabled, action:null, preempt:false}`;**无 stream 字段**;`parent_message_id` 必须是整数(字符串报 422) |
+| 6 | SSE | ✅ V4:`event: ready`(message id 是整数)→ 初始快照 `{"v":{"response":{"fragments":[{type:RESPONSE|THINK,content}]}}}` → 增量 `{"v":"文本"}`(纯 v 字符串)或 `{"p":"response/fragments/-1/content","o":"APPEND","v":"文本"}` → 结束 `{"p":"response/status","o":"SET","v":"FINISHED"}`(也有 `BATCH` op)+ `event: close` |
+| 7 | 工具调用 | ✅ coding 变体:模型遵循 `<|tool▁calls▁begin|>`(▁=U+2581)标签,但常丢前导 `|`(`<tool▁calls▁begin|>`)或混用 ASCII 下划线 —— 解析器已对全部变体归一化 + "半个标签"流式保护 |
+| 8 | 识图 | ✅ `upload_file`(multipart)→ `fetch_files`(READY)→ **`fork_file_task {file_id, to_model_type:"vision"}`**(关键,返回新 file_id)→ completion `model_type:"vision"` + fork 后的 `ref_file_ids`。缺 fork 步骤报"发送至识图模式" |
+| 9 | 多轮 | ✅ 网页无服务端历史需全量提交?否 —— **服务端按 session+parent_message_id 记忆**;aurora 每请求新会话,需把 input 全量拍平进 prompt(不加角色前缀,模型用专用 token 锚定角色) |
+| 10 | prompt | ✅ **不加 "User:"/"Assistant:" 前缀**(实测加前缀模型报"乱码");纯文本拼接 |
 
-> **未验证前不要上生产**。验证方式:浏览器 DevTools 抓 chat.deepseek.com 真实请求,对照本文档逐项确认。
+> 遗留:识图 completion 在不同账号/网络下的稳定性未做大规模验证(浏览器本身在默认会话直接带图也会报"发送至识图模式",需 fork 步骤)。
 
 ## 二、模型目录(配置驱动)
 
@@ -61,7 +64,10 @@
 ## 五、配置
 
 ```bash
-# 网页 token 注入池文件路径(每行一个 user_token;只放可丢弃小号,主号永不入池)
+# 网页 token 注入池文件路径(每行一个 token;只放可丢弃小号,主号永不入池)
+# token 来源(实测 P0):浏览器登录 chat.deepseek.com 后,
+#   localStorage["userToken"] 是 {"value":"<token>","__version":"0"},
+#   取 .value 一行一个写入本文件。不是 cookie!
 DEEPSEEK_WEB_TOKENS=/path/to/deepseek_tokens.txt
 
 # 暴露的模型目录(逗号分隔;不配置用默认 4 个)

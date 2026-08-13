@@ -7,14 +7,17 @@ import (
 	"aurora/typings/official"
 )
 
-var dsTags = TagSet{StartTag: "<|tool_calls_begin|>", EndTag: "<|tool_calls_end|>"}
+var dsTags = TagSet{StartTag: "<|tool\u2581calls\u2581begin|>", EndTag: "<|tool\u2581calls\u2581end|>"}
 
 func TestNormalizeTaggedDeepSeek(t *testing.T) {
 	cases := map[string]string{
-		"<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>":   "<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>",
-		"<|tool_call_begin|>{\"name\":\"x\"}<|tool_call_end|>":     "<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>",
-		"<tool_calls>{\"name\":\"x\"}</tool_calls>":                "<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>",
-		"<tool call>{\"name\":\"x\"}</tool call>":                  "<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>",
+		// 模型实际输出的变体(缺前导 |、ASCII 下划线、▁)
+		"<tool_calls_begin|>{\"name\":\"x\"}<tool_calls_end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<|tool_call_begin|>{\"name\":\"x\"}<|tool_call_end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<tool_calls>{\"name\":\"x\"}</tool_calls>":                "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<tool call>{\"name\":\"x\"}</tool call>":                  "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
 	}
 	for in, want := range cases {
 		if got := NormalizeTagged(in, dsTags); got != want {
@@ -66,13 +69,13 @@ func TestParserDefaultTagsRegression(t *testing.T) {
 }
 
 func TestStripTags(t *testing.T) {
-	in := `前缀 <|tool_calls_begin|>{"name":"x"}<|tool_calls_end|> 后缀`
+	in := "前缀 " + dsTags.StartTag + `{"name":"x"}` + dsTags.EndTag + " 后缀"
 	got := StripTags(in, dsTags)
 	if got != "前缀  后缀" {
 		t.Errorf("StripTags = %q", got)
 	}
 	// 未闭合:丢弃标签起以后内容
-	in2 := `abc <|tool_calls_begin|>{"name":"x"}`
+	in2 := "abc " + dsTags.StartTag + `{"name":"x"}`
 	if got := StripTags(in2, dsTags); got != "abc " {
 		t.Errorf("StripTags unclosed = %q", got)
 	}
@@ -82,7 +85,7 @@ func TestStripTags(t *testing.T) {
 func TestBuildInstructionsWithTags(t *testing.T) {
 	tools := []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "bash", Description: "run"}}}
 	got := BuildInstructionsWithTags(dsTags, tools, nil)
-	if !strings.Contains(got, "<|tool_calls_begin|>") {
+	if !strings.Contains(got, dsTags.StartTag) {
 		t.Errorf("prompt missing deepseek tag:\n%s", got)
 	}
 	if strings.Contains(got, "<tool_call>") {

@@ -1,8 +1,13 @@
 package provider
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"aurora/typings/official"
 )
@@ -129,16 +134,106 @@ func countInputChars(req *official.ResponsesAPIRequest) int {
 // hasImages 报告 input 是否带图片。
 func hasImages(refFileIDs []string) bool { return len(refFileIDs) > 0 }
 
-// uploadImages [P0] 把 input 里的图片上传,返回 ref_file_ids。
-// 网页文件上传端点未在参考仓库统一;当前返回空(识图待 P0 验证后实现)。
+// uploadImages 把 input 里的图片上传并 fork 成 vision 版(实测 P0),
+// 返回 ref_file_ids。流程:upload_file → fetch_files(READY)→ fork_file_task(to_model_type=vision)。
+// 支持 data: URI 与 http(s) URL 两种图片来源。
 func uploadImages(client interface {
 	NextToken() string
 }, token string, req *official.ResponsesAPIRequest) ([]string, error) {
+	web, ok := client.(interface {
+		UploadFile(token, filename, contentType string, data []byte) (string, error)
+		FetchFiles(token, fileID string) (string, error)
+		ForkFileToVision(token, fileID string) (string, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	var refIDs []string
 	for _, it := range responsesInputItems(req.Input) {
-		if len(it.ImageURLs) > 0 {
-			// TODO(P0): 走 deepseekweb 文件上传端点取 ref_file_ids。
-			return nil, nil
+		for _, imgURL := range it.ImageURLs {
+			data, ct, name, err := fetchImage(imgURL)
+			if err != nil {
+				return nil, err
+			}
+			id, err := web.UploadFile(token, name, ct, data)
+			if err != nil {
+				return nil, err
+			}
+			// fetch_files 确认就绪(最多 6 次 × 500ms)。
+			for i := 0; i < 6; i++ {
+				status, err := web.FetchFiles(token, id)
+				if err == nil && status == "READY" {
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+			// fork 成 vision 版(识图 completion 必需)。
+			visionID, err := web.ForkFileToVision(token, id)
+			if err != nil {
+				return nil, err
+			}
+			refIDs = append(refIDs, visionID)
 		}
 	}
-	return nil, nil
+	return refIDs, nil
+}
+
+// fetchImage 取回图片字节:data: URI 直接解码,http(s) URL 下载。
+func fetchImage(u string) ([]byte, string, string, error) {
+	if strings.HasPrefix(u, "data:") {
+		// data:[<mime>][;base64],<data>
+		comma := strings.Index(u, ",")
+		if comma < 0 {
+			return nil, "", "", fmt.Errorf("invalid data uri")
+		}
+		meta := u[5:comma]
+		dataPart := u[comma+1:]
+		mime := "image/png"
+		enc := ""
+		if semi := strings.Index(meta, ";"); semi >= 0 {
+			mime = meta[:semi]
+			enc = meta[semi+1:]
+		} else if meta != "" {
+			mime = meta
+		}
+		var b []byte
+		var err error
+		if enc == "base64" {
+			b, err = base64.StdEncoding.DecodeString(dataPart)
+		} else {
+			b = []byte(dataPart)
+		}
+		if err != nil {
+			return nil, "", "", err
+		}
+		return b, mime, "image." + guessExt(mime), nil
+	}
+	// http(s) URL
+	resp, err := http.Get(u)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	if err != nil {
+		return nil, "", "", err
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "image/png"
+	}
+	return b, ct, "image." + guessExt(ct), nil
+}
+
+func guessExt(mime string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.Split(mime, ";")[0])) {
+	case "image/jpeg", "image/jpg":
+		return "jpg"
+	case "image/webp":
+		return "webp"
+	case "image/gif":
+		return "gif"
+	default:
+		return "png"
+	}
 }
