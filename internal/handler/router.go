@@ -36,6 +36,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.GrokCookies != "" {
 		registry.Register(provider.NewGrok(cfg))
 	}
+	if cfg.GeminiAccounts != "" {
+		registry.Register(provider.NewGemini(cfg))
+	}
 	if cfg.YuanbaoWebTokens != "" {
 		registry.Register(provider.NewYuanbao(cfg))
 	}

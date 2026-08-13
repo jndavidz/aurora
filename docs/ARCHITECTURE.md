@@ -1,7 +1,7 @@
 # aurora 多 Provider 架构(Responses 统一表面)
 
 > 更新时间: 2026-08-13
-> 关联: `docs/DEEPSEEK.md`(DeepSeek 接入)、`docs/GLM.md`(智谱清言接入)、`docs/GROK.md`(Grok 接入)、`docs/NAS_DEPLOYMENT.md`(部署)。
+> 关联: `docs/DEEPSEEK.md`(DeepSeek 接入)、`docs/GLM.md`(智谱清言接入)、`docs/GROK.md`(Grok 接入)、`docs/GEMINI.md`(Gemini 接入)、`docs/NAS_DEPLOYMENT.md`(部署)。
 
 ---
 
@@ -93,6 +93,8 @@ type Registry struct{ ... }                             // Register / Resolve / 
 | `internal/glmweb/` | 智谱网页协议客户端(签名/refresh/SSE 原生 tool_calls) |
 | `internal/provider/grok*.go` | Grok provider(chat/coding 双变体,WS 协议) |
 | `internal/grokweb/` | Grok 网页协议客户端(WebSocket + Realtime 事件流) |
+| `internal/provider/gemini*.go` | Gemini provider(chat/coding 双变体) |
+| `internal/geminweb/` | Gemini 网页协议客户端(StreamGenerate + RPC 帧解析 + 严格限频) |
 | `internal/toolcall/fence.go` | FenceParser 围栏 JSON 拦截(智谱/Grok coding 用) |
 | `internal/handler/chat_handler.go` | `Responses` 入口 provider 分派 + ChatGPT responses 工具调用 |
 | `internal/handler/router.go` | Registry 构建注册 + 别名路由 `POST /v1/models/responses`(pi 适配器实际路径) |

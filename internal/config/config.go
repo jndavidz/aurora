@@ -50,6 +50,10 @@ type Config struct {
 	GrokCookies string   // 网页 cookie 池文件路径(每行 uid|cookie 串)
 	GrokModels  []string // 暴露的模型目录
 
+	// Gemini(gemini.google.com)网页逆向通道配置。
+	GeminiAccounts string   // 网页账号池 JSON 文件路径(见 docs/GEMINI.md)
+	GeminiModels   []string // 暴露的模型目录
+
 	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
 	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
 	YuanbaoWebTokens string   // 网页 token 注入池文件路径(每行一条 "<x-uskey>\t<cookie header>")
@@ -98,6 +102,9 @@ func Load() Config {
 
 		GrokCookies: os.Getenv("GROK_COOKIES"),
 		GrokModels:  splitCSV(os.Getenv("GROK_MODELS")),
+
+		GeminiAccounts: os.Getenv("GEMINI_ACCOUNTS"),
+		GeminiModels:   splitCSV(os.Getenv("GEMINI_MODELS")),
 
 		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
 		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),
