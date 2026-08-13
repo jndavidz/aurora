@@ -156,7 +156,14 @@ func deepseekTagSet() toolcall.TagSet {
 // deepSeekCodingNudge 是 coding 变体末尾的强提醒(仿网页 reminder 注入):
 // 强制模型只输出标签块,不做散文描述。
 func deepSeekCodingNudge(tags toolcall.TagSet) string {
-	return "\n\n[SYSTEM INSTRUCTION: To call a tool, output ONLY the " + tags.StartTag + " block with valid JSON inside, and nothing else — no prose, no explanation, no preamble. Then stop and wait for the tool result. If the task is not finished, in your next reply output only the next tool call block.]"
+	return "\n\n[SYSTEM INSTRUCTION: To call a tool, output ONLY the " + tags.StartTag + " block with valid JSON inside, and nothing else — no prose, no explanation, no preamble. Then stop and wait for the tool result. If the task is not finished, in your next reply output only the next tool call block.]" +
+		windowsPathHint()
+}
+
+// windowsPathHint 是 Windows 路径使用提示(实测:模型用反斜杠路径被 bash 吞掉,
+// 如 ls D:\\repo 变成 D:repo 报错;应使用带引号的正斜杠)。
+func windowsPathHint() string {
+	return "\n[PATH NOTE: On Windows, always use FORWARD slashes and quote paths in bash, e.g. `ls -la \"D:/repos/project\"`. Backslash paths like D:\\repos\\project get mangled by the shell and fail.]"
 }
 
 // deepSeekToolResultNudge 是最后一条消息为工具结果时的强提醒:
@@ -168,7 +175,8 @@ func deepSeekToolResultNudge(tags toolcall.TagSet) string {
 		"You have DIRECT read access to every file through the tools — the tool output IS the real file content.\n" +
 		"A file LISTING is NOT the file content. If the task requires reading files, you are NOT done until you have read each relevant file with the read tool. Summarizing from a file tree or file names is GUESSING and is WRONG.\n" +
 		"NEVER ask the user to provide, paste, or upload file contents — you can read them yourself.\n" +
-		"A progress report, a reading plan, or a promise like 'I will read next' is NOT a valid reply and NOT a final answer. If the task is not finished, emit the next " + tags.StartTag + " block in THIS reply now — there is no later turn unless you call a tool now.]"
+		"A progress report, a reading plan, or a promise like 'I will read next' is NOT a valid reply and NOT a final answer. If the task is not finished, emit the next " + tags.StartTag + " block in THIS reply now — there is no later turn unless you call a tool now.]" +
+		windowsPathHint()
 }
 
 // codingStream 流式:文本协议工具调用 → function_call item / output_text delta。
