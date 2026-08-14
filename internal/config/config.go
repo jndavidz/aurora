@@ -67,6 +67,9 @@ type Config struct {
 	// 真浏览器/指纹由家庭 PC 侧的 scripts/cdp/bridge.mjs 负责。
 	GeminiCDPURL string // 桥地址,如 http://10.10.10.6:8799;空=不注册 CDP provider
 	GeminiCDPKey string // 可选:桥的 BRIDGE_AUTH 对应 token
+	// GeminiCDPWakePort 是 PC 上唤醒守护(scripts/cdp/keeper.mjs)的端口。
+	// 桥池全挂时 aurora 自动 POST /wake 拉起 Chrome+桥后重试(全自动唤醒)。
+	GeminiCDPWakePort string
 
 	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
 	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
@@ -129,6 +132,7 @@ func Load() Config {
 		GeminiModels:   splitCSV(os.Getenv("GEMINI_MODELS")),
 		GeminiCDPURL:   os.Getenv("GEMINI_CDP_URL"),
 		GeminiCDPKey:   os.Getenv("GEMINI_CDP_KEY"),
+		GeminiCDPWakePort: getEnv("GEMINI_CDP_WAKE_PORT", "8798"),
 
 		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
 		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),

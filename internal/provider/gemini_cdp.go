@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -111,16 +112,32 @@ func (d *GeminiCDP) bridgeURLFor(u string) string {
 	return strings.TrimRight(u, "/") + "/v1/chat/completions"
 }
 
-// post 向桥池发请求:从轮询游标起逐个尝试,网络错误/5xx 熔断该桥并换下一个,
-// 全失败返回错误。
+// post 向桥池发请求:从轮询游标起逐个尝试,网络错误/5xx 熔断该桥并换下一个;
+// 全失败时自动唤醒各 PC 上的 keeper(拉起 Chrome+桥)后重试一轮。
 func (d *GeminiCDP) post(body []byte) (*http.Response, error) {
 	if len(d.urls) == 0 {
 		return nil, fmt.Errorf("GEMINI_CDP_URL not configured")
 	}
+	resp, lastErr := d.tryPost(body)
+	if resp != nil {
+		return resp, nil
+	}
+	// 桥池全挂:唤醒(keeper 拉起 Chrome + 桥,令牌在磁盘、实测重启后仍有效)→ 重试
+	d.wakeAll()
+	time.Sleep(10 * time.Second)
+	d.clearAllDead()
+	resp, lastErr = d.tryPost(body)
+	if resp != nil {
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+// tryPost 单轮桥池尝试(带熔断跳过)。
+func (d *GeminiCDP) tryPost(body []byte) (*http.Response, error) {
 	now := time.Now()
 	start := int(atomic.AddInt64(&d.rr, 1)-1) % len(d.urls)
 	var lastErr error
-	// 熔断中的桥跳过(冷却 60s);若全部熔断则放行重试一次(同时清冷却,便于恢复)
 	for i := 0; i < len(d.urls); i++ {
 		u := d.urls[(start+i)%len(d.urls)]
 		d.mu.Lock()
@@ -146,11 +163,44 @@ func (d *GeminiCDP) post(body []byte) (*http.Response, error) {
 		d.clearDead(u)
 		return resp, nil
 	}
-	// 全熔断:清冷却,强制重试一轮(可能刚恢复)
+	return nil, lastErr
+}
+
+// wakeAll 向每个桥所在主机的唤醒守护(scripts/cdp/keeper.mjs)发 POST /wake。
+// 幂等:桥已在线的立即返回;keeper 不在线则静默忽略(由下一次请求再试)。
+func (d *GeminiCDP) wakeAll() {
+	seen := make(map[string]bool)
+	for _, u := range d.urls {
+		pu, err := url.Parse(u)
+		if err != nil {
+			continue
+		}
+		host := pu.Hostname()
+		if seen[host] {
+			continue
+		}
+		seen[host] = true
+		wakeURL := fmt.Sprintf("%s://%s:%s/wake", pu.Scheme, host, d.cfg.GeminiCDPWakePort)
+		req, err := http.NewRequest(http.MethodPost, wakeURL, nil)
+		if err != nil {
+			continue
+		}
+		if d.cfg.GeminiCDPKey != "" {
+			req.Header.Set("Authorization", "Bearer "+d.cfg.GeminiCDPKey)
+		}
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+			resp.Body.Close()
+		}
+	}
+}
+
+func (d *GeminiCDP) clearAllDead() {
 	d.mu.Lock()
 	clear(d.deadUntil)
 	d.mu.Unlock()
-	return nil, lastErr
 }
 
 func (d *GeminiCDP) markDead(u string) {

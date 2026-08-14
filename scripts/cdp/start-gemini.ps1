@@ -50,7 +50,9 @@ if (-not $chromeRunning) {
         # 更轻:关后台驻留(关窗即全退,配合自动停止)/限渲染进程数/限磁盘缓存
         '--disable-background-mode','--renderer-process-limit=4',
         '--disk-cache-size=104857600','--disable-crash-reporter',
-        '--noerrdialogs','--disable-logging'
+        '--noerrdialogs','--disable-logging',
+        # 异常关闭保底:自动恢复上次会话 + 不弹"要恢复页面吗"对话框
+        '--restore-last-session','--disable-session-crashed-bubble'
         # ⚠️ 禁止加 --headless / --disable-gpu:headless 的 WebGL 走 SwiftShader
         #    软件渲染,恰是 Google 认 bot 的招牌信号;真指纹必须 headful + 真核显
     )
