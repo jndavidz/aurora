@@ -92,7 +92,8 @@ func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, pref
 		switch {
 		case strings.HasSuffix(id, "-chat"):
 			d.byID[id] = "chat"
-			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapWebSearch, CapReasoning, CapVision}})
+			// 注意:不标 vision —— CDP 桥只传文本,图片会丢弃;识图通道见 docs/MEDIA.md
+			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapWebSearch, CapReasoning}})
 		case strings.HasSuffix(id, "-coding"):
 			d.byID[id] = "coding"
 			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapFunctionCall, CapReasoning}})
