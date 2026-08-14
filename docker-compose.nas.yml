@@ -66,6 +66,13 @@ services:
       # (纯 cookie 认证,无会话令牌;见 docs/CLAUDE.md)。
       - CLAUDE_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
       # - CLAUDE_MODELS=${CLAUDE_MODELS:-}
+      # MiniMax(agent.minimaxi.com)网页逆向通道(直连,非桥)。token 放
+      # tokens/minimax_tokens.txt(每行一个 JWT,localStorage._token);
+      # 签名算法与协议见 docs/MINIMAX.md。device/user id 为账号级参数(换账号需更新)。
+      - MINIMAX_WEB_TOKENS=/work/.runtime/tokens/minimax_tokens.txt
+      - MINIMAX_DEVICE_ID=92622880
+      - MINIMAX_USER_ID=544661156126703622
+      # - MINIMAX_AGENT_ID=430731272630966   # 普通模式 agent,默认已内置
       # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json
       # (JSON 数组,含 cookie + 签名参数 + 会话),只读挂载;仅当文件非空时注册。
       # ⚠️ 字节系风控强(元宝前车之鉴):代码内置限频(2s/账号),只放可丢弃小号。

@@ -77,6 +77,13 @@ type Config struct {
 	ClaudeCDPKey string
 	ClaudeModels []string
 
+	// MiniMax(agent.minimaxi.com)网页逆向通道配置(直连,协议见 docs/MINIMAX.md)。
+	MinimaxWebTokens string // token 池文件路径(每行一个 JWT,localStorage._token)
+	MinimaxModels    []string
+	MinimaxAgentID   string // 普通模式 agent id(默认 430731272630966;换账号需更新)
+	MinimaxDeviceID  string // URL 参数 device_id(数字;抓包提取)
+	MinimaxUserID    string // URL 参数 user_id(数字;抓包提取)
+
 	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
 	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
 	YuanbaoWebTokens string   // 网页 token 注入池文件路径(每行一条 "<x-uskey>\t<cookie header>")
@@ -143,6 +150,12 @@ func Load() Config {
 		ClaudeCDPURL: os.Getenv("CLAUDE_CDP_URL"),
 		ClaudeCDPKey: os.Getenv("CLAUDE_CDP_KEY"),
 		ClaudeModels: splitCSV(os.Getenv("CLAUDE_MODELS")),
+
+		MinimaxWebTokens: os.Getenv("MINIMAX_WEB_TOKENS"),
+		MinimaxModels:    splitCSV(os.Getenv("MINIMAX_MODELS")),
+		MinimaxAgentID:   os.Getenv("MINIMAX_AGENT_ID"),
+		MinimaxDeviceID:  os.Getenv("MINIMAX_DEVICE_ID"),
+		MinimaxUserID:    os.Getenv("MINIMAX_USER_ID"),
 
 		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
 		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),
