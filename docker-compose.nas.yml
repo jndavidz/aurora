@@ -53,10 +53,12 @@ services:
       - GROK_COOKIES=/work/.runtime/tokens/grok_cookies.txt
       - GROK_MODELS=${GROK_MODELS:-}
       # Gemini(gemini.google.com)真浏览器执行通道(CDP 桥转发)。
-      # 直连已停用(数据中心 IP + 模拟指纹被 Google 风控);现由家庭 PC 上的
+      # 直连已停用(数据中心 IP + 模拟指纹被 Google 风控);现由家庭/办公室 PC 上的
       # scripts/cdp/bridge.mjs(真浏览器页内 fetch,零指纹模拟)执行,NAS 只做 HTTP 转发。
-      # 前置:PC 桥已启动并监听局域网(见 docs/GEMINI.md §八)。
-      - GEMINI_CDP_URL=http://10.10.10.6:8799
+      # 桥池逗号分隔:轮询 + 故障转移(某桥不通自动换下一个);每桥登录不同小号。
+      # 前置:各 PC 桥已启动并监听局域网(见 docs/GEMINI.md §八);NAS 需能路由到
+      # 办公室网段(经 AX6000 WireGuard → 10.20.0.0/24)。
+      - GEMINI_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
       # - GEMINI_CDP_KEY=      # 可选:与桥的 BRIDGE_AUTH 一致(桥开放局域网时建议配)
       # - GEMINI_MODELS=${GEMINI_MODELS:-}
       # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json

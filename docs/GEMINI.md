@@ -188,12 +188,29 @@ node scripts/cdp/bridge.mjs
 | 端点 | 说明 |
 |---|---|
 | `GET /health` | 浏览器连接 / 令牌 / 账号状态 |
-| `GET /v1/models` | 模型目录(当前暴露 `gemini-3-flash-chat`) |
+| `GET /v1/models` | 桥自身目录(桥只当纯 chat 用;coding 变体由 aurora 侧实现) |
 | `POST /v1/chat/completions` | OpenAI 兼容;`stream:true` 走 SSE;多轮用 messages 数组全量拍平 |
 
-环境变量:`BRIDGE_PORT`(默认 8799)、`BRIDGE_AUTH`(可选 Bearer 鉴权)、`CDP_PORT`(默认 9222)、
-`IDLE_TIMEOUT_MIN`(默认 30,无对话活动自动停止分钟数;0=关闭)。
+环境变量:`BRIDGE_PORT`(默认 8799)、`BRIDGE_HOST`(默认 127.0.0.1,NAS 转发设 0.0.0.0)、
+`BRIDGE_AUTH`(可选 Bearer 鉴权,与 aurora `GEMINI_CDP_KEY` 一致)、`CDP_PORT`(默认 9222)、
+`IDLE_TIMEOUT_MIN`(默认 30,无对话活动自动停止分钟数;0=关闭)、
+`MIN_INTERVAL_MS`/`JITTER_MS`(限频,默认 2000/1500)。
 令牌缓存:`.runtime/bridge/gemini_session.json`(已 gitignore)。
+
+### 限频(防封号)
+
+- **桥侧**:单通道串行,每请求间隔 = **基础 2s + 随机抖动 0~1.5s**(更像真人节奏);
+  `MIN_INTERVAL_MS`/`JITTER_MS` 可调。
+- **aurora 侧桥池**:`GEMINI_CDP_URL` 逗号分隔多桥 —— 轮询 + 故障转移,
+  某桥离线/5xx 熔断 60s 快速跳过(3s 拨号超时,不会挂几十秒);
+  桥数 = 小号数 = 吞吐翻倍,但**每桥必须登录不同小号**(同号双端互踢)。
+
+### 变体(-chat / -coding)
+
+- `-chat`:请求原样转桥(纯对话,模型自动用原生搜索/地图)。
+- `-coding`:工具调用 —— **aurora 侧**注入工具指令 prompt(复用直连时代
+  gemini_coding.go 的围栏 JSON 协议 + FenceParser),桥只当纯 chat 用。
+  实测:tool_calls 触发、流式 name/arguments delta、工具结果回填多轮闭环全通。
 
 ### Chrome 启动减配(已内置 start-gemini.ps1)
 
@@ -218,8 +235,8 @@ StreamGenerate 请求**刷新 `at`/`SNlM6e`/`f.sid`/jspb 头(会话级令牌无�
 ### 资源占用与限制
 
 - Chrome 152 headful ~250-400MB + 桥 ~50-80MB,全部在 PC;NAS 零影响
-- 限制:单通道串行 + >=2.1s 间隔(防封号);`-coding` 工具调用变体尚未在桥实现
-  (chat 通道先行);一 profile 一账号,多账号需多 profile 或多浏览器上下文
+- 限制:单通道串行 + 2s+抖动间隔(防封号);一 profile 一账号,
+  多账号 = 多桥(不同 PC)或多浏览器上下文
 
 ### 协议更新(2026-08-14 抓包,`internal/geminweb/client.go` 已滞后)
 

@@ -28,6 +28,8 @@
 //   IDLE_TIMEOUT_MIN   无对话活动自动停止分钟数(默认 30;0=关闭)。停止=经 CDP
 //                      Browser.close 优雅关闭整个 Chrome,再退出桥进程
 //                     (/health、/v1/models 不视为活动,防监控探针阻止休眠)
+//   MIN_INTERVAL_MS    限频基础间隔毫秒(默认 2000)
+//   JITTER_MS          限频随机抖动上限毫秒(默认 1500;实际间隔 = 基础 + rand(0..抖动))
 //
 // 用法: node scripts/cdp/bridge.mjs
 // 会话令牌缓存: .runtime/bridge/gemini_session.json(gitignore 已排除)
@@ -44,7 +46,9 @@ const HOST = process.env.BRIDGE_HOST || "127.0.0.1"; // 0.0.0.0 = 局域网可�
 const AUTH = process.env.BRIDGE_AUTH || "";
 const CDP_HOST = "127.0.0.1";
 const CDP_PORT = parseInt(process.env.CDP_PORT || "9222", 10);
-const MIN_INTERVAL_MS = 2100; // Gemini 严格限频:>=2s
+// Gemini 限频(防封号):串行 + 每请求间隔 = 基础 2s + 随机抖动 0~1.5s(更像真人节奏)。
+const MIN_INTERVAL_MS = parseInt(process.env.MIN_INTERVAL_MS || "2000", 10);
+const JITTER_MS = parseInt(process.env.JITTER_MS || "1500", 10);
 // 无活动自动停止:仅统计对话请求(/health 与 /v1/models 不算活动,防监控探针续命)。
 // 0 关闭自动停止。
 const IDLE_TIMEOUT_MS = (parseInt(process.env.IDLE_TIMEOUT_MIN || "30", 10) || 0) * 60 * 1000;
@@ -377,7 +381,9 @@ async function pump() {
   processing = true;
   const job = queue.shift();
   try {
-    const wait = MIN_INTERVAL_MS - (Date.now() - lastReqAt);
+    // 间隔 = 基础 + 随机抖动(0..JITTER),比固定间隔更接近真人使用节奏
+    const target = MIN_INTERVAL_MS + Math.floor(Math.random() * (JITTER_MS + 1));
+    const wait = target - (Date.now() - lastReqAt);
     if (wait > 0) await sleep(wait);
     job.resolve(await job.fn());
     lastReqAt = Date.now();
@@ -594,6 +600,7 @@ server.listen(PORT, HOST, async () => {
   console.log("[bridge] auth:", AUTH ? "enabled" : "disabled (localhost only)");
   console.log("[bridge] tokens:", hasTokens ? "loaded" : "MISSING (run capture-streamgenerate.mjs once)");
   console.log("[bridge] idle auto-stop:", IDLE_TIMEOUT_MS > 0 ? Math.round(IDLE_TIMEOUT_MS / 60000) + "min" : "disabled");
+  console.log("[bridge] rate limit:", MIN_INTERVAL_MS + "ms + jitter 0-" + JITTER_MS + "ms");
   const c = await ensureConn().catch(() => null);
   console.log("[bridge] browser:", c ? "connected" : "NOT connected");
   console.log("[bridge] account:", state.account || "unknown");
