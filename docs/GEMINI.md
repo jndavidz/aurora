@@ -171,17 +171,23 @@ node scripts/cdp/bridge.mjs
 
 > **按需启动(推荐)**:通道是低频备用,不需要常驻。登录态在 Chrome profile 磁盘、
 > 令牌在 `.runtime/bridge/gemini_session.json` 磁盘,随起随用:
-> - 一键起:`powershell -File scripts/cdp/start-gemini.ps1`(自动起 Chrome + 桥,
->   检测 9222 被占会提示,如 Min 抢端口需先关 Min;Chrome 已在运行则复用)
+> - **全自动唤醒(默认)**:客户端发 gemini 请求 → aurora 调 PC 上的唤醒守护
+>   (`keeper.mjs`,端口 8798,常驻 ~20MB)自动拉起 Chrome + 桥后重试。
+>   Chrome 以**屏幕外窗口**驻留(实测落在 -16384,-16384,完全不可见、不弹窗),
+>   需要人工操作页面(登录/自愈)时运行 `scripts/cdp/show-gemini.ps1`
+>   (或 `POST http://127.0.0.1:8798/show`)把窗口拉回屏幕。
+> - 手动前台起:`powershell -File scripts/cdp/start-gemini.ps1`(Chrome 窗口可见,
+>   适合首次登录小号;检测 9222 被占会提示,如 Min 抢端口需先关 Min)
 > - 停止:Ctrl+C 停桥 + 关闭 Chrome 窗口;或什么都不做 —— **30 分钟无对话活动
 >   自动停止**(桥经 CDP `Browser.close` 优雅关闭整个 Chrome 后退出;
 >   `/health`、`/v1/models` 不算活动,监控探针不会阻止休眠;
 >   `IDLE_TIMEOUT_MIN` 可调,0=关闭自动停止)
 > - **实测启动耗时**(i3-12100T + SSD,profile 已初始化):Chrome 冷启动 **~0.9s**、
->   桥就绪 **~0.7s**,一键起总耗时 ~1.5s,秒级可用
-> - **令牌过期自愈**:起桥后若对话报 `token_stale`(BardErrorInfo 1096/1157),
->   在浏览器页面上**手动发任意一条消息**,桥的 Network 监听自动刷新令牌,重试即可;
->   无需重跑第 3 步引导。若页面已掉登录,重新登录后再发一条消息。
+>   桥就绪 **~0.7s**;唤醒全链路(含 NAS 重试等待)约 15~25s
+> - **令牌过期自愈**:起桥后若对话报 `token_stale`(错误码 13/1060/1096/1157),
+>   在浏览器当前会话里**再发任意一条消息**(若刚发的是新会话首条,再发第二条),
+>   桥的 Network 监听自动刷新令牌,重试即可;无需重跑第 3 步引导。
+>   若页面已掉登录,重新登录后再发一条消息。
 
 ### 桥的端点
 
