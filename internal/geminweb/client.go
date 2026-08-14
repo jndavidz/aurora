@@ -25,6 +25,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"aurora/httpclient"
+	"aurora/httpclient/bogdanfinn"
 )
 
 const (
@@ -42,6 +45,8 @@ const (
 //   - Fsid:StreamGenerate URL 的 f.sid 参数
 //   - Cid/RCID:会话 id 前缀(可选,首轮留空由服务端返回)
 //   - PathPrefix:账户路径前缀(如 "/u/1";多账户登录时区分,单账户可为 "")
+//   - SessionUuid:f.req 内层 [59] 的会话 UUID(与 x-goog-ext-525005358-jspb 头同值,
+//     从一次真实请求提取;2026-08-14 Google 前端升级后硬编码值失效,必须会话级)
 type Account struct {
 	Cookie string `json:"cookie"`
 	At     string `json:"at"`
@@ -52,6 +57,8 @@ type Account struct {
 	RCID string `json:"rcid,omitempty"`
 	// 账户路径前缀,如 "/u/1"(URL 在 /_/BardChatUi 之前)
 	PathPrefix string `json:"pathPrefix,omitempty"`
+	// 会话级 UUID(从一次真实请求提取,见上方注释)
+	SessionUuid string `json:"sessionUuid,omitempty"`
 }
 
 // Client 是 gemini 客户端,持有账号池并严格限频。
@@ -60,13 +67,15 @@ type Client struct {
 	mu       sync.Mutex
 	lastUsed []time.Time // 每账号上次请求时间
 	cursor   int
-	client   *http.Client
+	tls      *bogdanfinn.TlsClient
 }
 
 // NewClient 构造客户端。accounts 至少一个(空则请求时返回错误)。
+// 必须用 Chrome TLS 指纹客户端(bogdanfinn):Google 2026-08-14 前端升级后
+// 按 JA3/TLS 指纹校验,标准 Go http.Client / curl 返回 BardErrorInfo 1096。
 func NewClient(accounts []*Account) *Client {
 	c := &Client{
-		client:   &http.Client{Timeout: 120 * time.Second},
+		tls:      bogdanfinn.NewStdClient(),
 		lastUsed: make([]time.Time, len(accounts)),
 	}
 	c.accounts = accounts
@@ -157,13 +166,7 @@ func (c *Client) Complete(req CompletionRequest, onDelta func(Delta)) StreamResu
 		res.Err = err.Error()
 		return res
 	}
-	httpReq, err := http.NewRequest(http.MethodPost, c.streamURL(acct), bytes.NewReader(body))
-	if err != nil {
-		res.Err = err.Error()
-		return res
-	}
-	c.setHeaders(httpReq, acct)
-	resp, err := c.client.Do(httpReq)
+	resp, err := c.tls.Request(httpclient.POST, c.streamURL(acct), c.buildHeaders(acct), parseCookies(acct.Cookie), bytes.NewReader(body))
 	if err != nil {
 		res.Err = fmt.Sprintf("gemini stream: %v", err)
 		return res
@@ -232,7 +235,7 @@ func (c *Client) Complete(req CompletionRequest, onDelta func(Delta)) StreamResu
 // 其余字段(长尾开关/功能位)保持抓包原样。
 var innerSkeleton = []any{
 	"<PROMPT>", []any{"zh-CN"}, "<IDS>", "<SNL6E>", "<UUID>", nil, []any{0}, 1, nil, nil, 1, 0,
-	nil, nil, nil, nil, nil, []any{[]any{2}}, 0, nil, nil, nil, nil, nil, nil, nil, nil, 1, nil, nil,
+	nil, nil, nil, nil, nil, []any{[]any{4}}, 0, nil, nil, nil, nil, nil, nil, nil, nil, 1, nil, nil,
 	[]any{4}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, []any{1}, nil, nil, nil, nil, nil,
 	nil, nil, nil, nil, nil, nil, 0, nil, nil, nil, nil, nil, "D255675A-C4BA-41A4-A443-B39356B0DE81",
 	nil, []any{}, nil, nil, nil, nil, nil, nil, 1, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
@@ -240,7 +243,7 @@ var innerSkeleton = []any{
 }
 
 // buildReqBody 构造 f.req + at 的 urlencoded body。
-// 从骨架模板出发,只替换 prompt / ids(含 rcid) / SNlM6e / uuid。
+// 从骨架模板出发,只替换 prompt / ids(含 rcid) / SNlM6e / uuid / sessionUuid。
 func (c *Client) buildReqBody(acct *Account, req CompletionRequest) ([]byte, error) {
 	inner := make([]any, len(innerSkeleton))
 	copy(inner, innerSkeleton)
@@ -254,6 +257,11 @@ func (c *Client) buildReqBody(acct *Account, req CompletionRequest) ([]byte, err
 	inner[2] = []any{acct.Cid, rid, rcid, nil, nil, nil, nil, nil, nil, "AwAAAAAAAAAQANM7mBjXKZTJBWnA_xk"}
 	inner[3] = acct.SNlM6e
 	inner[4] = "43815fc519b6c3ff5bfcc5e4ee164142"
+	// 会话级 UUID(f.req [59]);2026-08-14 前端升级后必须与会话一致,
+	// 否则报 BardErrorInfo 1096。硬编码 D255675A... 已失效。
+	if acct.SessionUuid != "" {
+		inner[59] = acct.SessionUuid
+	}
 	innerJSON, _ := json.Marshal(inner)
 	fReq, _ := json.Marshal([]any{nil, string(innerJSON)})
 	form := url.Values{}
@@ -272,18 +280,42 @@ func (c *Client) streamURL(acct *Account) string {
 	if strings.HasPrefix(acct.Fsid, "f.sid=") {
 		fsidVal = strings.TrimPrefix(acct.Fsid, "f.sid=")
 	}
-	return fmt.Sprintf("%s%s/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=boq_assistant-bard-web-server_20260811.23_p0&f.sid=%s&hl=zh-CN&pageId=none",
+	return fmt.Sprintf("%s%s/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate?bl=boq_assistant-bard-web-server_20260812.16_p0&f.sid=%s&hl=zh-CN&pageId=none",
 		defaultBase, prefix, fsidVal)
 }
 
-// setHeaders 设置请求头。
-func (c *Client) setHeaders(r *http.Request, acct *Account) {
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-	r.Header.Set("Cookie", acct.Cookie)
-	r.Header.Set("User-Agent", webUA)
-	r.Header.Set("Origin", defaultBase)
-	r.Header.Set("Referer", defaultBase+"/u/1/app")
-	r.Header.Set("X-Same-Domain", "1")
+// buildHeaders 构造请求头(cookie 用 cookies 参数传,见 parseCookies)。
+func (c *Client) buildHeaders(acct *Account) httpclient.AuroraHeaders {
+	h := httpclient.AuroraHeaders{
+		"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+		"User-Agent":   webUA,
+		"Origin":       defaultBase,
+		"Referer":      defaultBase + "/u/1/app",
+		"X-Same-Domain": "1",
+	}
+	// Google 前端升级(2026-08-14,bl 20260812)后校验 jspb 头。
+	// x-goog-ext-525005358 与会话 UUID 同值;缺头/错值报 BardErrorInfo 1096。
+	if acct.SessionUuid != "" {
+		h["x-goog-ext-525005358-jspb"] = fmt.Sprintf("[\"%s\",1]", acct.SessionUuid)
+	}
+	return h
+}
+
+// parseCookies 把 cookie header 字符串("k1=v1; k2=v2")解析成 []*http.Cookie。
+func parseCookies(header string) []*http.Cookie {
+	var out []*http.Cookie
+	for _, part := range strings.Split(header, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 || kv[0] == "" {
+			continue
+		}
+		out = append(out, &http.Cookie{Name: strings.TrimSpace(kv[0]), Value: strings.TrimSpace(kv[1])})
+	}
+	return out
 }
 
 // parseRPCFrame 解析一帧 [["wrb.fr",null,"<json>"]]。
