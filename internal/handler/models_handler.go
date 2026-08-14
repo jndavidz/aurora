@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"strings"
-
 	"aurora/internal/provider"
 
 	"github.com/gin-gonic/gin"
@@ -16,23 +14,12 @@ func NewModelsHandler(registry *provider.Registry) *ModelsHandler {
 	return &ModelsHandler{registry: registry}
 }
 
-// chatgptCodingBases 是允许 -coding 后缀变体的 ChatGPT 基础模型 slug。
-// 请求 gpt-5-6-coding 时路由改写为 gpt-5-6 透传上游,并强制工具调用模式。
-var chatgptCodingBases = []string{"gpt-5-6"}
-
-// normalizeCodingModel 检测 ChatGPT 的 -coding 变体后缀:
-//   - gpt-5-6-coding → (gpt-5-6, true):改写为基础模型,强制工具调用
-//   - 其他 -coding(非已知 base)→ (原 id, false):不改写,走默认 ChatGPT(上游大概率 400)
-//   - 无后缀 → (原 id, false)
+// normalizeCodingModel 检测 ChatGPT 的 -coding 变体:
+//   - gpt-coding → (gpt-5-6, true):改写为真实 slug 透传上游,强制工具调用
+//   - 其他 → (原 id, false):不改写
 func normalizeCodingModel(model string) (string, bool) {
-	if !strings.HasSuffix(model, "-coding") {
-		return model, false
-	}
-	base := strings.TrimSuffix(model, "-coding")
-	for _, b := range chatgptCodingBases {
-		if b == base {
-			return base, true
-		}
+	if model == "gpt-coding" {
+		return "gpt-5-6", true
 	}
 	return model, false
 }
@@ -53,17 +40,15 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		Data   []ResData `json:"data"`
 	}
 
-	// ChatGPT 网页逆向实际可用模型(2026-08-14 抓包 /backend-api/models,免费账号视角)。
-	// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
-	// gpt-5-6-coding 是 -coding 变体(强制工具调用),标注 function_call 能力。
-	models := []string{
-		"auto",
-		"gpt-5-5",
-		"gpt-5-6",
-		"gpt-5-5-mini",
-		"gpt-5-6-mini",
-		"gpt-5-6-coding",
-	}
+// ChatGPT 网页逆向实际可用模型(2026-08-14 抓包 /backend-api/models,免费账号视角)。
+		// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
+		// gpt-coding 是 -coding 变体(强制工具调用),标注 function_call 能力。
+		// 注:slug 不保证实际版本(免费版所有 slug 都跑 GPT-5.5-mini)。
+		models := []string{
+			"auto",
+			"gpt-5-5-mini",
+			"gpt-coding",
+		}
 
 	var resModelList []ResData
 	for _, model := range models {
