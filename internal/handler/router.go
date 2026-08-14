@@ -35,6 +35,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.GeminiCDPURL != "" {
 		registry.Register(provider.NewGeminiCDP(cfg))
 	}
+	if cfg.ClaudeCDPURL != "" {
+		registry.Register(provider.NewClaudeCDP(cfg))
+	}
 	if cfg.DeepSeekWebTokens != "" {
 		registry.Register(provider.NewDeepSeek(cfg))
 	}

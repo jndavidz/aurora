@@ -202,61 +202,74 @@ function openTarget(url) {
   });
 }
 
-let conn = null;
-let currentCollector = null; // 进行中请求的 console chunk 收集器
+// 每 provider 一个 CDP 连接(页面 target 不同:gemini.google.com / claude.ai 等)。
+// 每个连接有独立的 console chunk 收集器(进行中的请求)。
+const conns = new Map(); // adapter.name -> { c, collector }
 
-async function findTarget() {
+async function findTarget(match) {
   const targets = await getJSON("/json");
-  return targets.find((t) => t.type === "page" && t.url.includes("gemini.google.com")) || null;
+  return targets.find((t) => t.type === "page" && t.url.includes(match)) || null;
 }
 
-async function ensureConn() {
-  if (conn) return conn;
-  let page = await findTarget();
+async function ensureConn(adapter) {
+  const existing = conns.get(adapter.name);
+  if (existing && existing.c) return existing;
+  let page = await findTarget(adapter.pageMatch);
   if (!page) {
-    console.log("[cdp] gemini page not open, trying /json/new...");
-    try { await openTarget("https://gemini.google.com/app"); } catch (e) {
-      console.error("[cdp] openTarget failed:", e.message);
+    console.log("[cdp][" + adapter.name + "] page not open, trying /json/new...");
+    try { await openTarget(adapter.homeUrl); } catch (e) {
+      console.error("[cdp][" + adapter.name + "] openTarget failed:", e.message);
     }
     await sleep(3000);
-    page = await findTarget();
+    page = await findTarget(adapter.pageMatch);
   }
   if (!page) return null;
+  const entry = { c: null, collector: null };
   const c = await cdp(page.webSocketDebuggerUrl);
   c.on((m) => {
-    if (m.__closed) { conn = null; console.log("[cdp] connection closed"); return; }
+    if (m.__closed) { conns.delete(adapter.name); console.log("[cdp][" + adapter.name + "] connection closed"); return; }
     if (m.method === "Runtime.consoleAPICalled") {
       for (const a of m.params.args || []) {
         if (a.type === "string" && a.value && a.value.startsWith("__CHUNK__")) {
-          if (currentCollector) currentCollector.buffer += a.value.slice(9);
+          if (entry.collector) entry.collector.buffer += a.value.slice(9);
         }
       }
     }
     if (m.method === "Network.requestWillBeSent" && m.params.request) {
-      if ((m.params.request.url || "").indexOf("StreamGenerate") !== -1) {
-        applyCapture(m.params.request);
-      }
+      // 自续:抓 provider 自己的请求刷新令牌/模板(由各适配器 capture 钩子处理)
+      if (adapter.capture) adapter.capture(m.params.request);
     }
   });
   await c.cmd("Runtime.enable");
   await c.cmd("Network.enable");
-  // 顺手读登录邮箱
-  try {
-    const r = await c.cmd("Runtime.evaluate", {
-      expression: '(window.WIZ_global_data && window.WIZ_global_data.oPEP7c) ? window.WIZ_global_data.oPEP7c : ""',
-      returnByValue: true,
-    });
-    const v = r && r.result && r.result.result && r.result.result.value;
-    if (v) { state.account = v; saveState(); }
-  } catch {}
-  conn = c;
-  console.log("[cdp] connected to", page.url.slice(0, 60));
-  return c;
+  if (adapter.onConnect) {
+    try { await adapter.onConnect(c); } catch {}
+  }
+  entry.c = c;
+  conns.set(adapter.name, entry);
+  console.log("[cdp][" + adapter.name + "] connected to", page.url.slice(0, 60));
+  return entry;
 }
 
 // ─── Gemini 适配器 ───────────────────────────────────────────────
 const gemini = {
+  name: "gemini",
   prefix: "gemini-",
+  pageMatch: "gemini.google.com",
+  homeUrl: "https://gemini.google.com/app",
+  capture: (req) => applyCapture(req),
+  ready: () => !!(state.at && state.snlM6e && state.fsid),
+  onConnect: async (c) => {
+    // 顺手读登录邮箱
+    try {
+      const r = await c.cmd("Runtime.evaluate", {
+        expression: '(window.WIZ_global_data && window.WIZ_global_data.oPEP7c) ? window.WIZ_global_data.oPEP7c : ""',
+        returnByValue: true,
+      });
+      const v = r && r.result && r.result.result && r.result.result.value;
+      if (v) { state.account = v; saveState(); }
+    } catch {}
+  },
   models: [
     { id: "gemini-3-flash-chat", object: "model", owned_by: "google", capabilities: ["web_search", "reasoning", "vision"] },
   ],
@@ -373,8 +386,163 @@ const gemini = {
   },
 };
 
+// ─── Claude 状态与适配器(claude.ai,2026-08-14 抓包) ───────────────
+// 协议比 Gemini 简单:认证纯 cookie(无会话令牌折腾);发消息 =
+// POST /api/organizations/{org}/chat_conversations/{convId}/completion
+// 请求体为抓包模板(26 个前端内置工具),每轮只替换 prompt + turn_message_uuids,
+// convId 每轮新生成(多轮上下文靠全量拍平 prompt,不依赖服务端会话)。
+// 响应 SSE:content_block_delta(text_delta) 为正文增量,message_stop 结束。
+const CLAUDE_STATE_FILE = path.join(STATE_DIR, "claude_session.json");
+
+let claudeState = {
+  provider: "claude",
+  orgId: null,      // /api/organizations/{orgId}
+  template: null,   // completion 请求体模板(完整 26 tools)
+  headers: {},      // anthropic-* 客户端头(device-id/anonymous-id/sha/build)
+  updatedAt: null,
+};
+
+function loadClaudeState() {
+  try {
+    if (fs.existsSync(CLAUDE_STATE_FILE)) {
+      claudeState = { ...claudeState, ...JSON.parse(fs.readFileSync(CLAUDE_STATE_FILE, "utf8")) };
+      console.log("[state][claude] loaded from", CLAUDE_STATE_FILE);
+      return true;
+    }
+  } catch (e) {
+    console.error("[state][claude] load failed:", e.message);
+  }
+  // 首次:从 capture-claude.mjs 的临时缓存导入
+  const p = path.join(os.tmpdir(), "claude_capture_all.json");
+  if (fs.existsSync(p)) {
+    try {
+      const all = JSON.parse(fs.readFileSync(p, "utf8"));
+      const cap = all.find((r) => r.url.includes("/completion") && r.postData);
+      if (!cap) return false;
+      const orgId = (cap.url.match(/organizations\/([0-9a-f-]+)/) || [])[1];
+      const headers = {};
+      for (const k of ["anthropic-device-id", "anthropic-anonymous-id", "anthropic-client-sha", "anthropic-client-build", "anthropic-client-platform", "anthropic-client-version"]) {
+        if (cap.headers[k]) headers[k] = cap.headers[k];
+      }
+      claudeState = { ...claudeState, orgId, template: JSON.parse(cap.postData), headers, updatedAt: new Date().toISOString() };
+      saveClaudeState();
+      console.log("[state][claude] imported from %TEMP% capture");
+      return true;
+    } catch (e) {
+      console.error("[state][claude] seed import failed:", e.message);
+    }
+  }
+  return false;
+}
+
+function saveClaudeState() {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const tmp = CLAUDE_STATE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(claudeState, null, 2));
+    fs.renameSync(tmp, CLAUDE_STATE_FILE);
+  } catch (e) {
+    console.error("[state][claude] save failed:", e.message);
+  }
+}
+
+// 从抓到的 completion 请求自续模板(抓自己的 fetch,保持协议最新)
+function applyClaudeCapture(req) {
+  if (!req.postData || !req.url.includes("/completion")) return;
+  try {
+    claudeState.template = JSON.parse(req.postData);
+    claudeState.orgId = (req.url.match(/organizations\/([0-9a-f-]+)/) || [])[1] || claudeState.orgId;
+    for (const k of ["anthropic-device-id", "anthropic-anonymous-id", "anthropic-client-sha", "anthropic-client-build", "anthropic-client-platform", "anthropic-client-version"]) {
+      if (req.headers[k]) claudeState.headers[k] = req.headers[k];
+    }
+    claudeState.updatedAt = new Date().toISOString();
+    saveClaudeState();
+    console.log("[state][claude] template refreshed from live request");
+  } catch (e) {
+    console.error("[state][claude] applyClaudeCapture failed:", e.message);
+  }
+}
+
+const claude = {
+  name: "claude",
+  prefix: "claude-",
+  pageMatch: "claude.ai",
+  homeUrl: "https://claude.ai/new",
+  capture: (req) => applyClaudeCapture(req),
+  ready: () => !!(claudeState.orgId && claudeState.template),
+  models: [
+    { id: "claude-sonnet-5-chat", object: "model", owned_by: "anthropic", capabilities: ["web_search", "reasoning", "vision"] },
+  ],
+
+  flatten(messages) {
+    const parts = [];
+    for (const m of messages || []) {
+      let content = m.content;
+      if (Array.isArray(content)) {
+        content = content.map((c) => (c && c.text ? c.text : "")).filter(Boolean).join("\n");
+      }
+      if (typeof content !== "string" || !content.trim()) continue;
+      if (m.role === "assistant") parts.push("Claude：" + content);
+      else if (m.role === "system") parts.push("背景说明：" + content);
+      else parts.push("用户：" + content);
+    }
+    return parts.join("\n");
+  },
+
+  buildRequest(prompt) {
+    const body = JSON.parse(JSON.stringify(claudeState.template));
+    body.prompt = prompt;
+    body.turn_message_uuids = {
+      human_message_uuid: crypto.randomUUID(),
+      assistant_message_uuid: crypto.randomUUID(),
+    };
+    // 每轮新 convId:多轮上下文靠全量拍平 prompt,不依赖服务端会话历史
+    const convId = crypto.randomUUID();
+    const url = "https://claude.ai/api/organizations/" + claudeState.orgId + "/chat_conversations/" + convId + "/completion";
+    const headers = {
+      accept: "text/event-stream",
+      "Content-Type": "application/json",
+      ...claudeState.headers,
+    };
+    return { url, headers, body: JSON.stringify(body) };
+  },
+
+  // 增量 SSE 解析:content_block_delta(text_delta) 为正文,message_stop 结束
+  createParser(onDelta) {
+    let buf = "";
+    const self = {
+      done: false,
+      text: "",
+      feed(chunk) {
+        buf += chunk;
+        let idx;
+        while ((idx = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, idx);
+          buf = buf.slice(idx + 1);
+          const t = line.trim();
+          if (!t.startsWith("data:")) continue;
+          const payload = t.slice(5).trim();
+          if (payload === "[DONE]") { self.done = true; continue; }
+          try {
+            const j = JSON.parse(payload);
+            if (j.type === "content_block_delta" && j.delta && j.delta.type === "text_delta") {
+              self.text += j.delta.text;
+              if (onDelta) onDelta(j.delta.text);
+            }
+            if (j.type === "message_stop") self.done = true;
+          } catch {}
+        }
+      },
+      flush() {
+        if (buf.trim().startsWith("data:")) self.feed(buf.trim() + "\n");
+      },
+    };
+    return self;
+  },
+};
+
 // 适配器注册表:model 前缀 → 适配器(加新模型只需在这里登记)
-const adapters = [gemini];
+const adapters = [gemini, claude];
 
 function resolveAdapter(model) {
   return adapters.find((a) => model.startsWith(a.prefix)) || null;
@@ -411,22 +579,22 @@ async function pump() {
 }
 
 // ─── 执行层:页内 fetch → 流式回传 ────────────────────────────────
-async function execute(prompt, onDelta) {
-  const c = await ensureConn();
-  if (!c) {
-    const e = new Error("gemini 页面未打开(请先启动 CDP 浏览器并登录 gemini.google.com)");
+async function execute(adapter, prompt, onDelta) {
+  const entry = await ensureConn(adapter);
+  if (!entry) {
+    const e = new Error(adapter.name + " 页面未打开(请先启动 CDP 浏览器并登录 " + adapter.pageMatch + ")");
     e.code = "no_browser";
     throw e;
   }
-  if (!state.at || !state.snlM6e || !state.fsid) {
-    const e = new Error("会话令牌缺失(先跑 capture-streamgenerate.mjs 抓一次)");
+  if (!adapter.ready()) {
+    const e = new Error(adapter.name + " 会话模板缺失(先跑 capture-" + adapter.name + ".mjs 抓一次)");
     e.code = "no_tokens";
     throw e;
   }
-  const { url, headers, body } = gemini.buildRequest(prompt);
-  const parser = gemini.createParser(onDelta);
+  const { url, headers, body } = adapter.buildRequest(prompt);
+  const parser = adapter.createParser(onDelta);
   const collector = { buffer: "" };
-  currentCollector = collector;
+  entry.collector = collector;
 
   const pageJs =
     "(async () => {" +
@@ -443,10 +611,10 @@ async function execute(prompt, onDelta) {
 
   let result;
   try {
-    const r = await c.cmd("Runtime.evaluate", { expression: pageJs, awaitPromise: true, returnByValue: true });
+    const r = await entry.c.cmd("Runtime.evaluate", { expression: pageJs, awaitPromise: true, returnByValue: true });
     result = r && r.result && r.result.result && r.result.result.value;
   } finally {
-    currentCollector = null;
+    entry.collector = null;
   }
   parser.feed(collector.buffer);
   parser.flush();
@@ -455,30 +623,32 @@ async function execute(prompt, onDelta) {
     e.code = "upstream_error";
     throw e;
   }
-  // 会话损坏识别:三种信号任意其一即判定 ——
-  //   1. BardErrorInfo(NNNN)          —— 已知会话错误(1096/1157/1060 等)
-  //   2. wrb.fr 错误帧 [...,[N]]       —— 服务端拒绝帧(实测错误码 [13],
-  //      页面导航/刷新/崩溃后整套令牌(at/SNlM6e/f.sid)随页面实例轮换而失效)
-  // 自愈(实测规律):令牌只在"页面实例切换"时轮换 —— 新会话首条消息、刷新、重启都会
-  // 切换实例;而在**已有会话里续发消息**不会切换(URL 不变)。因此恢复只需:
-  // 在浏览器当前会话里**再发一条消息**(若刚发过首条,再发第二条),桥的 Network
-  // 监听自动捕获当前实例令牌,之后请求即恢复。注意:桥不能自动 reload ——
-  // reload 会再次切换实例,反而破坏恢复路径。
-  const errMatch = collector.buffer.match(/BardErrorInfo"?\s*,\s*\[?(\d+)/);
-  const errFrame = collector.buffer.match(/wrb\.fr",null,null,null,null,\[(\d+)\]/);
-  if (!parser.text && (errMatch || errFrame)) {
-    const code = errMatch ? errMatch[1] : errFrame[1];
-    const e = new Error(
-      "会话令牌已失效(错误码 " + code + ")。自愈只需一步:" +
-      "在浏览器当前会话里发任意一条消息(如\"你好\";若刚发过首条消息,请再发一条)," +
-      "桥会自动捕获当前实例的令牌,然后重试即可。" +
-      "(Chrome 窗口平时驻留后台,若看不到窗口,运行 show-gemini.ps1 或 POST http://127.0.0.1:8798/show 拉回屏幕)"
-    );
-    e.code = "token_stale";
-    throw e;
+  if (adapter.name === "gemini") {
+    // 会话损坏识别(gemini 专属):三种信号任意其一即判定 ——
+    //   1. BardErrorInfo(NNNN)          —— 已知会话错误(1096/1157/1060 等)
+    //   2. wrb.fr 错误帧 [...,[N]]       —— 服务端拒绝帧(实测错误码 [13],
+    //      页面导航/刷新/崩溃后整套令牌(at/SNlM6e/f.sid)随页面实例轮换而失效)
+    // 自愈(实测规律):令牌只在"页面实例切换"时轮换 —— 新会话首条消息、刷新、重启都会
+    // 切换实例;而在**已有会话里续发消息**不会切换(URL 不变)。因此恢复只需:
+    // 在浏览器当前会话里**再发一条消息**(若刚发过首条,再发第二条),桥的 Network
+    // 监听自动捕获当前实例令牌,之后请求即恢复。注意:桥不能自动 reload ——
+    // reload 会再次切换实例,反而破坏恢复路径。
+    const errMatch = collector.buffer.match(/BardErrorInfo"?\s*,\s*\[?(\d+)/);
+    const errFrame = collector.buffer.match(/wrb\.fr",null,null,null,null,\[(\d+)\]/);
+    if (!parser.text && (errMatch || errFrame)) {
+      const code = errMatch ? errMatch[1] : errFrame[1];
+      const e = new Error(
+        "会话令牌已失效(错误码 " + code + ")。自愈只需一步:" +
+        "在浏览器当前会话里发任意一条消息(如\"你好\";若刚发过首条消息,请再发一条)," +
+        "桥会自动捕获当前实例的令牌,然后重试即可。" +
+        "(Chrome 窗口平时驻留后台,若看不到窗口,运行 show-gemini.ps1 或 POST http://127.0.0.1:8798/show 拉回屏幕)"
+      );
+      e.code = "token_stale";
+      throw e;
+    }
   }
   if (!parser.text) {
-    const e = new Error("上游空回复(可能被限频或令牌失效), 原始响应头部: " + collector.buffer.slice(0, 200));
+    const e = new Error("上游空回复(可能被限频或令牌失效), 原始响应头部: " + collector.buffer.slice(0, 1500));
     e.code = "empty_reply";
     throw e;
   }
@@ -531,7 +701,7 @@ async function handleChat(res, body) {
 
   if (!stream) {
     try {
-      const parser = await enqueue(() => execute(prompt, null));
+      const parser = await enqueue(() => execute(adapter, prompt, null));
       sendJSON(res, 200, {
         id, object: "chat.completion", created, model,
         choices: [{ index: 0, message: { role: "assistant", content: parser.text }, finish_reason: parser.done ? "stop" : "length" }],
@@ -554,7 +724,7 @@ async function handleChat(res, body) {
   };
   try {
     await enqueue(() =>
-      execute(prompt, (delta) => {
+      execute(adapter, prompt, (delta) => {
         sse({
           id, object: "chat.completion.chunk", created, model,
           choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
@@ -581,20 +751,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (u.pathname === "/health" && req.method === "GET") {
-    sendJSON(res, 200, {
-      ok: true,
-      browser: conn ? { connected: true } : { connected: false },
-      provider: {
-        name: "gemini",
-        account: state.account,
-        tokens: {
-          at: !!state.at,
-          snlM6eLen: (state.snlM6e || "").length,
-          fsid: !!state.fsid,
-          updatedAt: state.updatedAt,
-        },
-      },
-    });
+    const providers = {};
+    providers.gemini = {
+      account: state.account,
+      tokens: { at: !!state.at, snlM6eLen: (state.snlM6e || "").length, fsid: !!state.fsid, updatedAt: state.updatedAt },
+      connected: !!conns.get("gemini"),
+    };
+    providers.claude = {
+      tokens: { orgId: !!claudeState.orgId, template: !!claudeState.template, updatedAt: claudeState.updatedAt },
+      connected: !!conns.get("claude"),
+    };
+    sendJSON(res, 200, { ok: true, providers });
     return;
   }
   if (u.pathname === "/v1/models" && req.method === "GET") {
@@ -616,21 +783,25 @@ const server = http.createServer(async (req, res) => {
 
 process.on("SIGINT", () => {
   console.log("\n[bridge] shutting down");
-  if (conn) try { conn.close(); } catch {}
+  for (const entry of conns.values()) {
+    try { entry.c.close(); } catch {}
+  }
   process.exit(0);
 });
 
 // ─── 启动 ────────────────────────────────────────────────────────
 const hasTokens = loadState();
+const hasClaude = loadClaudeState();
 server.listen(PORT, HOST, async () => {
   console.log("[bridge] listening on http://" + HOST + ":" + PORT);
   console.log("[bridge] auth:", AUTH ? "enabled" : "disabled (localhost only)");
   console.log("[bridge] tokens:", hasTokens ? "loaded" : "MISSING (run capture-streamgenerate.mjs once)");
+  console.log("[bridge] claude:", hasClaude ? "loaded" : "MISSING (run capture-claude.mjs once)");
   console.log("[bridge] idle auto-stop:", IDLE_TIMEOUT_MS > 0 ? Math.round(IDLE_TIMEOUT_MS / 60000) + "min" : "disabled");
   console.log("[bridge] rate limit:", MIN_INTERVAL_MS > 0 ? (MIN_INTERVAL_MS + "ms + jitter 0-" + JITTER_MS + "ms") : "disabled (chat free; coding limited by aurora)");
-  const c = await ensureConn().catch(() => null);
-  console.log("[bridge] browser:", c ? "connected" : "NOT connected");
-  console.log("[bridge] account:", state.account || "unknown");
+  const e1 = await ensureConn(gemini).catch(() => null);
+  console.log("[bridge] gemini browser:", e1 ? "connected" : "NOT connected");
+  if (e1) console.log("[bridge] gemini account:", state.account || "unknown");
 });
 
 // 无活动自动停止:超时后经 CDP 优雅关闭整个 Chrome,再退出桥进程。
@@ -641,8 +812,11 @@ if (IDLE_TIMEOUT_MS > 0) {
     if (Date.now() - lastActivity < IDLE_TIMEOUT_MS) return;
     console.log("[idle] no chat activity for " + Math.round(IDLE_TIMEOUT_MS / 60000) + " min, stopping Chrome + bridge");
     (async () => {
-      try { if (conn) await conn.cmd("Browser.close"); } catch {}
-      try { if (conn) conn.close(); } catch {}
+      const anyConn = [...conns.values()][0];
+      try { if (anyConn) await anyConn.c.cmd("Browser.close"); } catch {}
+      for (const entry of conns.values()) {
+        try { entry.c.close(); } catch {}
+      }
       setTimeout(() => process.exit(0), 500);
     })();
   }, 30000).unref();

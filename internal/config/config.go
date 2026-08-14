@@ -7,26 +7,26 @@ import (
 )
 
 type Config struct {
-	ServerHost         string
-	ServerPort         string
-	TLSCert            string
-	TLSKey             string
-	Authorization      string
-	BaseURL            string
-	APIReverseProxy    string
-	FilesReverseProxy  string
-	StreamMode         bool
-	MaxContinueCount   int
-	EnableHistory      bool
-	EnableExternalToken bool  // 是否接受外部传入的 accessToken
-	ToolCallingEnabled bool
-	RefusalRetries     int
-	DebugToolLog       string
-	FreeAccounts       bool
-	FreeAccountsNum    int
-	ProxyURL           string
-	HTTPProxy          string
-	DebugSentinel      bool
+	ServerHost          string
+	ServerPort          string
+	TLSCert             string
+	TLSKey              string
+	Authorization       string
+	BaseURL             string
+	APIReverseProxy     string
+	FilesReverseProxy   string
+	StreamMode          bool
+	MaxContinueCount    int
+	EnableHistory       bool
+	EnableExternalToken bool // 是否接受外部传入的 accessToken
+	ToolCallingEnabled  bool
+	RefusalRetries      int
+	DebugToolLog        string
+	FreeAccounts        bool
+	FreeAccountsNum     int
+	ProxyURL            string
+	HTTPProxy           string
+	DebugSentinel       bool
 
 	// DeepSeek 网页逆向(chat.deepseek.com)通道配置。
 	DeepSeekWebBase   string   // 网页端 base,默认 https://chat.deepseek.com
@@ -71,6 +71,12 @@ type Config struct {
 	// 桥池全挂时 aurora 自动 POST /wake 拉起 Chrome+桥后重试(全自动唤醒)。
 	GeminiCDPWakePort string
 
+	// Claude(claude.ai)CDP 桥通道。桥地址默认复用 GEMINI_CDP_URL(同一桥服务
+	// 多 provider);CLAUDE_CDP_URL 可单独指定。仅当 URL 非空时注册。
+	ClaudeCDPURL string
+	ClaudeCDPKey string
+	ClaudeModels []string
+
 	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
 	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
 	YuanbaoWebTokens string   // 网页 token 注入池文件路径(每行一条 "<x-uskey>\t<cookie header>")
@@ -81,26 +87,26 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		ServerHost:         getEnv("SERVER_HOST", "0.0.0.0"),
-		ServerPort:         getEnvWithFallback("SERVER_PORT", "PORT", "8080"),
-		TLSCert:            os.Getenv("TLS_CERT"),
-		TLSKey:             os.Getenv("TLS_KEY"),
-		Authorization:      os.Getenv("Authorization"),
-		BaseURL:            getEnv("BASE_URL", "https://chatgpt.com/backend-api"),
-		APIReverseProxy:    os.Getenv("API_REVERSE_PROXY"),
-		FilesReverseProxy:  os.Getenv("FILES_REVERSE_PROXY"),
-		StreamMode:         getBoolEnv("STREAM_MODE", true),
-		MaxContinueCount:   getIntEnv("MAX_CONTINUE_COUNT", 3),
-		EnableHistory:      getBoolEnv("ENABLE_HISTORY", false),
+		ServerHost:          getEnv("SERVER_HOST", "0.0.0.0"),
+		ServerPort:          getEnvWithFallback("SERVER_PORT", "PORT", "8080"),
+		TLSCert:             os.Getenv("TLS_CERT"),
+		TLSKey:              os.Getenv("TLS_KEY"),
+		Authorization:       os.Getenv("Authorization"),
+		BaseURL:             getEnv("BASE_URL", "https://chatgpt.com/backend-api"),
+		APIReverseProxy:     os.Getenv("API_REVERSE_PROXY"),
+		FilesReverseProxy:   os.Getenv("FILES_REVERSE_PROXY"),
+		StreamMode:          getBoolEnv("STREAM_MODE", true),
+		MaxContinueCount:    getIntEnv("MAX_CONTINUE_COUNT", 3),
+		EnableHistory:       getBoolEnv("ENABLE_HISTORY", false),
 		EnableExternalToken: getBoolEnv("ENABLE_EXTERNAL_TOKEN", true),
-		ToolCallingEnabled: getBoolEnv("TOOL_CALLING_ENABLED", true),
-		RefusalRetries:     getIntEnv("REFUSAL_RETRIES", 3),
-		DebugToolLog:       os.Getenv("DEBUG_TOOL_LOG"),
-		FreeAccounts:       getBoolEnv("FREE_ACCOUNTS", false),
-		FreeAccountsNum:    getIntEnv("FREE_ACCOUNTS_NUM", 1024),
-		ProxyURL:           os.Getenv("PROXY_URL"),
-		HTTPProxy:          os.Getenv("http_proxy"),
-		DebugSentinel:      getBoolEnv("DEBUG_SENTINEL", false),
+		ToolCallingEnabled:  getBoolEnv("TOOL_CALLING_ENABLED", true),
+		RefusalRetries:      getIntEnv("REFUSAL_RETRIES", 3),
+		DebugToolLog:        os.Getenv("DEBUG_TOOL_LOG"),
+		FreeAccounts:        getBoolEnv("FREE_ACCOUNTS", false),
+		FreeAccountsNum:     getIntEnv("FREE_ACCOUNTS_NUM", 1024),
+		ProxyURL:            os.Getenv("PROXY_URL"),
+		HTTPProxy:           os.Getenv("http_proxy"),
+		DebugSentinel:       getBoolEnv("DEBUG_SENTINEL", false),
 
 		DeepSeekWebBase:   getEnv("DEEPSEEK_WEB_BASE", "https://chat.deepseek.com"),
 		DeepSeekWebTokens: os.Getenv("DEEPSEEK_WEB_TOKENS"),
@@ -128,11 +134,15 @@ func Load() Config {
 		GrokCookies: os.Getenv("GROK_COOKIES"),
 		GrokModels:  splitCSV(os.Getenv("GROK_MODELS")),
 
-		GeminiAccounts: os.Getenv("GEMINI_ACCOUNTS"),
-		GeminiModels:   splitCSV(os.Getenv("GEMINI_MODELS")),
-		GeminiCDPURL:   os.Getenv("GEMINI_CDP_URL"),
-		GeminiCDPKey:   os.Getenv("GEMINI_CDP_KEY"),
+		GeminiAccounts:    os.Getenv("GEMINI_ACCOUNTS"),
+		GeminiModels:      splitCSV(os.Getenv("GEMINI_MODELS")),
+		GeminiCDPURL:      os.Getenv("GEMINI_CDP_URL"),
+		GeminiCDPKey:      os.Getenv("GEMINI_CDP_KEY"),
 		GeminiCDPWakePort: getEnv("GEMINI_CDP_WAKE_PORT", "8798"),
+
+		ClaudeCDPURL: os.Getenv("CLAUDE_CDP_URL"),
+		ClaudeCDPKey: os.Getenv("CLAUDE_CDP_KEY"),
+		ClaudeModels: splitCSV(os.Getenv("CLAUDE_MODELS")),
 
 		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
 		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),

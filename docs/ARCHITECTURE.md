@@ -87,7 +87,8 @@ if cfg.KimiWebTokens != ""      { registry.Register(provider.NewKimi(cfg)) }
 if cfg.DoubaoAccounts != ""     { registry.Register(provider.NewDoubao(cfg)) }
 if cfg.QianwenWebTokens != ""   { registry.Register(provider.NewQianwen(cfg)) }
 if cfg.GrokCookies != ""        { registry.Register(provider.NewGrok(cfg)) }
-if cfg.GeminiCDPURL != ""       { registry.Register(provider.NewGeminiCDP(cfg)) } // CDP 桥转发
+if cfg.GeminiCDPURL != ""       { registry.Register(provider.NewGeminiCDP(cfg)) }  // CDP 桥转发
+if cfg.ClaudeCDPURL != ""       { registry.Register(provider.NewClaudeCDP(cfg)) }  // CDP 桥转发
 ```
 
 注册后不可注销。N/A 的 provider 不注册即可。
@@ -452,6 +453,7 @@ responsesToolCalling(/v1/responses) ──┘
 | Kimi | `KIMI_WEB_TOKENS` | `KIMI_MODELS` | `KIMI_WEB_BASE`、`KIMI_PROXY` |
 | Grok | `GROK_COOKIES` | `GROK_MODELS` | — |
 | Gemini | `GEMINI_CDP_URL`(桥转发;直连 `GEMINI_ACCOUNTS` 已停用) | `GEMINI_MODELS` | `GEMINI_CDP_KEY`(可选,桥鉴权) |
+| Claude | `CLAUDE_CDP_URL`(默认复用 `GEMINI_CDP_URL`,同一桥服务) | `CLAUDE_MODELS` | `CLAUDE_CDP_KEY`(可选) |
 | Doubao | `DOUBAO_ACCOUNTS`(JSON) | `DOUBAO_MODELS` | — |
 | Qianwen | `QIANWEN_WEB_TOKENS` | `QIANWEN_MODELS` | `QIANWEN_WEB_BASE`、`QIANWEN_PROXY` |
 

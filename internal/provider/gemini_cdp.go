@@ -57,13 +57,14 @@ type GeminiCDP struct {
 // defaultGeminiCDPModels 默认目录(与桥 /v1/models 的 chat + aurora 侧 coding)。
 var defaultGeminiCDPModels = []string{"gemini-3-flash-chat", "gemini-3-flash-coding"}
 
-// NewGeminiCDP 构造 CDP 桥 provider。
-func NewGeminiCDP(cfg *config.Config) *GeminiCDP {
+// newCdpBase 构造 CDP 桥 provider 的通用部分(桥池/熔断/限频/模型解析)。
+// GeminiCDP 与 ClaudeCDP 共用:二者都只是"把请求转发给真浏览器桥",差异仅模型目录与名字。
+func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, prefix, ownedBy string, limiter *CodingLimiter) *GeminiCDP {
 	d := &GeminiCDP{
 		cfg:       cfg,
 		byID:      make(map[string]string),
 		deadUntil: make(map[string]time.Time),
-		limiter:   NewCodingLimiter(2*time.Second, 1500*time.Millisecond), // Google 最严
+		limiter:   limiter,
 	}
 	// 短拨号超时:某桥离线(如办公室 PC 关机)时 3s 内快速失败并换下一桥,
 	// 而不是等系统 TCP 超时几十秒。总超时仍 10 分钟(流式长响应)。
@@ -71,30 +72,39 @@ func NewGeminiCDP(cfg *config.Config) *GeminiCDP {
 		DialContext: (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
 	}
 	d.http = &http.Client{Timeout: 10 * time.Minute, Transport: transport}
-	for _, u := range strings.Split(cfg.GeminiCDPURL, ",") {
+	for _, u := range strings.Split(urlList, ",") {
 		if u = strings.TrimSpace(u); u != "" {
 			d.urls = append(d.urls, u)
 		}
 	}
-	ids := cfg.GeminiModels
-	if len(ids) == 0 {
-		ids = defaultGeminiCDPModels
+	ids := defaultModels
+	if len(cfg.GeminiModels) > 0 && prefix == "gemini-" {
+		ids = cfg.GeminiModels
+	}
+	if len(cfg.ClaudeModels) > 0 && prefix == "claude-" {
+		ids = cfg.ClaudeModels
 	}
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
-		if !strings.HasPrefix(id, "gemini-") {
+		if !strings.HasPrefix(id, prefix) {
 			continue
 		}
 		switch {
 		case strings.HasSuffix(id, "-chat"):
 			d.byID[id] = "chat"
-			d.models = append(d.models, Model{ID: id, OwnedBy: "google", Caps: []Capability{CapWebSearch, CapReasoning, CapVision}})
+			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapWebSearch, CapReasoning, CapVision}})
 		case strings.HasSuffix(id, "-coding"):
 			d.byID[id] = "coding"
-			d.models = append(d.models, Model{ID: id, OwnedBy: "google", Caps: []Capability{CapFunctionCall, CapReasoning}})
+			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapFunctionCall, CapReasoning}})
 		}
 	}
 	return d
+}
+
+// NewGeminiCDP 构造 Gemini CDP 桥 provider。
+func NewGeminiCDP(cfg *config.Config) *GeminiCDP {
+	return newCdpBase(cfg, cfg.GeminiCDPURL, defaultGeminiCDPModels, "gemini-", "google",
+		NewCodingLimiter(2*time.Second, 1500*time.Millisecond)) // Google 最严
 }
 
 func (d *GeminiCDP) Name() string { return "google" }

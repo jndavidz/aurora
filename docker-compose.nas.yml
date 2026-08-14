@@ -61,6 +61,11 @@ services:
       - GEMINI_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
       # - GEMINI_CDP_KEY=      # 可选:与桥的 BRIDGE_AUTH 一致(桥开放局域网时建议配)
       # - GEMINI_MODELS=${GEMINI_MODELS:-}
+      # Claude(claude.ai)真浏览器执行通道(CDP 桥转发,与 Gemini 共用同一桥服务)。
+      # 桥的 claude 适配器在页面上下文里 fetch claude.ai 的 completion 端点
+      # (纯 cookie 认证,无会话令牌;见 docs/CLAUDE.md)。
+      - CLAUDE_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
+      # - CLAUDE_MODELS=${CLAUDE_MODELS:-}
       # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json
       # (JSON 数组,含 cookie + 签名参数 + 会话),只读挂载;仅当文件非空时注册。
       # ⚠️ 字节系风控强(元宝前车之鉴):代码内置限频(2s/账号),只放可丢弃小号。
