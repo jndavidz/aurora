@@ -114,6 +114,7 @@ function spawnDetached(exe, args, env) {
   const child = spawn(exe, args, { detached: true, stdio: ["ignore", logFd, logFd], env: env || process.env });
   child.unref();
   fs.closeSync(logFd);
+  return child;
 }
 
 const chromeArgs = [
@@ -134,14 +135,22 @@ const chromeArgs = [
 ];
 
 let waking = false;
+let bridgePid = null;
 
 async function wake() {
   while (waking) await sleep(300); // 单飞:并发唤醒合并为一次
   waking = true;
   try {
     if (await bridgeUp()) {
-      log("wake: bridge already up");
-      return { status: "already_up" };
+      if (await chromeUp()) {
+        log("wake: bridge already up");
+        return { status: "already_up" };
+      }
+      // 桥还活着但 Chrome 已退出(如保活脚本 Browser.close 优雅关闭后):
+      // 杀掉桥重启,避免 aurora 拿到一个连不上浏览器的死桥。
+      log("wake: bridge up but Chrome dead, killing bridge");
+      try { if (bridgePid) process.kill(bridgePid); } catch {}
+      await sleep(800);
     }
     if (!(await chromeUp())) {
       log("wake: starting Chrome...");
@@ -155,10 +164,10 @@ async function wake() {
     }
     if (!(await bridgeUp())) {
       log("wake: starting bridge...");
-      spawnDetached(process.execPath, [BRIDGE], {
+      bridgePid = spawnDetached(process.execPath, [BRIDGE], {
         ...process.env,
         BRIDGE_HOST: process.env.BRIDGE_HOST || "0.0.0.0",
-      });
+      }).pid;
     }
     const t0 = Date.now();
     while (Date.now() - t0 < MAX_WAIT_MS) {
