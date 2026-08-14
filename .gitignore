@@ -8,6 +8,7 @@ aurora
 tools/authenticator/.proxies.txt.swp
 .env
 *.har
+.runtime/
 .idea/
 /logs/
 /target/
