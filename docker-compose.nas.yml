@@ -55,8 +55,8 @@ services:
       # Gemini(gemini.google.com)网页逆向通道。账号池放 tokens/gemini_accounts.json,
       # 只读挂载;仅当文件非空时 Gemini provider 注册。
       # ⚠️ Google 反爬最强:代码内置严格限频(2s/账号),只放可丢弃小号。
-      - GEMINI_ACCOUNTS=/work/.runtime/tokens/gemini_accounts.json
-      - GEMINI_MODELS=${GEMINI_MODELS:-}
+      # - GEMINI_ACCOUNTS=/work/.runtime/tokens/gemini_accounts.json
+      # - GEMINI_MODELS=${GEMINI_MODELS:-}
       # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json
       # (JSON 数组,含 cookie + 签名参数 + 会话),只读挂载;仅当文件非空时注册。
       # ⚠️ 字节系风控强(元宝前车之鉴):代码内置限频(2s/账号),只放可丢弃小号。
