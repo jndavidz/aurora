@@ -72,8 +72,13 @@ if (-not (Test-Path $BRIDGE)) {
     Write-Host "[!] 未找到桥脚本: $BRIDGE" -ForegroundColor Red
     exit 1
 }
-Write-Host '[2/3] 启动桥(日志见下;停止 = Ctrl+C,然后关闭 Chrome 窗口)' -ForegroundColor Cyan
-Write-Host '[3/3] 桥地址: http://127.0.0.1:8799  局域网: http://<本机IP>:8799' -ForegroundColor Cyan
+# 桥默认监听 0.0.0.0:局域网可达,供 NAS 的 GEMINI_CDP_URL 转发。
+# 仅本机使用可改回 127.0.0.1;局域网开放建议设 BRIDGE_AUTH(与 NAS 的 GEMINI_CDP_KEY 一致)。
+if (-not $env:BRIDGE_HOST) { $env:BRIDGE_HOST = '0.0.0.0' }
+Write-Host '[2/3] 启动桥(监听 ' -NoNewline -ForegroundColor Cyan
+Write-Host "$($env:BRIDGE_HOST)" -NoNewline -ForegroundColor Cyan
+Write-Host ';停止 = Ctrl+C,然后关闭 Chrome 窗口)' -ForegroundColor Cyan
+Write-Host '[3/3] 本机: http://127.0.0.1:8799   局域网/NAS 转发: http://<本机IP>:8799' -ForegroundColor Cyan
 Write-Host '      健康检查: http://127.0.0.1:8799/health' -ForegroundColor Cyan
 Write-Host ''
 node $BRIDGE

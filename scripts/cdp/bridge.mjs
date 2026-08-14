@@ -21,7 +21,9 @@
 //
 // 环境变量:
 //   BRIDGE_PORT        监听端口(默认 8799)
+//   BRIDGE_HOST        监听地址(默认 127.0.0.1;NAS 转发场景设 0.0.0.0)
 //   BRIDGE_AUTH        可选鉴权 token;设置后请求须带 Authorization: Bearer <token>
+//                      (局域网开放时建议设置,与 aurora 的 GEMINI_CDP_KEY 一致)
 //   CDP_PORT           浏览器调试端口(默认 9222)
 //   IDLE_TIMEOUT_MIN   无对话活动自动停止分钟数(默认 30;0=关闭)。停止=经 CDP
 //                      Browser.close 优雅关闭整个 Chrome,再退出桥进程
@@ -38,6 +40,7 @@ import crypto from "node:crypto";
 const { cdp } = await import(new URL("./cdp-helper.mjs", import.meta.url).href);
 
 const PORT = parseInt(process.env.BRIDGE_PORT || "8799", 10);
+const HOST = process.env.BRIDGE_HOST || "127.0.0.1"; // 0.0.0.0 = 局域网可达(供 NAS 转发)
 const AUTH = process.env.BRIDGE_AUTH || "";
 const CDP_HOST = "127.0.0.1";
 const CDP_PORT = parseInt(process.env.CDP_PORT || "9222", 10);
@@ -586,8 +589,8 @@ process.on("SIGINT", () => {
 
 // ─── 启动 ────────────────────────────────────────────────────────
 const hasTokens = loadState();
-server.listen(PORT, "127.0.0.1", async () => {
-  console.log("[bridge] listening on http://127.0.0.1:" + PORT);
+server.listen(PORT, HOST, async () => {
+  console.log("[bridge] listening on http://" + HOST + ":" + PORT);
   console.log("[bridge] auth:", AUTH ? "enabled" : "disabled (localhost only)");
   console.log("[bridge] tokens:", hasTokens ? "loaded" : "MISSING (run capture-streamgenerate.mjs once)");
   console.log("[bridge] idle auto-stop:", IDLE_TIMEOUT_MS > 0 ? Math.round(IDLE_TIMEOUT_MS / 60000) + "min" : "disabled");

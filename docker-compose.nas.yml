@@ -52,10 +52,12 @@ services:
       # uid|cookie 串),只读挂载;仅当文件非空时 Grok provider 注册。
       - GROK_COOKIES=/work/.runtime/tokens/grok_cookies.txt
       - GROK_MODELS=${GROK_MODELS:-}
-      # Gemini(gemini.google.com)网页逆向通道。账号池放 tokens/gemini_accounts.json,
-      # 只读挂载;仅当文件非空时 Gemini provider 注册。
-      # ⚠️ Google 反爬最强:代码内置严格限频(2s/账号),只放可丢弃小号。
-      # - GEMINI_ACCOUNTS=/work/.runtime/tokens/gemini_accounts.json
+      # Gemini(gemini.google.com)真浏览器执行通道(CDP 桥转发)。
+      # 直连已停用(数据中心 IP + 模拟指纹被 Google 风控);现由家庭 PC 上的
+      # scripts/cdp/bridge.mjs(真浏览器页内 fetch,零指纹模拟)执行,NAS 只做 HTTP 转发。
+      # 前置:PC 桥已启动并监听局域网(见 docs/GEMINI.md §八)。
+      - GEMINI_CDP_URL=http://10.10.10.6:8799
+      # - GEMINI_CDP_KEY=      # 可选:与桥的 BRIDGE_AUTH 一致(桥开放局域网时建议配)
       # - GEMINI_MODELS=${GEMINI_MODELS:-}
       # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json
       # (JSON 数组,含 cookie + 签名参数 + 会话),只读挂载;仅当文件非空时注册。

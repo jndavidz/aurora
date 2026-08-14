@@ -87,7 +87,7 @@ if cfg.KimiWebTokens != ""      { registry.Register(provider.NewKimi(cfg)) }
 if cfg.DoubaoAccounts != ""     { registry.Register(provider.NewDoubao(cfg)) }
 if cfg.QianwenWebTokens != ""   { registry.Register(provider.NewQianwen(cfg)) }
 if cfg.GrokCookies != ""        { registry.Register(provider.NewGrok(cfg)) }
-if cfg.GeminiAccounts != ""     { registry.Register(provider.NewGemini(cfg)) }
+if cfg.GeminiCDPURL != ""       { registry.Register(provider.NewGeminiCDP(cfg)) } // CDP 桥转发
 ```
 
 注册后不可注销。N/A 的 provider 不注册即可。
@@ -281,9 +281,17 @@ responsesToolCalling(/v1/responses) ──┘
 
 ### 6.6 Gemini(`internal/geminweb/` + `internal/provider/gemini*.go`)
 
-**模型**:`gemini-3-flash-chat` / `gemini-3-flash-coding`。
+**模型**:`gemini-3-flash-chat`(CDP 桥通道;`-coding` 桥暂未实现)。
 
-**协议要点**:
+**当前通道 = CDP 桥转发**(commit 见 local-toolfix):
+- 直连(`geminweb` + `gemini_accounts.json`)因数据中心 IP + 模拟指纹被 Google 风控
+  (BardErrorInfo 1096/1157)已停用(commit ff4af80,router 中注释保留)。
+- 现由家庭 PC 的 `scripts/cdp/bridge.mjs` 用真实浏览器页内 fetch 执行(零指纹模拟),
+  aurora 配 `GEMINI_CDP_URL=http://<PC>:8799` 后注册 `GeminiCDP` provider
+  (`internal/provider/gemini_cdp.go`),只做 OpenAI 兼容 HTTP 转发。
+- 详情与按需启动/自动停止/令牌自愈见 `docs/GEMINI.md` §八。
+
+**直连协议要点**(历史,若恢复直连需先按 §八"协议更新"修正):
 - **StreamGenerate 端点**:`POST https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate`
   (RPC batchexecute)。
 - **认证**:`at` 令牌 = `window.WIZ_global_data.SNlM0e`(base64url:时间戳,会话级固定);
@@ -292,7 +300,7 @@ responsesToolCalling(/v1/responses) ──┘
 - **`card_content` 过滤**(commit 3622496):剥离 `http://googleusercontent.com/card_content/` 链接。
 - **coding**:走文本协议 `<tool_call>`,与 ChatGPT 同源。
 
-**认证**:`gemini_accounts.json`(JSON 数组,含 cookie/at/snlM6e/fsid,会话级固定)。
+**认证(直连)**:`gemini_accounts.json`(JSON 数组,含 cookie/at/snlM6e/fsid,会话级固定)。
 
 ### 6.7 豆包 Doubao(`internal/doubaoweb/` + `internal/provider/doubao*.go`)
 
@@ -423,7 +431,7 @@ responsesToolCalling(/v1/responses) ──┘
 | GLM | `GLM_WEB_TOKENS` | `GLM_MODELS` | `GLM_WEB_BASE`、`GLM_PROXY` |
 | Kimi | `KIMI_WEB_TOKENS` | `KIMI_MODELS` | `KIMI_WEB_BASE`、`KIMI_PROXY` |
 | Grok | `GROK_COOKIES` | `GROK_MODELS` | — |
-| Gemini | `GEMINI_ACCOUNTS` | `GEMINI_MODELS` | — |
+| Gemini | `GEMINI_CDP_URL`(桥转发;直连 `GEMINI_ACCOUNTS` 已停用) | `GEMINI_MODELS` | `GEMINI_CDP_KEY`(可选,桥鉴权) |
 | Doubao | `DOUBAO_ACCOUNTS`(JSON) | `DOUBAO_MODELS` | — |
 | Qianwen | `QIANWEN_WEB_TOKENS` | `QIANWEN_MODELS` | `QIANWEN_WEB_BASE`、`QIANWEN_PROXY` |
 

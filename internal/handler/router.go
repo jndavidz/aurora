@@ -25,11 +25,16 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	// 仅当配置了 token 池时才注册(避免 /v1/models 广告无可用 token 的模型)。
 	// 注册顺序决定 /v1/models 的排列顺序(先注册的在前)。
 	// 按用户 2026-08-14 要求的排列:GPT → DeepSeek → GLM → Kimi → Qianwen → Doubao → Grok
-	// Gemini 已停用(数据中心 IP + 模拟指纹被 Google 风控拒绝,见 commit ff4af80)。
+	// Gemini 直连已停用(数据中心 IP + 模拟指纹被 Google 风控拒绝,见 commit ff4af80);
+	// 现走 CDP 桥通道(真浏览器执行,家庭 PC 上的 scripts/cdp/bridge.mjs):
+	// NAS 只做 HTTP 转发,GEMINI_CDP_URL 配置后注册(见 docs/GEMINI.md §八)。
 	registry := provider.NewRegistry()
 	// if cfg.GeminiAccounts != "" {
 	// 	registry.Register(provider.NewGemini(cfg))
 	// }
+	if cfg.GeminiCDPURL != "" {
+		registry.Register(provider.NewGeminiCDP(cfg))
+	}
 	if cfg.DeepSeekWebTokens != "" {
 		registry.Register(provider.NewDeepSeek(cfg))
 	}

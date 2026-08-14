@@ -121,15 +121,24 @@ curl -N http://127.0.0.1:8080/v1/responses -H "Content-Type: application/json" \
 Chrome for Testing 152(干净独立 profile,--remote-debugging-port=9222)
    │  CDP(Runtime.evaluate + Network 监听)
    ▼
-scripts/cdp/bridge.mjs(Node 零依赖,127.0.0.1:8799)
+scripts/cdp/bridge.mjs(Node 零依赖,127.0.0.1:8799;NAS 转发场景 0.0.0.0)
    │  OpenAI 兼容 /v1/chat/completions(流式 + 非流式)
    ▼
-客户端(pi/zcode/aurora-chat.html)把 gemini 模型地址指向 http://<PC>:8799
+aurora 网关(NAS,65432) —— GEMINI_CDP_URL=http://<PC>:8799,只做 HTTP 转发
+   │  /v1/models 出现 gemini-3-flash-chat,客户端单入口
+   ▼
+客户端(pi/zcode/aurora-chat.html)
 ```
 
-家庭 PC 跑桥 + 浏览器(需要真核显做真实 WebGL 指纹);NAS 网关不用动。
+家庭 PC 跑桥 + 浏览器(需要真核显做真实 WebGL 指纹);NAS 经 `GeminiCDP` provider
+(`internal/provider/gemini_cdp.go`)转发,不动其余直连通道。
 **不可放 NAS**:DS416play 内核 3.10 跑不动现代 Chromium,且无 GPU → SwiftShader
 软件渲染恰是 Google 认 bot 的特征。
+
+> NAS 侧只需在 compose 配置(已内置 docker-compose.nas.yml):
+> `GEMINI_CDP_URL=http://<PC_IP>:8799`(桥需监听局域网:start-gemini.ps1 默认
+> `BRIDGE_HOST=0.0.0.0`;`GEMINI_CDP_KEY` 与桥的 `BRIDGE_AUTH` 一致时启用鉴权)。
+> 注意 PC 的 IP 需固定(或改 compose),桥不在线时 gemini 请求返回 502。
 
 ### 组件(scripts/cdp/)
 

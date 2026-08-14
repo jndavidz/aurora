@@ -61,8 +61,12 @@ type Config struct {
 	GrokModels  []string // 暴露的模型目录
 
 	// Gemini(gemini.google.com)网页逆向通道配置。
-	GeminiAccounts string   // 网页账号池 JSON 文件路径(见 docs/GEMINI.md)
+	GeminiAccounts string   // 网页账号池 JSON 文件路径(见 docs/GEMINI.md;直连已停用)
 	GeminiModels   []string // 暴露的模型目录
+	// Gemini CDP 桥通道(真浏览器执行,推荐):NAS 只做 HTTP 转发,
+	// 真浏览器/指纹由家庭 PC 侧的 scripts/cdp/bridge.mjs 负责。
+	GeminiCDPURL string // 桥地址,如 http://10.10.10.6:8799;空=不注册 CDP provider
+	GeminiCDPKey string // 可选:桥的 BRIDGE_AUTH 对应 token
 
 	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
 	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
@@ -123,6 +127,8 @@ func Load() Config {
 
 		GeminiAccounts: os.Getenv("GEMINI_ACCOUNTS"),
 		GeminiModels:   splitCSV(os.Getenv("GEMINI_MODELS")),
+		GeminiCDPURL:   os.Getenv("GEMINI_CDP_URL"),
+		GeminiCDPKey:   os.Getenv("GEMINI_CDP_KEY"),
 
 		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
 		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),
