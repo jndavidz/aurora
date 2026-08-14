@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"time"
 
 	"aurora/internal/config"
 	"aurora/internal/grokweb"
@@ -28,6 +29,8 @@ type Grok struct {
 	client *grokweb.Client
 	models []Model
 	byID   map[string]*grokModel
+	// coding 限频(chat 不限)
+	limiter *CodingLimiter
 }
 
 // defaultGrokModels 是 GROK_MODELS 未配置时的默认目录。
@@ -38,7 +41,7 @@ var defaultGrokModels = []string{
 
 // NewGrok 构造 Grok provider。无账号池时仍可构造(返回 502 时提示)。
 func NewGrok(cfg *config.Config) *Grok {
-	d := &Grok{cfg: cfg, byID: make(map[string]*grokModel)}
+	d := &Grok{cfg: cfg, byID: make(map[string]*grokModel), limiter: NewCodingLimiter(2*time.Second, 1500*time.Millisecond)}
 	ids := cfg.GrokModels
 	if len(ids) == 0 {
 		ids = defaultGrokModels

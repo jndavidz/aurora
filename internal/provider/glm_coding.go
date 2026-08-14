@@ -19,6 +19,7 @@ import (
 // 也不认 DeepSeek <|tool▁calls▁begin|>;实测输出 markdown 围栏 JSON。
 // 因此 coding 变体用 glmBuildInstructions(围栏格式指令)+ FenceParser(流式拦截围栏)。
 func (d *Glm) codingResponses(c *gin.Context, m *glmModel, req *official.ResponsesAPIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
@@ -209,6 +210,7 @@ func (d *Glm) codingResponsesNonStream(c *gin.Context, req *official.ResponsesAP
 
 // codingCompletions 处理智谱 coding 变体(/v1/chat/completions)。
 func (d *Glm) codingCompletions(c *gin.Context, m *glmModel, req *official.APIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})

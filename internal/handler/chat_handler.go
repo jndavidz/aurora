@@ -30,6 +30,8 @@ type ChatHandler struct {
 	sessions    *SessionManager
 	cfg         *config.Config
 	providers   *provider.Registry
+	// coding 限频(chat 不限):gpt-coding 工具调用是 agent 连发流量
+	codingLimiter *provider.CodingLimiter
 }
 
 func NewChatHandler(pool *accounts.Pool, cfg *config.Config, providers *provider.Registry) *ChatHandler {
@@ -38,6 +40,8 @@ func NewChatHandler(pool *accounts.Pool, cfg *config.Config, providers *provider
 		sessions:    NewSessionManager(),
 		cfg:         cfg,
 		providers:   providers,
+		// ChatGPT 免费账号周限额 + 行为分析,工具调用突发最伤,基础 2s + 抖动 0~2s
+		codingLimiter: provider.NewCodingLimiter(2*time.Second, 2*time.Second),
 	}
 }
 
@@ -891,6 +895,7 @@ type toolCallingError struct {
 //
 // 返回 (outcome, nil) 成功;(nil, err) 失败(调用方负责输出错误)。
 func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *officialtypes.APIRequest, client **bogdanfinn.TlsClient, account *accounts.Account, clientState **chatgpt.ChatClientState, reqModel *string, uid *string, proxyUrl *string, inputTokens *int) (*toolCallingOutcome, *toolCallingError) {
+	h.codingLimiter.Wait() // 仅 coding 限频(每次客户端请求一次),chat 不限
 	tools := originalRequest.Tools
 	maxRefusalRetries := h.cfg.RefusalRetries
 	if maxRefusalRetries <= 0 {

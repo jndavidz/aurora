@@ -21,6 +21,7 @@ import (
 // 客户端自定义工具作为"尽力而为"通道:提示词引导模型输出围栏 JSON,
 // FenceParser 捕获;模型不输出时正常返回文本(沙盒执行结果)。
 func (d *Grok) codingResponses(c *gin.Context, m *grokModel, req *official.ResponsesAPIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
 		c.JSON(502, gin.H{"error": "grok web client unavailable: missing GROK_COOKIES?"})
@@ -161,6 +162,7 @@ func (d *Grok) codingResponsesNonStream(c *gin.Context, req *official.ResponsesA
 
 // codingCompletions 处理 Grok coding 变体(/v1/chat/completions)。
 func (d *Grok) codingCompletions(c *gin.Context, m *grokModel, req *official.APIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
 		c.JSON(502, gin.H{"error": "grok web client unavailable: missing GROK_COOKIES?"})

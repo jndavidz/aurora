@@ -380,6 +380,26 @@ responsesToolCalling(/v1/responses) ──┘
 | Kimi | 私有区字符 `🛠`/`🎨`/``/`` | `kimiweb/stream.go` `citationStripper` |
 | Gemini | `http://googleusercontent.com/card_content/` | `geminweb/client.go` `sanitizeText`(commit 3622496) |
 
+### 7.4 限频策略(chat 不限,coding 限)
+
+用户拍板的全局策略:**chat 不限频**(真人使用,天然有人类节奏,限制只会拖慢真人);
+**只对 coding 限频**(agent 连发工具调用是风控/封号主因)。
+实现:`internal/provider/coding_limit.go` 的 `CodingLimiter` —— 全局串行,
+间隔 = 基础 + 随机抖动,各 provider 的 coding 入口调用 `limiter.Wait()`:
+
+| provider | coding 限频 | 备注 |
+|---|---|---|
+| ChatGPT | 2s + rand(0~2s) | `toolCallingRetry` 单入口(chat/responses 共享) |
+| Gemini | 2s + rand(0~1.5s) | CDP 桥转发,限频在 aurora 侧;桥侧默认不限 |
+| Grok | 2s + rand(0~1.5s) | 防 `usage_limit_reached` |
+| DeepSeek | 1.5s + rand(0~1.5s) | — |
+| GLM | 1.5s + rand(0~1.5s) | — |
+| Kimi | 1.5s + rand(0~1.5s) | — |
+| Doubao | — | coding 已禁用 |
+| Qianwen | — | 无 coding 变体 |
+
+> 单测:`internal/provider/coding_limit_test.go`(首调用不阻塞、间隔 >= base、抖动范围)。
+
 ## 八、接线点一览
 
 | 文件 | 职责 |

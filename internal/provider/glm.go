@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"time"
 
 	"aurora/internal/config"
 	"aurora/internal/glmweb"
@@ -31,6 +32,8 @@ type Glm struct {
 	byID   map[string]*glmModel
 	// lastToken 记录当前生效的池 token,轮换失败时避免死循环。
 	lastToken string
+	// coding 限频(chat 不限)
+	limiter *CodingLimiter
 }
 
 // defaultGlmModels 是 GLM_MODELS 未配置时的默认目录。
@@ -42,7 +45,7 @@ var defaultGlmModels = []string{
 
 // NewGlm 构造智谱 provider。
 func NewGlm(cfg *config.Config) *Glm {
-	d := &Glm{cfg: cfg, byID: make(map[string]*glmModel)}
+	d := &Glm{cfg: cfg, byID: make(map[string]*glmModel), limiter: NewCodingLimiter(1500*time.Millisecond, 1500*time.Millisecond)}
 	ids := cfg.GlmModels
 	if len(ids) == 0 {
 		ids = defaultGlmModels

@@ -46,9 +46,11 @@ const HOST = process.env.BRIDGE_HOST || "127.0.0.1"; // 0.0.0.0 = 局域网可�
 const AUTH = process.env.BRIDGE_AUTH || "";
 const CDP_HOST = "127.0.0.1";
 const CDP_PORT = parseInt(process.env.CDP_PORT || "9222", 10);
-// Gemini 限频(防封号):串行 + 每请求间隔 = 基础 2s + 随机抖动 0~1.5s(更像真人节奏)。
-const MIN_INTERVAL_MS = parseInt(process.env.MIN_INTERVAL_MS || "2000", 10);
-const JITTER_MS = parseInt(process.env.JITTER_MS || "1500", 10);
+// 限频策略(用户拍板):chat 不限频(真人使用);coding 限频在 aurora 侧完成
+// (GeminiCDP 等 provider 的 coding 入口带 2s+抖动)。桥默认 0 间隔、只串行。
+// 若要让桥自身限频(如客户端直连桥的场景),再设 MIN_INTERVAL_MS。
+const MIN_INTERVAL_MS = parseInt(process.env.MIN_INTERVAL_MS || "0", 10);
+const JITTER_MS = parseInt(process.env.JITTER_MS || "0", 10);
 // 无活动自动停止:仅统计对话请求(/health 与 /v1/models 不算活动,防监控探针续命)。
 // 0 关闭自动停止。
 const IDLE_TIMEOUT_MS = (parseInt(process.env.IDLE_TIMEOUT_MIN || "30", 10) || 0) * 60 * 1000;
@@ -600,7 +602,7 @@ server.listen(PORT, HOST, async () => {
   console.log("[bridge] auth:", AUTH ? "enabled" : "disabled (localhost only)");
   console.log("[bridge] tokens:", hasTokens ? "loaded" : "MISSING (run capture-streamgenerate.mjs once)");
   console.log("[bridge] idle auto-stop:", IDLE_TIMEOUT_MS > 0 ? Math.round(IDLE_TIMEOUT_MS / 60000) + "min" : "disabled");
-  console.log("[bridge] rate limit:", MIN_INTERVAL_MS + "ms + jitter 0-" + JITTER_MS + "ms");
+  console.log("[bridge] rate limit:", MIN_INTERVAL_MS > 0 ? (MIN_INTERVAL_MS + "ms + jitter 0-" + JITTER_MS + "ms") : "disabled (chat free; coding limited by aurora)");
   const c = await ensureConn().catch(() => null);
   console.log("[bridge] browser:", c ? "connected" : "NOT connected");
   console.log("[bridge] account:", state.account || "unknown");

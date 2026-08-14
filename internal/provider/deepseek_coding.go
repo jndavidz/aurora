@@ -21,6 +21,7 @@ import (
 // function_call item 回吐。复用 internal/toolcall 的解析/恢复/重试机制,
 // 仅标签不同(DeepSeek 用 <|tool▁calls▁begin|> 系)。
 func (d *DeepSeek) codingResponses(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil {
 		c.JSON(502, gin.H{"error": "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?"})
@@ -299,6 +300,7 @@ func (d *DeepSeek) codingNonStream(c *gin.Context, m *deepseekModel, req *offici
 
 // codingCompletions 处理 DeepSeek coding 变体(/v1/chat/completions)。
 func (d *DeepSeek) codingCompletions(c *gin.Context, m *deepseekModel, req *official.APIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil {
 		c.JSON(502, gin.H{"error": "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?"})

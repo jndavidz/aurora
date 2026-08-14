@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"time"
 
 	"aurora/internal/config"
 	"aurora/internal/deepseekweb"
@@ -35,6 +36,8 @@ type DeepSeek struct {
 	client *deepseekweb.Client
 	models []Model
 	byID   map[string]*deepseekModel
+	// coding 限频(chat 不限)
+	limiter *CodingLimiter
 }
 
 // defaultDeepSeekModels 是 DEEPSEEK_MODELS 未配置时的默认目录。
@@ -47,7 +50,7 @@ var defaultDeepSeekModels = []string{
 
 // NewDeepSeek 构造 DeepSeek provider。无 token 池时仍可构造(返回 502 时提示)。
 func NewDeepSeek(cfg *config.Config) *DeepSeek {
-	d := &DeepSeek{cfg: cfg, byID: make(map[string]*deepseekModel)}
+	d := &DeepSeek{cfg: cfg, byID: make(map[string]*deepseekModel), limiter: NewCodingLimiter(1500*time.Millisecond, 1500*time.Millisecond)}
 	ids := cfg.DeepSeekModels
 	if len(ids) == 0 {
 		ids = defaultDeepSeekModels

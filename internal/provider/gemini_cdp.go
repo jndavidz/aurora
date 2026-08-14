@@ -45,6 +45,8 @@ type GeminiCDP struct {
 	urls   []string          // 桥池
 	rr     int64             // 轮询游标
 	http   *http.Client
+	// coding 限频(chat 不限):agent 连发工具调用是 Google 风控主因
+	limiter *CodingLimiter
 
 	// 桥熔断:某桥网络不通/5xx 后冷却 60s(如办公室桥关机时快速跳过,不拖慢请求)
 	mu        sync.Mutex
@@ -60,6 +62,7 @@ func NewGeminiCDP(cfg *config.Config) *GeminiCDP {
 		cfg:       cfg,
 		byID:      make(map[string]string),
 		deadUntil: make(map[string]time.Time),
+		limiter:   NewCodingLimiter(2*time.Second, 1500*time.Millisecond), // Google 最严
 	}
 	// 短拨号超时:某桥离线(如办公室 PC 关机)时 3s 内快速失败并换下一桥,
 	// 而不是等系统 TCP 超时几十秒。总超时仍 10 分钟(流式长响应)。
@@ -498,6 +501,7 @@ func (d *GeminiCDP) responsesNonStream(c *gin.Context, req *official.ResponsesAP
 // codingResponses 处理 coding 变体(/v1/responses)。
 // prompt 构建与解析复用直连时代 gemini_coding.go 的同一套(围栏 JSON + FenceParser)。
 func (d *GeminiCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	prompt := geminiCodingPromptFromResponses(req)
 	if req.Stream {
 		d.codingResponsesStream(c, req, prompt)
@@ -595,6 +599,7 @@ func (d *GeminiCDP) codingResponsesNonStream(c *gin.Context, req *official.Respo
 
 // codingCompletions 处理 coding 变体(/v1/chat/completions)。
 func (d *GeminiCDP) codingCompletions(c *gin.Context, req *official.APIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	prompt := geminiCodingPromptFromAPI(req)
 	if req.Stream {
 		d.codingCompletionsStream(c, req, prompt)

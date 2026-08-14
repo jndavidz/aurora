@@ -197,13 +197,23 @@ node scripts/cdp/bridge.mjs
 `MIN_INTERVAL_MS`/`JITTER_MS`(限频,默认 2000/1500)。
 令牌缓存:`.runtime/bridge/gemini_session.json`(已 gitignore)。
 
-### 限频(防封号)
+### 限频策略(chat 不限,coding 限)
 
-- **桥侧**:单通道串行,每请求间隔 = **基础 2s + 随机抖动 0~1.5s**(更像真人节奏);
-  `MIN_INTERVAL_MS`/`JITTER_MS` 可调。
-- **aurora 侧桥池**:`GEMINI_CDP_URL` 逗号分隔多桥 —— 轮询 + 故障转移,
-  某桥离线/5xx 熔断 60s 快速跳过(3s 拨号超时,不会挂几十秒);
-  桥数 = 小号数 = 吞吐翻倍,但**每桥必须登录不同小号**(同号双端互踢)。
+用户拍板的全局策略:**chat 不限频**(真人使用,天然有人类节奏);
+**只对 coding 限频**(agent 连发工具调用是风控/封号主因)。
+
+- **Gemini coding**(`gemini-3-flash-coding`):aurora 侧 `CodingLimiter` ——
+  全局串行,间隔 = **基础 2s + 随机抖动 0~1.5s**(`internal/provider/gemini_cdp.go`)。
+- **桥侧默认不限**:`MIN_INTERVAL_MS` 默认 0(chat 自由通过,仅串行防并发冲突);
+  如客户端直连桥且需要桥侧限频,再设 `MIN_INTERVAL_MS=2000`/`JITTER_MS=1500`。
+- 其余 provider 的 coding 变体同样限频(见 `docs/ARCHITECTURE.md` §7.4):
+  ChatGPT 2s+0~2s、Grok 2s+0~1.5s、DeepSeek/GLM/Kimi 1.5s+0~1.5s。
+
+### 多桥(桥池)
+
+`GEMINI_CDP_URL` 逗号分隔多桥:轮询 + 故障转移 —— 某桥离线/5xx 熔断 60s
+快速跳过(3s 拨号超时,不会挂几十秒),如办公室桥关机时自动全走家庭桥。
+桥数 = 小号数 = 吞吐翻倍,但**每桥必须登录不同小号**(同号双端互踢)。
 
 ### 变体(-chat / -coding)
 

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"time"
 
 	"aurora/internal/config"
 	"aurora/internal/kimiweb"
@@ -30,6 +31,8 @@ type Kimi struct {
 	byID   map[string]*kimiModel
 	// lastToken 记录当前生效的池 token,轮换失败时避免死循环。
 	lastToken string
+	// coding 限频(chat 不限)
+	limiter *CodingLimiter
 }
 
 // defaultKimiModels 是 KIMI_MODELS 未配置时的默认目录。
@@ -40,7 +43,7 @@ var defaultKimiModels = []string{
 
 // NewKimi 构造 Kimi provider。
 func NewKimi(cfg *config.Config) *Kimi {
-	d := &Kimi{cfg: cfg, byID: make(map[string]*kimiModel)}
+	d := &Kimi{cfg: cfg, byID: make(map[string]*kimiModel), limiter: NewCodingLimiter(1500*time.Millisecond, 1500*time.Millisecond)}
 	ids := cfg.KimiModels
 	if len(ids) == 0 {
 		ids = defaultKimiModels

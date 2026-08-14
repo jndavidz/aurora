@@ -23,6 +23,7 @@ import (
 //   - 因此 coding 变体 = 工具上下文注入(尽力而为)+ 原生工具透传(仅转发
 //     客户端声明过的同名工具,其余静默——模型已把结果折进正文)。
 func (d *Kimi) codingResponses(c *gin.Context, m *kimiModel, req *official.ResponsesAPIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
@@ -181,6 +182,7 @@ func (d *Kimi) codingResponsesNonStream(c *gin.Context, req *official.ResponsesA
 
 // codingCompletions 处理 Kimi coding 变体(/v1/chat/completions)。
 func (d *Kimi) codingCompletions(c *gin.Context, m *kimiModel, req *official.APIRequest) {
+	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
