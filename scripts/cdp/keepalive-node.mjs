@@ -49,6 +49,7 @@ async function main() {
     console.log("[keepalive] wake:", w.status, w.body.slice(0, 100));
   } catch (e) {
     console.log("[keepalive] wake failed (keeper down?):", e.message);
+    process.exitCode = 1;
     return;
   }
   // 2. 等桥就绪
@@ -60,10 +61,11 @@ async function main() {
     } catch {}
     await sleep(2000);
   }
-  if (!ok) { console.log("[keepalive] bridge not ready"); return; }
+  if (!ok) { console.log("[keepalive] bridge not ready"); process.exitCode = 1; return; }
   console.log("[keepalive] bridge ready");
   // 3. 各 provider 发消息(活动=续期)
   const health = JSON.parse((await req({ ...BRIDGE, path: "/health", method: "GET" }, null)).body);
+  let anyFail = false;
   for (const m of MODELS) {
     const prov = m.startsWith("gemini-") ? "gemini" : "claude";
     const t = health.providers && health.providers[prov] && health.providers[prov].tokens;
@@ -73,8 +75,10 @@ async function main() {
     try {
       const r = await req({ ...BRIDGE, path: "/v1/chat/completions", method: "POST", headers: { "Content-Type": "application/json" } }, body);
       const bad = r.body.includes('"error"');
+      if (bad) anyFail = true;
       console.log("[keepalive]", m, bad ? "FAILED: " + r.body.slice(0, 150) : "OK");
     } catch (e) {
+      anyFail = true;
       console.log("[keepalive]", m, "ERR:", e.message);
     }
     await sleep(3000);
@@ -100,6 +104,7 @@ async function main() {
   } catch (e) {
     console.log("[keepalive] close err:", e.message);
   }
+  if (anyFail) process.exitCode = 1;
   console.log("[keepalive] done");
 }
 
