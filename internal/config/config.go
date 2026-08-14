@@ -84,6 +84,10 @@ type Config struct {
 	MinimaxDeviceID  string // URL 参数 device_id(数字;抓包提取)
 	MinimaxUserID    string // URL 参数 user_id(数字;抓包提取)
 
+	// Mimo(aistudio.xiaomimimo.com)网页逆向通道配置(直连,协议见 docs/MIMO.md)。
+	MimoWebTokens string // token 池文件路径(每行一个 cookie xiaomichatbot_ph 值)
+	MimoModels    []string
+
 	// 腾讯元宝(yuanbao.tencent.com)网页逆向通道配置。
 	YuanbaoWebBase   string   // 网页端 base,默认 https://yuanbao.tencent.com
 	YuanbaoWebTokens string   // 网页 token 注入池文件路径(每行一条 "<x-uskey>\t<cookie header>")
@@ -156,6 +160,9 @@ func Load() Config {
 		MinimaxAgentID:   os.Getenv("MINIMAX_AGENT_ID"),
 		MinimaxDeviceID:  os.Getenv("MINIMAX_DEVICE_ID"),
 		MinimaxUserID:    os.Getenv("MINIMAX_USER_ID"),
+
+		MimoWebTokens: os.Getenv("MIMO_WEB_TOKENS"),
+		MimoModels:    splitCSV(os.Getenv("MIMO_MODELS")),
 
 		YuanbaoWebBase:   getEnv("YUANBAO_WEB_BASE", "https://yuanbao.tencent.com"),
 		YuanbaoWebTokens: os.Getenv("YUANBAO_WEB_TOKENS"),

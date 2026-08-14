@@ -5,12 +5,13 @@ import (
 	"io"
 	"strings"
 
+	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
 	"aurora/internal/chatgpt"
 	"aurora/internal/config"
+	"aurora/internal/provider"
 	officialtypes "aurora/typings/official"
-	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,10 +19,11 @@ import (
 type AudioHandler struct {
 	accountPool *accounts.Pool
 	cfg         *config.Config
+	mimo        *provider.Mimo // 可选:mimo ASR 通道(/v1/audio/transcriptions model=mimo-*-asr)
 }
 
-func NewAudioHandler(pool *accounts.Pool, cfg *config.Config) *AudioHandler {
-	return &AudioHandler{accountPool: pool, cfg: cfg}
+func NewAudioHandler(pool *accounts.Pool, cfg *config.Config, mimo *provider.Mimo) *AudioHandler {
+	return &AudioHandler{accountPool: pool, cfg: cfg, mimo: mimo}
 }
 
 // ── TTS ──
@@ -245,6 +247,41 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 			"param":   "file",
 			"code":    "empty_file",
 		}})
+		return
+	}
+
+	// mimo-v2.5-asr 走小米 Mimo 网页 ASR(无需 ChatGPT 账号)
+	if strings.HasPrefix(model, "mimo-") && strings.HasSuffix(model, "-asr") {
+		if h.mimo == nil {
+			c.JSON(502, gin.H{"error": gin.H{
+				"message": "mimo ASR unavailable: MIMO_WEB_TOKENS not configured",
+				"type":    "transcription_error",
+				"code":    "mimo_unavailable",
+			}})
+			return
+		}
+		text, err := h.mimo.AsrText(fileHeader.Filename, audioData)
+		if err != nil {
+			c.JSON(502, gin.H{"error": gin.H{
+				"message": err.Error(),
+				"type":    "transcription_error",
+				"code":    "transcription_error",
+			}})
+			return
+		}
+		switch responseFormat {
+		case "json":
+			c.JSON(200, officialtypes.TranscriptionResponse{Text: text})
+		case "text":
+			c.Data(200, "text/plain; charset=utf-8", []byte(text))
+		case "verbose_json":
+			c.JSON(200, officialtypes.VerboseTranscriptionResponse{
+				Task: "transcribe", Language: language, Duration: 0, Text: text,
+				Segments: []officialtypes.TranscriptionSegment{}, Words: []officialtypes.TranscriptionWord{},
+			})
+		default:
+			c.Data(200, respContentType, []byte(text))
+		}
 		return
 	}
 

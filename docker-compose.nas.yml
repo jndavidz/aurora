@@ -73,6 +73,10 @@ services:
       - MINIMAX_DEVICE_ID=92622880
       - MINIMAX_USER_ID=544661156126703622
       # - MINIMAX_AGENT_ID=430731272630966   # 普通模式 agent,默认已内置
+      # Mimo(aistudio.xiaomimimo.com)网页逆向通道(直连)。token 放
+      # tokens/mimo_tokens.txt(每行一个完整 Cookie 串:xiaomichatbot_ph +
+      # xiaomichatbot_serviceToken + userId);协议见 docs/MIMO.md。
+      - MIMO_WEB_TOKENS=/work/.runtime/tokens/mimo_tokens.txt
       # 豆包(www.doubao.com)网页逆向通道。账号池放 tokens/doubao_accounts.json
       # (JSON 数组,含 cookie + 签名参数 + 会话),只读挂载;仅当文件非空时注册。
       # ⚠️ 字节系风控强(元宝前车之鉴):代码内置限频(2s/账号),只放可丢弃小号。

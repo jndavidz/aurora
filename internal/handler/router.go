@@ -41,6 +41,11 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.MinimaxWebTokens != "" {
 		registry.Register(provider.NewMinimax(cfg))
 	}
+	var mimoProvider *provider.Mimo
+	if cfg.MimoWebTokens != "" {
+		mimoProvider = provider.NewMimo(cfg)
+		registry.Register(mimoProvider)
+	}
 	if cfg.DeepSeekWebTokens != "" {
 		registry.Register(provider.NewDeepSeek(cfg))
 	}
@@ -65,7 +70,7 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 
 	chatHandler := NewChatHandler(accountPool, cfg, registry)
 	imageHandler := NewImageHandler(accountPool, cfg)
-	audioHandler := NewAudioHandler(accountPool, cfg)
+	audioHandler := NewAudioHandler(accountPool, cfg, mimoProvider)
 	authHandler := NewAuthHandler(accountPool)
 	modelsHandler := NewModelsHandler(registry)
 
