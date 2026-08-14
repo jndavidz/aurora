@@ -54,6 +54,9 @@ const JITTER_MS = parseInt(process.env.JITTER_MS || "0", 10);
 // 无活动自动停止:仅统计对话请求(/health 与 /v1/models 不算活动,防监控探针续命)。
 // 0 关闭自动停止。
 const IDLE_TIMEOUT_MS = (parseInt(process.env.IDLE_TIMEOUT_MIN || "30", 10) || 0) * 60 * 1000;
+// Claude 限额预警阈值(5h 窗口利用率):默认 0.8(>=80% 才在回复末尾附加提醒,不打扰日常);
+// 设 0 = 每条回复都附用量小尾巴。
+const CLAUDE_LIMIT_WARN = parseFloat(process.env.CLAUDE_LIMIT_WARN || "0.8");
 let lastActivity = Date.now();
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
@@ -548,8 +551,8 @@ const claude = {
             }
             if (j.type === "message_stop") {
               self.done = true;
-              // 限额预警:5 小时窗口用掉 80% 以上时,在回复末尾附加提示(真人可见)
-              if (claudeState.limits && claudeState.limits.fiveHUtil >= 0.8) {
+              // 限额预警:5 小时窗口用量 >= 阈值(默认 80%)时,在回复末尾附加提示
+              if (claudeState.limits && claudeState.limits.fiveHUtil >= CLAUDE_LIMIT_WARN) {
                 const warn =
                   "\n\n⚠️ Claude 5小时限额已用 " + Math.round(claudeState.limits.fiveHUtil * 100) +
                   "%,重置于 " + new Date(claudeState.limits.fiveHResetsAt * 1000).toTimeString().slice(0, 5) +
