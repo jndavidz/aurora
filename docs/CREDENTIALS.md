@@ -17,11 +17,11 @@
 | **豆包** | cookie + 签名参数 | `doubao_accounts.json` | `a_bogus` **分钟级**;其余会话级 | **保活被否决**(成本高);低频备用,失效重抓 |
 | **千问** | tongyi_sso_ticket(cookie) | `qianwen_tokens.txt` | **~1 年** | 无自动保活 |
 | | x5sec 通关 cookie | 同上(同文件) | **~20 分钟** | 无自动保活;失效需浏览器过滑块重抓 |
-| **Gemini**(CDP 桥) | Google 登录 cookie(profile) | Chrome profile 磁盘 | 数天~周(登录态) | **真浏览器全自动**:桥每次请求自捕获刷新会话令牌;30 分钟无活动休眠、请求自动唤醒;崩溃后恢复标签页令牌仍在;异常失效时"页面发一条消息"自愈 |
+| **Gemini**(CDP 桥) | Google 登录 cookie(profile) | Chrome profile 磁盘 | **~399 天滚动**(实测 2026-08-14 抓,至 2027-09-18) | **真浏览器全自动**:桥每次请求自捕获刷新会话令牌;30 分钟无活动休眠、请求自动唤醒;崩溃后恢复标签页令牌仍在;异常失效时"页面发一条消息"自愈;PC 每周保活任务见文末 |
 | | 会话令牌 at/SNlM6e/f.sid | `.runtime/bridge/gemini_session.json` | 会话级(随页面实例轮换) | 同上 |
-| **Claude**(CDP 桥) | 登录 cookie | Chrome profile 磁盘 | 数天~周(登录态) | 全自动:模板/客户端头每次请求自刷新;**无会话令牌**;5h+7d 双限额实时监控与预警 |
+| **Claude**(CDP 桥) | 登录 cookie | Chrome profile 磁盘 | **~28 天滚动**(实测 2026-08-14,至 2026-09-11) | 全自动:模板/客户端头每次请求自刷新;**无会话令牌**;5h+7d 双限额实时监控与预警;PC 每周保活任务见文末 |
 | **MiniMax** | token(JWT) | `minimax_tokens.txt` | **~38 天**(实测 exp) | 无自动保活;过期重抓 localStorage._token;另有 Token Plan 配额耗尽风险 |
-| **Mimo** | Cookie 串(ph/serviceToken/userId) | `mimo_tokens.txt` | **未实测**(通常数天~数周) | 无自动保活;失效重抓浏览器 Cookie |
+| **Mimo** | Cookie 串(ph/serviceToken/userId) | `mimo_tokens.txt` | **~30 天滚动**(实测 2026-08-14 抓,至 2026-09-13;使用即续期) | 无自动保活;失效重抓浏览器 Cookie |
 | ~~元宝~~ | — | — | — | **已关停**(2026-08-14 风控冻结) |
 
 ## 保活机制分级
@@ -39,6 +39,21 @@
 - 豆包:a_bogus 分钟级,保活成本高,低频备用
 - MiniMax:Token Plan 配额可能耗尽(错误码 2056),配额恢复后自动可用
 - Grok:usage_limit_reached 需重抓 cookie
+
+## PC 桥保活任务(每周自动)
+
+- Windows 任务计划 `aurora-cdp-keepalive`:每天 08:30 触发,先读
+  `.runtime/keepalive-state.txt`(上次成功时间),距上次成功 **< 7 天则秒退**
+  (平时零开销);**≥ 7 天**才随机延迟 0~15.5h 后执行 —— 实际时刻每天不同,
+  落在 08:30~24:00 之间,不固定;成功才回写状态,失败或当天 PC 关机,
+  次日自动补跑。
+- 执行动作(`scripts/cdp/keepalive-node.mjs`):唤醒守护 → 桥就绪 →
+  gemini / claude 各发一条**随机问候**(12 条池,要求短回复)→
+  CDP `Browser.close` 优雅关闭 Chrome。全程约 1 分钟,Chrome 非常驻。
+- 日志:`.runtime/keepalive.log`。
+- 覆盖范围:仅 **Gemini / Claude** 桥通道(登录 cookie 滚动续期)。
+  **MiniMax(~38 天)/ Mimo(~30 天)为直接逆向,无需保活**;Mimo 使用即续期,
+  MiniMax 到期需浏览器重抓 `localStorage._token`(约每 5 周一次)。
 
 ## 统一重抓方法
 
