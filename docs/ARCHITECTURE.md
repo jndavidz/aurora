@@ -455,6 +455,32 @@ responsesToolCalling(/v1/responses) ──┘
 - **Doubao 无 coding**:已注释禁用,代码保留。
 - **Qianwen 无 coding**:网页 API 不支持外部工具。
 
+#### Coding(工具调用)能力推荐排名
+
+| 排名 | provider | 推荐理由 | 限制 |
+|---|---|---|---|
+| 1🥇 | **ChatGPT**(gpt-5-6 / gpt-5-6-coding) | 文本协议 `<tool_call>` 最稳定,有完整重试机制(REFUSAL_RETRIES + SYSTEM OVERRIDE + 拒绝分类器 + RecoverFromText 兜底),实测 attempt 1 绕开→attempt 2 触发 | 免费版有周/小时限额 |
+| 2🥈 | **DeepSeek**(deepseek-v4-flash-coding) | 文本协议 `<|tool▁calls▁begin|>` 可靠,有重试机制,PoW 认证,attention 已修复 | 无 |
+| 3🥉 | **Grok**(grok-3-coding) | WebSocket 原生工具通道,能调云端沙盒搜索 | 不能访问本地文件;usage_limit 风险 |
+| 4 | **Kimi**(kimi-coding) | 原生工具透传(ipython),指令直通性好 | 无自定义函数工具(ToolType enum 无 FUNCTION),客户端自定义工具折叠为文本 |
+| 5 | **Gemini**(gemini-3-flash-coding) | 文本协议 `<tool_call>`,与 ChatGPT 同源 | 严格限频(2s/账号),Google 反爬最强,封号风险大 |
+| 6 | **GLM**(glm-5.2-coding) | 云端沙箱代码执行(模型自带) | 无 function calling 训练,工具调用概率性(~1/3 成功),标 `sandbox_code` |
+| — | **Doubao**(doubao-coding) | — | 已注释禁用 |
+| — | **Qianwen**(Qwen3.8-Max-coding) | — | 网页 API 不支持外部工具,无 coding 变体 |
+
+#### Chat(对话)能力推荐排名
+
+| 排名 | provider | 推荐理由 | 限制 |
+|---|---|---|---|
+| 1🥇 | **ChatGPT**(gpt-5-6) | 最强模型(GPT-5.6),对话最自然,联网搜索+识图 | 免费版限额,超限降级 |
+| 2🥈 | **DeepSeek**(deepseek-v4-flash-chat) | 快速响应+智能搜索+识图,能力全面,免费限额宽松 | 无 |
+| 3🥉 | **Kimi**(kimi-chat) | 快速模式(K2.6),联网搜索默认开启,refresh_token 90 天自动续期,维护成本最低 | 无 |
+| 4 | **Grok**(grok-3-chat) | 原生搜索+云端沙盒,回复质量高 | usage_limit 需频繁抓 cookie |
+| 5 | **Gemini**(gemini-3-flash-chat) | Google 模型能力强 | 严格限频(2s),封号风险高,只宜低频备用 |
+| 6 | **GLM**(glm-5.2-chat) | 快速挡联网搜索+识图,两挡位可选 | 搜索概率性触发(上游行为),模型能力中等 |
+| 7 | **Doubao**(doubao-chat) | 纯聊天,联网搜索自动 | a_bogus 分钟级失效,使用成本高(需频繁刷新),低频备用 |
+| 8 | **Qianwen**(Qwen3.8-Max) | 纯 chat | 需 Chrome TLS 指纹 + x5sec 20 分钟刷新,维护成本高 |
+
 ### 已修复的历史问题
 
 | 问题 | 修复 |
