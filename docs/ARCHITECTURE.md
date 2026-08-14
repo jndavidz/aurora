@@ -193,6 +193,14 @@ responsesToolCalling(/v1/responses) ──┘
 **模型目录**(`internal/handler/models_handler.go`,2026-08-14 抓包 `/backend-api/models` 更新):
 `auto`, `gpt-5-5`, `gpt-5-6`, `gpt-5-5-mini`, `gpt-5-6-mini`, `gpt-5-6-coding`(function_call 标注)。
 
+> ⚠️ **slug 不等于实际运行模型**:`/backend-api/models` 返回的 slug 是 UI 选择器标识,
+> 实际运行什么模型取决于账号 tier。**免费账号下所有 slug 实际都运行 GPT-5.5-mini**
+> (实测 `gpt-5-6`、`gpt-5-6-mini`、`gpt-5-5` 都自称 GPT-5.5-mini)。
+> slug 的 title("GPT-5.6 Luna" 等)是营销显示名,不代表模型真实版本。
+> Plus/Pro 账号可能运行更高版本,待实测。
+
+**coding 变体**(`gpt-5-6-coding`):
+
 **coding 变体**(`gpt-5-6-coding`):
 - `normalizeCodingModel`:`-coding` 后缀 → 改写 `gpt-5-6` 透传上游(真实 slug),响应回显 `-coding` id
 - 无 tools → 400 `missing_tools`;带 tools → 强制工具调用(走 `toolCallingRetry`)
@@ -472,7 +480,7 @@ responsesToolCalling(/v1/responses) ──┘
 
 | 排名 | provider | 推荐理由 | 限制 |
 |---|---|---|---|
-| 1🥇 | **ChatGPT**(gpt-5-6) | 最强模型(GPT-5.6),对话最自然,联网搜索+识图 | 免费版限额,超限降级 |
+| 1🥇 | **ChatGPT**(gpt-5-6) | 账号 tier 下最高可用模型(免费版=GPT-5.5-mini),对话最自然,联网搜索+识图 | 免费版限额,超限降级;slug 不保证实际版本 |
 | 2🥈 | **DeepSeek**(deepseek-v4-flash-chat) | 快速响应+智能搜索+识图,能力全面,免费限额宽松 | 无 |
 | 3🥉 | **Kimi**(kimi-chat) | 快速模式(K2.6),联网搜索默认开启,refresh_token 90 天自动续期,维护成本最低 | 无 |
 | 4 | **Grok**(grok-3-chat) | 原生搜索+云端沙盒,回复质量高 | usage_limit 需频繁抓 cookie |
