@@ -11,7 +11,8 @@
 //
 // 端点:
 //   GET  /health   守护自身状态 + 桥/Chrome 是否在线
-//   POST /wake     唤醒(幂等;已在线的立即返回)
+//   POST /wake     唤醒(幂等;已在线的立即返回;Chrome 以屏幕外窗口启动,后台驻留)
+//   POST /show     把屏幕外的 Chrome 窗口拉回屏幕(登录/令牌自愈需人工操作时用)
 //
 // 环境变量:
 //   KEEPER_PORT        监听端口(默认 8798;aurora 的 GEMINI_CDP_WAKE_PORT 对应)
@@ -21,12 +22,14 @@
 //   KEEPER_BRIDGE      桥脚本路径
 //   KEEPER_MAX_WAIT_MS 拉起后最长等待毫秒(默认 60000)
 //
-// 开机自启(无需管理员,Windows):
-//   schtasks /Create /F /TN "aurora-cdp-keeper" /SC ONLOGON /RL LIMITED /TR "\"<node.exe>\" \"<keeper.mjs>\""
+// 开机自启(无需管理员,Windows):把 keeper 的快捷方式放进启动文件夹
+// (Start Menu\Programs\Startup),或 schtasks ONLOGON(需系统允许创建任务)。
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+
+const { cdp } = await import(new URL("./cdp-helper.mjs", import.meta.url).href);
 
 const KEEPER_PORT = parseInt(process.env.KEEPER_PORT || "8798", 10);
 const KEEPER_TOKEN = process.env.KEEPER_TOKEN || "";
@@ -69,6 +72,43 @@ function probe(port, pathName) {
 const chromeUp = () => probe(CDP_PORT, "/json/version");
 const bridgeUp = () => probe(BRIDGE_PORT, "/health");
 
+// getJSON9222 从 Chrome CDP 端点读 JSON(/json、/json/version)。
+function getJSON9222(p) {
+  return new Promise((resolve, reject) => {
+    http
+      .get({ host: "127.0.0.1", port: CDP_PORT, path: p }, (r) => {
+        let d = "";
+        r.on("data", (c) => (d += c));
+        r.on("end", () => {
+          try { resolve(JSON.parse(d)); } catch (e) { reject(e); }
+        });
+      })
+      .on("error", reject);
+  });
+}
+
+// showWindow 把屏幕外的 Chrome 窗口拉回屏幕(登录/令牌自愈时需要人工操作页面时用)。
+async function showWindow() {
+  if (!(await chromeUp())) return { ok: false, reason: "chrome not running" };
+  const ver = await getJSON9222("/json/version");
+  const targets = await getJSON9222("/json");
+  const page = targets.find((t) => t.type === "page" && t.url.includes("gemini.google.com"));
+  if (!page) return { ok: false, reason: "no gemini page" };
+  const bc = await cdp(ver.webSocketDebuggerUrl);
+  const win = await bc.cmd("Browser.getWindowForTarget", { targetId: page.id });
+  const winId = win.result && win.result.windowId;
+  if (!winId) {
+    bc.close();
+    return { ok: false, reason: "no window" };
+  }
+  await bc.cmd("Browser.setWindowBounds", {
+    windowId: winId,
+    bounds: { left: 100, top: 100, width: 1280, height: 900, windowState: "normal" },
+  });
+  bc.close();
+  return { ok: true };
+}
+
 function spawnDetached(exe, args, env) {
   const logFd = fs.openSync(LOG_FILE, "a");
   const child = spawn(exe, args, { detached: true, stdio: ["ignore", logFd, logFd], env: env || process.env });
@@ -88,6 +128,9 @@ const chromeArgs = [
   // 异常关闭保底:自动恢复上次会话(保住 gemini 标签页与令牌),且不弹"要恢复页面吗"对话框。
   // 正常路径(桥的 30 分钟自动停止)走 CDP Browser.close 优雅关闭,会话/令牌本就不丢。
   "--restore-last-session", "--disable-session-crashed-bubble",
+  // 后台驻留:窗口移到屏幕外(-32000,-32000)。headful(真 WebGL 指纹)但不可见、不弹窗。
+  // 注意禁用 --headless:软件渲染 WebGL 恰是 Google 认 bot 的信号。
+  "--window-position=-32000,-32000",
 ];
 
 let waking = false;
@@ -102,7 +145,8 @@ async function wake() {
     }
     if (!(await chromeUp())) {
       log("wake: starting Chrome...");
-      spawnDetached(CHROME, chromeArgs);
+      // 带 URL 启动:一个屏外窗口直接打开 gemini 页面(桥无需再 /json/new 开窗)
+      spawnDetached(CHROME, [...chromeArgs, "https://gemini.google.com/app"]);
       for (let i = 0; i < 40; i++) {
         if (await chromeUp()) break;
         await sleep(250);
@@ -146,6 +190,12 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === "/wake" && req.method === "POST") {
     const r = await wake();
     res.writeHead(r.status === "timeout" ? 504 : 200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(r));
+    return;
+  }
+  if (u.pathname === "/show" && req.method === "POST") {
+    const r = await showWindow();
+    res.writeHead(r.ok ? 200 : 503, { "Content-Type": "application/json" });
     res.end(JSON.stringify(r));
     return;
   }

@@ -471,7 +471,8 @@ async function execute(prompt, onDelta) {
     const e = new Error(
       "会话令牌已失效(错误码 " + code + ")。自愈只需一步:" +
       "在浏览器当前会话里发任意一条消息(如\"你好\";若刚发过首条消息,请再发一条)," +
-      "桥会自动捕获当前实例的令牌,然后重试即可。"
+      "桥会自动捕获当前实例的令牌,然后重试即可。" +
+      "(Chrome 窗口平时驻留后台,若看不到窗口,运行 show-gemini.ps1 或 POST http://127.0.0.1:8798/show 拉回屏幕)"
     );
     e.code = "token_stale";
     throw e;
