@@ -129,7 +129,10 @@ function loadState() {
 function saveState() {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    // 原子写:先写 .tmp 再 rename,避免读方(如诊断脚本)读到半截 JSON
+    const tmp = STATE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, STATE_FILE);
   } catch (e) {
     console.error("[state] save failed:", e.message);
   }
@@ -150,7 +153,9 @@ function applyCapture(req) {
     state.fsid = (req.url.match(/f\.sid=([^&]+)/) || [])[1] || state.fsid;
     state.bl = (req.url.match(/bl=([^&]+)/) || [])[1] || state.bl;
     state.fullInner = inner;
-    state.cid = Array.isArray(inner[2]) ? inner[2][0] : state.cid;
+    // cid 只在非空时更新:新会话首条消息发送时 cid 还是空的,别用它覆盖好 cid
+    const newCid = Array.isArray(inner[2]) ? inner[2][0] : "";
+    if (newCid) state.cid = newCid;
     if (inner[59]) state.sessionUuid = inner[59];
     if (inner[4]) state.uuid4 = inner[4];
     // 所有 jspb 头(含未来新增)自动跟随
@@ -276,7 +281,10 @@ const gemini = {
     inner[0] = [prompt, 0, null, null, null, null, 0];
     const rid = "r_" + crypto.randomBytes(8).toString("hex");
     inner[2][1] = rid;
-    if (state.rcid) inner[2][2] = state.rcid;
+    // cid 空 = 新会话首轮(rcid 必须一起置空,否则服务端报 [13]/1157);
+    // 响应帧会返回新 cid,解析器学会后下一轮自动续聊。
+    inner[2][0] = state.cid || "";
+    inner[2][2] = state.cid && state.rcid ? state.rcid : "";
     const fReq = JSON.stringify([null, JSON.stringify(inner)]);
     const body = "f.req=" + encodeURIComponent(fReq) + "&at=" + encodeURIComponent(state.at);
     const url =
@@ -323,6 +331,12 @@ const gemini = {
           if (!Array.isArray(payload) || payload.length < 3) continue;
           if (payload[2] && typeof payload[2] === "object" && payload[2]["44"] === true) {
             self.done = true;
+          }
+          // 响应帧 data[1] = [cid, rid]:新会话首轮时服务端在此返回 cid,学会它
+          // (否则 cid 一直是空的,后续请求报 [13])。
+          if (Array.isArray(payload[1]) && typeof payload[1][0] === "string" && payload[1][0]) {
+            state.cid = payload[1][0];
+            saveState();
           }
           if (Array.isArray(payload[4])) {
             for (const p of payload[4]) {
@@ -441,13 +455,23 @@ async function execute(prompt, onDelta) {
     e.code = "upstream_error";
     throw e;
   }
-  // 令牌失效识别(BardErrorInfo 1096/1157 等):指引用户手动发一条消息即可自愈
+  // 会话损坏识别:三种信号任意其一即判定 ——
+  //   1. BardErrorInfo(NNNN)          —— 已知会话错误(1096/1157/1060 等)
+  //   2. wrb.fr 错误帧 [...,[N]]       —— 服务端拒绝帧(实测错误码 [13],
+  //      页面导航/刷新/崩溃后整套令牌(at/SNlM6e/f.sid)随页面实例轮换而失效)
+  // 自愈(实测规律):令牌只在"页面实例切换"时轮换 —— 新会话首条消息、刷新、重启都会
+  // 切换实例;而在**已有会话里续发消息**不会切换(URL 不变)。因此恢复只需:
+  // 在浏览器当前会话里**再发一条消息**(若刚发过首条,再发第二条),桥的 Network
+  // 监听自动捕获当前实例令牌,之后请求即恢复。注意:桥不能自动 reload ——
+  // reload 会再次切换实例,反而破坏恢复路径。
   const errMatch = collector.buffer.match(/BardErrorInfo"?\s*,\s*\[?(\d+)/);
-  if (!parser.text && errMatch) {
+  const errFrame = collector.buffer.match(/wrb\.fr",null,null,null,null,\[(\d+)\]/);
+  if (!parser.text && (errMatch || errFrame)) {
+    const code = errMatch ? errMatch[1] : errFrame[1];
     const e = new Error(
-      "会话令牌已失效(BardErrorInfo " + errMatch[1] + ")。" +
-      "浏览器页面还开着:在页面上手动发任意一条消息,桥的 Network 监听会自动刷新令牌,然后重试即可;" +
-      "浏览器重启过:先确认 gemini.google.com 仍是登录态,再手动发一条消息。"
+      "会话令牌已失效(错误码 " + code + ")。自愈只需一步:" +
+      "在浏览器当前会话里发任意一条消息(如\"你好\";若刚发过首条消息,请再发一条)," +
+      "桥会自动捕获当前实例的令牌,然后重试即可。"
     );
     e.code = "token_stale";
     throw e;
