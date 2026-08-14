@@ -399,6 +399,7 @@ let claudeState = {
   orgId: null,      // /api/organizations/{orgId}
   template: null,   // completion 请求体模板(完整 26 tools)
   headers: {},      // anthropic-* 客户端头(device-id/anonymous-id/sha/build)
+  limits: null,     // 限额:{fiveHUtil, fiveHResetsAt}(来自 message_delta 的 windows.5h)
   updatedAt: null,
 };
 
@@ -507,7 +508,8 @@ const claude = {
     return { url, headers, body: JSON.stringify(body) };
   },
 
-  // 增量 SSE 解析:content_block_delta(text_delta) 为正文,message_stop 结束
+  // 增量 SSE 解析:content_block_delta(text_delta) 为正文,message_stop 结束;
+  // message_delta 携带限额(windows.5h)信息,顺手解析存档 + 超阈值预警
   createParser(onDelta) {
     let buf = "";
     const self = {
@@ -529,7 +531,33 @@ const claude = {
               self.text += j.delta.text;
               if (onDelta) onDelta(j.delta.text);
             }
-            if (j.type === "message_stop") self.done = true;
+            if (j.type === "message_limit" && j.message_limit) {
+              // 限额在独立的 message_limit 事件里:windows.5h.{utilization,resets_at},
+              // resolved.limit.percent 直接给当前用量百分数
+              const w5 = j.message_limit.windows && j.message_limit.windows["5h"];
+              if (w5 && typeof w5.utilization === "number") {
+                claudeState.limits = {
+                  fiveHUtil: w5.utilization,
+                  fiveHResetsAt: w5.resets_at || 0,
+                  fiveHPercent: (j.message_limit.resolved && j.message_limit.resolved.limit && j.message_limit.resolved.limit.percent) || null,
+                };
+                claudeState.updatedAt = new Date().toISOString();
+                saveClaudeState();
+                console.log("[claude] 5h limit:", Math.round(claudeState.limits.fiveHUtil * 100) + "% used");
+              }
+            }
+            if (j.type === "message_stop") {
+              self.done = true;
+              // 限额预警:5 小时窗口用掉 80% 以上时,在回复末尾附加提示(真人可见)
+              if (claudeState.limits && claudeState.limits.fiveHUtil >= 0.8) {
+                const warn =
+                  "\n\n⚠️ Claude 5小时限额已用 " + Math.round(claudeState.limits.fiveHUtil * 100) +
+                  "%,重置于 " + new Date(claudeState.limits.fiveHResetsAt * 1000).toTimeString().slice(0, 5) +
+                  "(再过 " + Math.round(claudeState.limits.fiveHUtil * 100) + "% 将触发限制)";
+                self.text += warn;
+                if (onDelta) onDelta(warn);
+              }
+            }
           } catch {}
         }
       },
@@ -759,6 +787,7 @@ const server = http.createServer(async (req, res) => {
     };
     providers.claude = {
       tokens: { orgId: !!claudeState.orgId, template: !!claudeState.template, updatedAt: claudeState.updatedAt },
+      limits: claudeState.limits,
       connected: !!conns.get("claude"),
     };
     sendJSON(res, 200, { ok: true, providers });
