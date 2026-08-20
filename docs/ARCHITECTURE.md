@@ -120,7 +120,7 @@ if h.providers != nil {
 | `-chat` | 对话为主(模仿网页真人) | **绝不注入工具调用信息**:剥离客户端 `tools`/`tool_choice`,只发真人对话形态的请求 + 网页模式开关(快速/专家、智能搜索、深度思考、识图) |
 | `-coding` | coding agent 为辅(工具调用) | 文本协议工具调用:把 tools 注入提示词,引导模型输出工具标签块,解析成 Responses 的 `function_call` item |
 
-**ChatGPT 例外**:ChatGPT 不注册为 provider,其 coding 机制在 handler 内实现——**同一模型 id + 请求带 `tools` 即自动进工具通道**(见 §6.1)。此外 ChatGPT 有 `gpt-5-6-coding` 变体(强制工具调用模式,无 tools 报 400)。
+**ChatGPT 例外**:ChatGPT 不注册为 provider,其 coding 机制在 handler 内实现——**同一模型 id + 请求带 `tools` 即自动进工具通道**(见 §6.1)。此外 ChatGPT 有 `gpt-coding` 变体(强制工具调用模式,无 tools 报 400)。
 
 **前缀保护**:各 provider 的 `parseXxxModel` 函数检查前缀(如 `glm-`、`kimi-`、`grok-`),
 防 `gpt-5-chat` 这类 id 误命中。
@@ -192,21 +192,17 @@ responsesToolCalling(/v1/responses) ──┘
 
 **不注册为 provider**,是 handler 内默认路径。模型 id 原样透传上游(空→`auto`)。
 
-**模型目录**(`internal/handler/models_handler.go`,2026-08-14 抓包 `/backend-api/models` 更新):
-`auto`, `gpt-5-5`, `gpt-5-6`, `gpt-5-5-mini`, `gpt-5-6-mini`, `gpt-5-6-coding`(function_call 标注)。
+**模型目录**(`internal/handler/models_handler.go`,2026-08-21 更新):
+`auto`, `gpt-5-6`, `gpt-coding`(function_call 标注)。
 
 > ⚠️ **slug 不等于实际运行模型**:`/backend-api/models` 返回的 slug 是 UI 选择器标识,
-> 实际运行什么模型取决于账号 tier。**免费账号下所有 slug 实际都运行 GPT-5.5-mini**
-> (实测 `gpt-5-6`、`gpt-5-6-mini`、`gpt-5-5` 都自称 GPT-5.5-mini)。
-> slug 的 title("GPT-5.6 Luna" 等)是营销显示名,不代表模型真实版本。
-> Plus/Pro 账号可能运行更高版本,待实测。
+> 实际运行什么模型取决于账号 tier。**OpenAI 已于 2026-08-06 起把 Free/Go 默认模型切换为 GPT-5.6 Luna**(slug `gpt-5-6`,文字聊天无限量),
+> 免费账号的主要模型即 Luna;Plus/Pro 才使用 Sol/Sol Pro 与推理滑杆。
+> 目录按"免费版实际可用的默认模型"精简为 `gpt-5-6`。
 
-**coding 变体**(`gpt-5-6-coding`):
-
-**coding 变体**(`gpt-5-6-coding`):
-- `normalizeCodingModel`:`-coding` 后缀 → 改写 `gpt-5-6` 透传上游(真实 slug),响应回显 `-coding` id
+**coding 变体**(`gpt-coding`):
+- `normalizeCodingModel`:`gpt-coding` → 改写 `gpt-5-6` 透传上游(真实 slug),响应回显请求的 `gpt-coding` id
 - 无 tools → 400 `missing_tools`;带 tools → 强制工具调用(走 `toolCallingRetry`)
-- 白名单 `chatgptCodingBases`:只含 `gpt-5-6`
 
 **认证**:`access_tokens.txt`(每行一个 JWT,浏览器 localStorage 提取)。
 
@@ -499,7 +495,7 @@ responsesToolCalling(/v1/responses) ──┘
 
 | 排名 | provider | 推荐理由 | 限制 |
 |---|---|---|---|
-| 1🥇 | **ChatGPT**(gpt-5-6 / gpt-5-6-coding) | 文本协议 `<tool_call>` 最稳定,有完整重试机制(REFUSAL_RETRIES + SYSTEM OVERRIDE + 拒绝分类器 + RecoverFromText 兜底),实测 attempt 1 绕开→attempt 2 触发 | 免费版有周/小时限额 |
+| 1🥇 | **ChatGPT**(gpt-5-6 / gpt-coding) | 文本协议 `<tool_call>` 最稳定,有完整重试机制(REFUSAL_RETRIES + SYSTEM OVERRIDE + 拒绝分类器 + RecoverFromText 兜底),实测 attempt 1 绕开→attempt 2 触发 | 免费版有周/小时限额 |
 | 2🥈 | **DeepSeek**(deepseek-v4-flash-coding) | 文本协议 `<|tool▁calls▁begin|>` 可靠,有重试机制,PoW 认证,attention 已修复 | 无 |
 | 3🥉 | **Grok**(grok-3-coding) | WebSocket 原生工具通道,能调云端沙盒搜索 | 不能访问本地文件;usage_limit 风险 |
 | 4 | **Kimi**(kimi-coding) | 原生工具透传(ipython),指令直通性好 | 无自定义函数工具(ToolType enum 无 FUNCTION),客户端自定义工具折叠为文本 |
@@ -512,7 +508,7 @@ responsesToolCalling(/v1/responses) ──┘
 
 | 排名 | provider | 推荐理由 | 限制 |
 |---|---|---|---|
-| 1🥇 | **ChatGPT**(gpt-5-6) | 账号 tier 下最高可用模型(免费版=GPT-5.5-mini),对话最自然,联网搜索+识图 | 免费版限额,超限降级;slug 不保证实际版本 |
+| 1🥇 | **ChatGPT**(gpt-5-6) | 账号 tier 下最高可用模型(免费版=GPT-5.6 Luna),对话最自然,联网搜索+识图 | 免费版限额,超限降级;slug 不保证实际版本 |
 | 2🥈 | **DeepSeek**(deepseek-v4-flash-chat) | 快速响应+智能搜索+识图,能力全面,免费限额宽松 | 无 |
 | 3🥉 | **Kimi**(kimi-chat) | 快速模式(K2.6),联网搜索默认开启,refresh_token 90 天自动续期,维护成本最低 | 无 |
 | 4 | **Grok**(grok-3-chat) | 原生搜索+云端沙盒,回复质量高 | usage_limit 需频繁抓 cookie |

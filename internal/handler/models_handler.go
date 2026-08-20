@@ -40,13 +40,13 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		Data   []ResData `json:"data"`
 	}
 
-// ChatGPT 网页逆向实际可用模型(2026-08-14 抓包 /backend-api/models,免费账号视角)。
+// ChatGPT 网页逆向实际可用模型(2026-08-21,免费账号视角)。
 		// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
+		// OpenAI 已把 Free/Go 默认模型切换为 GPT-5.6 Luna(slug=gpt-5-6,文字聊天无限量)。
 		// gpt-coding 是 -coding 变体(强制工具调用),标注 function_call 能力。
-		// 注:slug 不保证实际版本(免费版所有 slug 都跑 GPT-5.5-mini)。
 		models := []string{
 			"auto",
-			"gpt-5-5-mini",
+			"gpt-5-6",
 			"gpt-coding",
 		}
 

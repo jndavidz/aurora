@@ -82,7 +82,7 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	if base, coding := normalizeCodingModel(original_request.Model); coding {
 		if len(original_request.Tools) == 0 {
 			c.JSON(400, gin.H{"error": gin.H{
-				"message": "coding 模型(gpt-5-6-coding)需要携带 tools 参数",
+				"message": "coding 模型(gpt-coding)需要携带 tools 参数",
 				"type":    "invalid_request_error",
 				"param":   "tools",
 				"code":    "missing_tools",
@@ -331,7 +331,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	if base, coding := normalizeCodingModel(original_request.Model); coding {
 		if len(original_request.Tools) == 0 {
 			c.JSON(400, gin.H{"error": gin.H{
-				"message": "coding 模型(gpt-5-6-coding)需要携带 tools 参数",
+				"message": "coding 模型(gpt-coding)需要携带 tools 参数",
 				"type":    "invalid_request_error",
 				"param":   "tools",
 				"code":    "missing_tools",
