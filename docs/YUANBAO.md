@@ -44,6 +44,27 @@
 - **风控冻结风险(2026-08-14 实踩)**:高频探针(同凭据快速 create+chat 循环、curl 复刻)触发了账号
   风控冻结。**活体测试务必用可丢弃小号,主号永不入池**(架构文档 §八 规则)。联调用网关本身少量
   请求(3 次内)实测无问题。
+- **⚠️ 直连通道已停用(2026-08-22)**:直连逆向(bogdanfinn TLS 指纹模拟)累计风控 2 个账号。
+  正式通道改为 **CDP 桥**(见 §七·五),**不要再启用直连**。
+
+## 七·五、CDP 桥通道(2026-08-22,正式推荐)
+
+**动机**:直连逆向的 TLS 指纹模拟 + 高频探针是风控源(已冻结 2 账号)。桥方案让请求由
+**真实浏览器页内 fetch** 发出 —— 同源自动带 cookie、浏览器原生指纹、零签名逆向,风控暴露与
+真人操作一致。
+
+- **实现**:`scripts/cdp/bridge.mjs` 的 `hunyuan` 适配器 + `internal/provider/hunyuan_cdp.go`
+  (`hunyuan-hy3-chat`)。每次请求:页面上下文 `create` 会话 → `chat` 重放(模板 body 只改
+  prompt/displayPrompt/conversationId),认证头会话级复用。
+- **认证头捕获**:`node scripts/cdp/capture-yuanbao.mjs`(用户手动发一条消息时抓取
+  X-Uskey 等头 + chat body 模板,存 `.runtime/bridge/yuanbao_headers.json`)。
+  登录态过期(接口 23000)时重新登录后重抓。
+- **保护措施**(账号宝贵):
+  1. 限频最保守:`hunyuan_cdp.go` chat 也限频(5s + 5s 抖动),高于其它 provider;
+  2. 桥只在调用时由 keeper 唤醒,平时不驻留、不自动操作页面;
+  3. 多轮靠每次新会话 + 全量拍平 prompt(与直连时代一致),不依赖服务端历史。
+- **注意**:会话头与会话绑定?实测 create+chat 用捕获头正常;若某天 401/21007 持续,
+  重新跑 capture-yuanbao.mjs 刷新即可。
 
 ## 二、请求
 
