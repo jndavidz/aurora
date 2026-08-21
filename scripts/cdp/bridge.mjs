@@ -617,9 +617,11 @@ const hunyuan = {
     return parts.join("\n");
   },
 
-  // SSE 解析:内容增量 {"type":"text","msg":"..."},meta 帧 endConv/stopReason 结束
+  // SSE 解析:内容增量 {"type":"text","msg":"..."},meta 帧 endConv/stopReason 结束;
+  // [citation:N] 引用标记(可能跨帧分片)由 cleaner 缓冲丢弃(2026-08-22)。
   createParser(onDelta) {
     let buf = "";
+    let citBuf = ""; // 未闭合 citation 片段缓冲
     const self = {
       done: false,
       text: "",
@@ -636,8 +638,11 @@ const hunyuan = {
           try {
             const j = JSON.parse(payload);
             if (j.type === "text" && typeof j.msg === "string" && j.msg) {
-              self.text += j.msg;
-              if (onDelta) onDelta(j.msg);
+              const clean = stripCitations(citBuf + j.msg, (rest) => { citBuf = rest; });
+              if (clean) {
+                self.text += clean;
+                if (onDelta) onDelta(clean);
+              }
             } else if (j.type === "meta" && (j.stopReason === "stop" || j.endConv)) {
               self.done = true;
             } else if (j.type === "error") {
@@ -653,6 +658,29 @@ const hunyuan = {
     return self;
   },
 };
+
+// stripCitations 过滤 [citation:N] / (citation:N) 引用标记(跨帧缓冲)。
+// 返回可输出的干净文本;未闭合片段存回回调。
+function stripCitations(input, saveRest) {
+  let work = input;
+  let out = "";
+  for (;;) {
+    const idx = work.indexOf("citation:");
+    if (idx < 0) { out += work; saveRest(""); return out; }
+    // 开括号([ 或 ()紧邻 citation: 前,一并吞掉
+    let start = idx;
+    while (start > 0 && (work[start - 1] === "[" || work[start - 1] === "(")) start--;
+    out += work.slice(0, start);
+    const rest = work.slice(idx + "citation:".length);
+    const closeIdx = rest.search(/[)\]]/);
+    if (closeIdx >= 0) {
+      work = rest.slice(closeIdx + 1);
+      continue;
+    }
+    saveRest(work.slice(start));
+    return out;
+  }
+}
 
 async function executeHunyuan(entry, prompt, onDelta) {
   if (!hunyuanCfg || !hunyuanCfg.headers || !hunyuanCfg.chatBody) {

@@ -153,9 +153,12 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 
 	// SSE 解析:event: message + data:{"type":"text","content":...}
 	// <think>...</think> 思考段剔除;event:finish(data:[DONE])为流结束。
+	// 清洗:独立 "webSearch" 帧跳过;citation 标记(跨帧分片,如 "(citation:5" + ")")
+	// 用 cleaner 缓冲丢弃(2026-08-22 实测分片)。
 	inThink := false
+	cc := newCitationCleaner()
 	emit := func(text string) {
-		text = strings.TrimPrefix(text, "\u0000")
+		text = cc.push(strings.TrimPrefix(text, "\u0000"))
 		if text == "" {
 			return
 		}
@@ -184,6 +187,10 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 			continue
 		}
 		if ev.Type != "text" || ev.Content == "" {
+			continue
+		}
+		// 独立 webSearch 标记帧(联网搜索状态,非正文)
+		if ev.Content == "webSearch" {
 			continue
 		}
 		text := ev.Content
@@ -340,6 +347,41 @@ func (c *Client) ASR(token, fileName string, audio []byte) (string, error) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	return "", fmt.Errorf("mimo asr timeout")
+}
+
+// citationCleaner 处理跨帧分片的 citation 标记(如 "(citation:5" 与 ")" 分属两帧)。
+// 缓冲未闭合的 "citation:" 片段,闭合后整体丢弃;其余文本正常输出。
+type citationCleaner struct {
+	buf string
+}
+
+func newCitationCleaner() *citationCleaner { return &citationCleaner{} }
+
+func (c *citationCleaner) push(text string) string {
+	c.buf += text
+	var out strings.Builder
+	for {
+		idx := strings.Index(c.buf, "citation:")
+		if idx < 0 {
+			out.WriteString(c.buf)
+			c.buf = ""
+			break
+		}
+		// 开括号([ 或 ()紧邻 citation: 前,一并吞掉
+		start := idx
+		for start > 0 && (c.buf[start-1] == '[' || c.buf[start-1] == '(') {
+			start--
+		}
+		out.WriteString(c.buf[:start])
+		rest := c.buf[idx+len("citation:"):]
+		if closeIdx := strings.IndexAny(rest, ")]"); closeIdx >= 0 {
+			c.buf = rest[closeIdx+1:] // 完整标记,丢弃
+			continue
+		}
+		c.buf = c.buf[start:] // 未闭合,留待下一帧
+		break
+	}
+	return out.String()
 }
 
 func truncate(s string, n int) string {
