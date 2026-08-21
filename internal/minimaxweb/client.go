@@ -240,11 +240,19 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 				MsgContent string `json:"msg_content"`
 				Finish     bool   `json:"finish"`
 			} `json:"agent_message_chunk"`
+			AgentMsg struct {
+				MsgContent   string `json:"msg_content"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"agent_message"`
 		}
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
 		}
 		switch ev.Type {
+		case 2: // agent_message:用户回显或错误帧(如 Token Plan 配额耗尽 2056)
+			if ev.AgentMsg.FinishReason == "error" && ev.AgentMsg.MsgContent != "" && res.Err == "" {
+				res.Err = "minimax: " + ev.AgentMsg.MsgContent
+			}
 		case 6: // agent_message_chunk:正文增量 / finish 结束
 			if ev.Chunk.MsgContent != "" {
 				res.Text += ev.Chunk.MsgContent
