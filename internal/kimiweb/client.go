@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -37,6 +38,7 @@ type Client struct {
 	baseURL    string
 	authURL    string
 	httpClient *http.Client
+	tokenFile  string // token 池文件路径(换发轮换时回写,防"重启后旧 token 作废")
 	// 凭据
 	accessToken  string // 短期 JWT(~15 分钟),Authorization: Bearer
 	refreshToken string // 长期 JWT(~90 天),刷新时轮换
@@ -58,6 +60,7 @@ func NewClient(baseURL, tokenFile string) *Client {
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		authURL:    authBase,
 		httpClient: &http.Client{},
+		tokenFile:  tokenFile,
 	}
 	if tokenFile != "" {
 		if tokens, err := loadTokens(tokenFile); err == nil && len(tokens) > 0 {
@@ -184,9 +187,45 @@ func (c *Client) RefreshAccessToken() error {
 	}
 	c.accessToken = ar.AccessToken
 	if ar.RefreshToken != "" {
+		oldToken := c.refreshToken
 		c.SetRefreshToken(ar.RefreshToken)
+		c.persistRefreshToken(oldToken, ar.RefreshToken)
 	}
 	return nil
+}
+
+// persistRefreshToken 把轮换后的新 refresh_token 回写池文件(替换旧值)。
+// 否则文件里永远是最旧的已作废 token —— 重启后 401 "invalid claims"(实测)。
+func (c *Client) persistRefreshToken(oldToken, newToken string) {
+	if c.tokenFile == "" || newToken == "" || oldToken == "" {
+		return
+	}
+	data, err := os.ReadFile(c.tokenFile)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	replaced := false
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line == oldToken || line == newToken {
+			lines[i] = newToken
+			replaced = true
+		}
+	}
+	if !replaced {
+		lines = append(lines, newToken)
+	}
+	out := strings.Join(lines, "\n")
+	tmp := c.tokenFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, c.tokenFile)
+	log.Printf("[kimi] refresh_token rotated & persisted (%s)", c.tokenFile)
 }
 
 // setHeaders 设置通用头。token 非空时作 Authorization: Bearer。
