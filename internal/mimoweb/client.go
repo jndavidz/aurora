@@ -364,19 +364,25 @@ func (c *citationCleaner) push(text string) string {
 	c.buf += text
 	var out strings.Builder
 	for {
-		idx := strings.Index(c.buf, "citation:")
+		idx := strings.Index(c.buf, "citation") // 含无冒号残片("citation" 帧)
 		if idx < 0 {
 			out.WriteString(c.buf)
 			c.buf = ""
 			break
 		}
-		// 开括号([ 或 ()紧邻 citation: 前,一并吞掉
+		// 开括号([ 或 ()紧邻 citation 前,一并吞掉
 		start := idx
 		for start > 0 && (c.buf[start-1] == '[' || c.buf[start-1] == '(') {
 			start--
 		}
+		// 缓冲过长仍无闭合:判定为正文(如模型回复里出现 citation 单词),整体放行
+		if len(c.buf)-start > 100 {
+			out.WriteString(c.buf)
+			c.buf = ""
+			break
+		}
 		out.WriteString(c.buf[:start])
-		rest := c.buf[idx+len("citation:"):]
+		rest := c.buf[idx+len("citation"):]
 		if closeIdx := strings.IndexAny(rest, ")]"); closeIdx >= 0 {
 			c.buf = rest[closeIdx+1:] // 完整标记,丢弃
 			continue

@@ -30,6 +30,10 @@ func TestCitationCleaner(t *testing.T) {
 		{"(citation:8)", ""},
 		{"a(citation:8)(citation:9)b", "ab"},
 		{"no-marker-text", "no-marker-text"},
+		// 极细分片残留(2026-08-22 实测):无冒号/无括号
+		{"tmpcitation", "tmp"}, // 未闭合,缓冲等待
+		{"tmp(citation", "tmp"},
+		{"tmpcitation" + string(make([]byte, 120)), "tmpcitation" + string(make([]byte, 120))}, // 超限整体放行
 	}
 	for _, c := range cases {
 		cc := newCitationCleaner()
@@ -46,5 +50,15 @@ func TestCitationCleaner(t *testing.T) {
 	}
 	if b != "wind" {
 		t.Errorf("frame2 = %q, want wind", b)
+	}
+	// 无冒号残片跨帧: "citation" 帧 + 后续
+	cc2 := newCitationCleaner()
+	a2 := cc2.push("防晒措施citation")
+	if a2 != "防晒措施" {
+		t.Errorf("bare-cit frame = %q, want 防晒措施", a2)
+	}
+	b2 := cc2.push(":18)风大")
+	if b2 != "风大" {
+		t.Errorf("bare-cit frame2 = %q, want 风大", b2)
 	}
 }
