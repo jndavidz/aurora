@@ -160,7 +160,11 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	inThink := false
 	cc := newCitationCleaner()
 	emit := func(text string) {
+		raw := text
 		text = cc.push(strings.TrimPrefix(text, "\u0000"))
+		if strings.Contains(raw, "citation") || strings.Contains(text, "citation") {
+			log.Printf("[mimo] emit raw=%q clean=%q", raw, text)
+		}
 		if text == "" {
 			return
 		}
