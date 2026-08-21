@@ -20,9 +20,12 @@
 ## 二、协议要点(CDP 抓包 + 主 JS 逆向,2026-08-13)
 
 ### 认证
-- 长期凭据:`chatglm_refresh_token` cookie(JWT,~2h 换发一次 refresh_token 本身也轮换)
+- 长期凭据:`chatglm_refresh_token` cookie(JWT,~90 天)
 - `POST /chatglm/user-api/user/refresh`(body `{}`)换发 `access_token`(JWT,~2h)
 - completion 用 `Authorization: Bearer <access_token>`
+- **refresh_token 轮换实测(2026-08-22)**:refresh 响应**只返回 access_token,不带新 refresh_token**
+  → refresh_token 为静态 90 天(不像 kimi 轮换作废);已加 `persistRefreshToken` 作预防
+  (若智谱将来响应带新 refresh_token 则自动回写池文件,避免 kimi 式漂移问题)。
 
 ### 签名(X-Sign)
 所有 `/chatglm/` 请求带 `X-Timestamp` / `X-Nonce` / `X-Sign`:

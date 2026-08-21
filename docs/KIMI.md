@@ -99,7 +99,10 @@ curl -s localhost:18080/v1/chat/completions -H "Authorization: Bearer test" -H "
    - Chat RPC 的 `ToolType` 枚举没有 FUNCTION(从 chat_pb 逆向):只有 SEARCH / IMAGE_GENERATION / SEMANTIC_MEMORY / AUDIO_GENERATION / DEVICE_LBS / DEVICE_TOOL / PARALLEL_AGENT / ASK_USER / CRON_JOB / GOAL / PARALLEL_AGENT_V2 / BANANA / SLIDES_OUTLINE。
    - 服务器把未知工具抹成 `[{}]`,模型拒绝假装调用("我没有 get_weather 这个工具"),GLM 式围栏 JSON 文本协议也无效(K2.6 工具诚实度极高)。
    - coding 变体因此只能:客户端工具注入上下文(尽力而为)+ 原生工具透传(ipython / web_search 等,客户端声明同名工具时转发)。
-2. **access_token 只有 15 分钟**:必须有刷新流(auth.kimi.com RefreshToken),刷新会轮换 refresh_token(进程内生效,池文件不重写——与 GLM 相同的漂移问题)。
+2. **access_token 只有 15 分钟**:必须有刷新流(auth.kimi.com RefreshToken),刷新会轮换 refresh_token。
+   **已修复(2026-08-22)**:换发后新 refresh_token 由 `persistRefreshToken` 原子回写池文件(替换旧值),
+   重启后读到的是最新 token;此前"池文件不重写"的漂移问题曾导致 token 首次换发后即作废、重启 401
+   `invalid claims`(kimi_tokens.txt 里永远是已失效的旧 token)。
 3. **降级通知 TYPE_MODEL_DEGRADE**:高峰期自动切 K2.6 快速(部分用户视角等价场景),无害,忽略。
 4. **联网搜索默认开启(chat 变体)**:引用标记已内置剥离,无需额外处理;coding 变体保持关闭(原生工具透传,避免引用污染工具流)。如需 coding 也开搜索,把 `TOOL_TYPE_SEARCH` 加进 `kimiweb.CompletionRequest.Tools` 即可。
 5. **网页逆向是结构性封号风险**(同元宝教训):token 只放可丢弃小号、主号永不入池、会话用完即删。
