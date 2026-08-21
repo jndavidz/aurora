@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -160,11 +159,7 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	inThink := false
 	cc := newCitationCleaner()
 	emit := func(text string) {
-		raw := text
 		text = cc.push(strings.TrimPrefix(text, "\u0000"))
-		if strings.Contains(raw, "citation") || strings.Contains(text, "citation") {
-			log.Printf("[mimo] emit raw=%q clean=%q", raw, text)
-		}
 		if text == "" {
 			return
 		}
@@ -175,17 +170,12 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	}
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	frameN := 0
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		frameN++
-		if frameN <= 3 || strings.Contains(payload, "citation") || strings.Contains(payload, "webSearch") {
-			log.Printf("[mimo] frame[%d] %s", frameN, truncate(payload, 120))
-		}
 		if payload == `{"content":"[DONE]"}` {
 			res.Done = true
 			continue
@@ -232,9 +222,6 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	}
 	// 最终兜底:整体剥离残留的 citation 标记(流式 cleaner 之外的遗漏,如未闭合片段)
 	res.Text = stripAllCitations(res.Text)
-	if strings.Contains(res.Text, "citation") {
-		log.Printf("[mimo] WARN citation remains after strip: %q", res.Text[0:min(80, len(res.Text))])
-	}
 	if res.Text == "" && res.Err == "" {
 		res.Err = "mimo: empty response"
 	}
@@ -400,9 +387,10 @@ func (c *citationCleaner) push(text string) string {
 	return out.String()
 }
 
-// stripAllCitations 整体剥离 [citation:N] / (citation:N) 标记(含带 URL 的
-// [citation:11:https://...]),用于最终文本兜底清洗。
-var citationFullRe = regexp.MustCompile(`[\[(]\s*citation\s*:\s*[^)\]]*[)\]]`)
+// stripAllCitations 整体剥离 citation 标记及流式分片残留(含未闭合片段)。
+// mimo 分片极细:可能出现 "citation"、"citation:18"、"(citation"、"防晒措施(citation"
+// 等残片 —— 统一匹配 [\[(]? citation [：:]? 数字? [:url]? [)\]]?(2026-08-22 实测)。
+var citationFullRe = regexp.MustCompile(`[\[(]?\s*citation\s*[:：]?\s*\d*\s*(?:[:：][^)\]]*)?[)\]]?`)
 
 func stripAllCitations(s string) string { return citationFullRe.ReplaceAllString(s, "") }
 

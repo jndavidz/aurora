@@ -4,12 +4,16 @@ import "testing"
 
 func TestStripAllCitations(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"气温24℃(citation:8)风大", "气温24℃风大"},
 		{"(citation:8)", ""},
-		{"今天[citation:7][citation:8]多云", "今天多云"},
+		{"[citation:7][citation:8]", ""},
 		{"a[citation:11:https://x.com]b", "ab"},
-		{"无标记", "无标记"},
-		{"[citation:1", "[citation:1"}, // 未闭合:整体正则不剥(由流式 cleaner 兜底跨帧)
+		{"no-marker", "no-marker"},
+		{"multi(citation:2)", "multi"},
+		{"multi(citation:2", "multi"},
+		{"tmpcitation:18wind", "tmpwind"},
+		{"tmpcitationwind", "tmpwind"},
+		{"abc(citationdef", "abcdef"},
+		{"a(citation:7)(。", "a(。"},
 	}
 	for _, c := range cases {
 		if got := stripAllCitations(c.in); got != c.want {
@@ -23,10 +27,9 @@ func TestCitationCleaner(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"气温24℃(citation:8)风大", "气温24℃风大"},
 		{"(citation:8)", ""},
 		{"a(citation:8)(citation:9)b", "ab"},
-		{"无标记文本", "无标记文本"},
+		{"no-marker-text", "no-marker-text"},
 	}
 	for _, c := range cases {
 		cc := newCitationCleaner()
@@ -35,14 +38,13 @@ func TestCitationCleaner(t *testing.T) {
 			t.Errorf("push(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	// 跨帧
 	cc := newCitationCleaner()
-	a := cc.push("气温(citation:")
-	b := cc.push("8)风大")
-	if a != "气温" {
-		t.Errorf("跨帧1 = %q, want 气温", a)
+	a := cc.push("temp(citation:")
+	b := cc.push("8)wind")
+	if a != "temp" {
+		t.Errorf("frame1 = %q, want temp", a)
 	}
-	if b != "风大" {
-		t.Errorf("跨帧2 = %q, want 风大", b)
+	if b != "wind" {
+		t.Errorf("frame2 = %q, want wind", b)
 	}
 }
