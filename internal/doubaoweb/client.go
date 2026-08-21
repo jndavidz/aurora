@@ -59,6 +59,13 @@ type Account struct {
 	ConvID      string `json:"conv_id,omitempty"`
 	SectionID   string `json:"section_id,omitempty"`
 	LastMsgIdx  int    `json:"last_msg_idx,omitempty"`
+	// Query 与 Template(2026-08-21 起):a_bogus 绑定 URL 参数 + body 的
+	// conversation 字段 —— 改 prompt 无碍,但参数集/会话字段变了报
+	// "common invalid param"。因此 capture-doubao.mjs 整段复用捕获的
+	// query(URL 参数含 a_bogus)与 template(完整 postData),aurora 只替换
+	// 最后一条消息的文本,其余原样。
+	Query    string `json:"query,omitempty"`
+	Template string `json:"template,omitempty"`
 }
 
 // Client 是豆包客户端,持有账号池并限频。
@@ -313,6 +320,45 @@ func (c *Client) Complete(req CompletionRequest, onDelta func(Delta)) StreamResu
 
 // buildReqBody 构造请求 JSON。
 func (c *Client) buildReqBody(acct *Account, req CompletionRequest) ([]byte, error) {
+	// 模板模式:解析捕获的 postData,只替换最后一条消息的文本(a_bogus 绑定
+	// conversation 字段,必须保留捕获的 conv/section/message_index/local_message_id)。
+	if acct.Template != "" {
+		var tmpl map[string]any
+		if err := json.Unmarshal([]byte(acct.Template), &tmpl); err != nil {
+			return nil, fmt.Errorf("doubao template parse: %w", err)
+		}
+		msgs, _ := tmpl["messages"].([]any)
+		if len(msgs) > 0 {
+			last, _ := msgs[len(msgs)-1].(map[string]any)
+			if cbs, _ := last["content_block"].([]any); len(cbs) > 0 {
+				if cb, _ := cbs[0].(map[string]any); cb != nil {
+					if content, _ := cb["content"].(map[string]any); content != nil {
+						if tb, _ := content["text_block"].(map[string]any); tb != nil {
+							tb["text"] = req.Prompt
+						}
+					}
+				}
+			}
+		}
+		// 若调用方给了完整历史,替换 messages(多轮回放;无历史则用模板单条)
+		if len(req.Messages) > 0 {
+			var hist []any
+			for i, m := range req.Messages {
+				hist = append(hist, map[string]any{
+					"local_message_id": "m" + fmt.Sprint(i),
+					"content_block": []any{map[string]any{
+						"block_type": 10000,
+						"content":    map[string]any{"text_block": map[string]any{"text": m.Content, "icon_url": "", "icon_url_dark": "", "summary": ""}, "pc_event_block": ""},
+						"block_id":   "b" + fmt.Sprint(i),
+						"parent_id":  "", "meta_info": []any{}, "append_fields": []any{},
+					}},
+					"message_status": 0,
+				})
+			}
+			tmpl["messages"] = hist
+		}
+		return json.Marshal(tmpl)
+	}
 	type textBlock struct {
 		Text        string `json:"text"`
 		IconURL     string `json:"icon_url"`
@@ -398,6 +444,10 @@ func (c *Client) buildReqBody(acct *Account, req CompletionRequest) ([]byte, err
 
 // completionURL 构造带全部 URL 参数的端点。
 func (c *Client) completionURL(acct *Account) string {
+	// 模板模式:整段复用捕获的 query(a_bogus 绑定参数集,不可重拼)
+	if acct.Query != "" {
+		return defaultBase + "/chat/completion?" + acct.Query
+	}
 	ver := acct.Version
 	if ver == "" {
 		ver = "3.32.3"
