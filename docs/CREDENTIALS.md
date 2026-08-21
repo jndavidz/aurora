@@ -7,9 +7,7 @@
 
 | provider | 凭证 | 文件 | 有效期 | 保活/续期策略 |
 |---|---|---|---|---|
-| **ChatGPT** | access_token(JWT) | `access_tokens.txt` | 会话级(几小时~1天) | **自动**:后台健康检查每 10 分钟检查,过期时用 refresh/session 换发 |
-| | refresh_token | `refresh_tokens.txt` | 长期(数周~月) | 自动换发 access_token |
-| | session_token | `session_tokens.txt` | 会话级 | 自动换发 access_token |
+| **ChatGPT** | access_token(JWT) | `access_tokens.txt` | **~90 天**(实测 2026-08-21 抓,至 2026-11-19) | 页面上下文直接抓取(`capture-chatgpt.mjs`);**session→access exchange 链路 2026-08 起失效**(bogdanfinn 换出的 token 被 ChatGPT 判 `token_expired`),90 天到期需重抓 |
 | **DeepSeek** | userToken(localStorage) | `deepseek_tokens.txt` | 会话级(实测稳定) | 无自动保活;失效手动重抓浏览器 localStorage |
 | **GLM** | chatglm_refresh_token(JWT) | `glm_tokens.txt` | **~90 天** | **自动**:换发 access_token(JWT ~2h),refresh 轮换 |
 | **Kimi** | refresh_token(JWT) | `kimi_tokens.txt` | **~90 天** | **自动**:换发 access_token(~15 分钟),refresh 轮换 |
