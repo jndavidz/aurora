@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -22,6 +23,7 @@ const (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	tokenFile  string // token 池文件路径(换发轮换时回写,防"重启后旧 token 作废")
 	// 凭据
 	refreshToken string // 当前生效的 chatglm_refresh_token(长期)
 	accessToken  string // 换发来的 JWT(短期,~2h)
@@ -47,6 +49,7 @@ func NewClient(baseURL, tokenFile, refreshToken, accessToken, deviceID string) *
 		refreshToken: refreshToken,
 		accessToken:  accessToken,
 		deviceID:     deviceID,
+		tokenFile:    tokenFile,
 	}
 	if tokenFile != "" {
 		if tokens, err := loadTokens(tokenFile); err == nil && len(tokens) > 0 {
@@ -140,9 +143,45 @@ func (c *Client) RefreshAccessToken() error {
 	}
 	c.accessToken = ar.Result.AccessToken
 	if ar.Result.RefreshToken != "" {
+		oldToken := c.refreshToken
 		c.refreshToken = ar.Result.RefreshToken
+		c.persistRefreshToken(oldToken, ar.Result.RefreshToken)
 	}
 	return nil
+}
+
+// persistRefreshToken 把换发轮换后的新 refresh_token 回写池文件(替换旧值)。
+// 否则文件里永远是最旧的已作废 token —— 重启后换发失败(与 kimi 相同问题)。
+func (c *Client) persistRefreshToken(oldToken, newToken string) {
+	if c.tokenFile == "" || newToken == "" || oldToken == "" {
+		return
+	}
+	data, err := os.ReadFile(c.tokenFile)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	replaced := false
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if line == oldToken || line == newToken {
+			lines[i] = newToken
+			replaced = true
+		}
+	}
+	if !replaced {
+		lines = append(lines, newToken)
+	}
+	out := strings.Join(lines, "\n")
+	tmp := c.tokenFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, c.tokenFile)
+	log.Printf("[glm] refresh_token rotated & persisted (%s)", c.tokenFile)
 }
 
 // setSignedHeaders 设置签名头 + 固定头。token 作 Authorization。
