@@ -29,6 +29,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -219,6 +220,8 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	if err := sc.Err(); err != nil && res.Text == "" {
 		res.Err = fmt.Sprintf("mimo read: %v", err)
 	}
+	// 最终兜底:整体剥离残留的 citation 标记(流式 cleaner 之外的遗漏,如未闭合片段)
+	res.Text = stripAllCitations(res.Text)
 	if res.Text == "" && res.Err == "" {
 		res.Err = "mimo: empty response"
 	}
@@ -383,6 +386,12 @@ func (c *citationCleaner) push(text string) string {
 	}
 	return out.String()
 }
+
+// stripAllCitations 整体剥离 [citation:N] / (citation:N) 标记(含带 URL 的
+// [citation:11:https://...]),用于最终文本兜底清洗。
+var citationFullRe = regexp.MustCompile(`[\[(]\s*citation\s*:\s*[^)\]]*[)\]]`)
+
+func stripAllCitations(s string) string { return citationFullRe.ReplaceAllString(s, "") }
 
 func truncate(s string, n int) string {
 	if len(s) <= n {
