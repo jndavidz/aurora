@@ -77,6 +77,7 @@ export async function cdp(wsUrl) {
 
   return {
     on(fn) { listeners.add(fn); },
+    off(fn) { listeners.delete(fn); },
     sendRaw(obj) { sock.write(buildFrame(0x1, Buffer.from(JSON.stringify(obj)), true)); },
     cmd(method, params = {}) {
       return new Promise((res) => {

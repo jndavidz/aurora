@@ -617,11 +617,16 @@ async function execute(adapter, prompt, onDelta) {
     e.code = "no_browser";
     throw e;
   }
+  if (adapter.name === "gemini") {
+    // Gemini UI 模式:页面自己发消息(JS 实时生成 at),不需要令牌模板
+    return await executeGeminiUI(entry, prompt, onDelta);
+  }
   if (!adapter.ready()) {
     const e = new Error(adapter.name + " 会话模板缺失(先跑 capture-" + adapter.name + ".mjs 抓一次)");
     e.code = "no_tokens";
     throw e;
   }
+
   const { url, headers, body } = adapter.buildRequest(prompt);
   const parser = adapter.createParser(onDelta);
   const collector = { buffer: "" };
@@ -686,6 +691,187 @@ async function execute(adapter, prompt, onDelta) {
   return parser;
 }
 
+// ─── Gemini UI 注入模式(2026-08-21)───────────────────────────────
+// 背景:8/19 前端升级后 at 令牌(fsec 格式)变成一次性 —— 捕获-复用被服务端拒绝
+// (1097),自造 at 也 400。绕过方案:不动 fetch,改让页面 UI 自己发消息
+// (页面 JS 实时生成有效 at),桥监听 StreamGenerate 响应并解析文本。
+// 代价:每次请求在页面产生一条可见对话;会话上下文由页面自行维护(多轮无需拍平)。
+async function executeGeminiUI(entry, prompt, onDelta) {
+  const c = entry.c;
+  const parser = gemini.createParser(onDelta);
+
+  // 1. 挂一次性响应收集器:等 StreamGenerate 的 loadingFinished → getResponseBody
+  let resolveBody, rejectBody;
+  const bodyP = new Promise((res, rej) => { resolveBody = res; rejectBody = rej; });
+  let targetReqId = null;
+  let timer = null;
+  let captured = false;
+  const onMsg = (m) => {
+    try {
+      if (m.method === "Network.responseReceived") {
+        const url = (m.params.response || {}).url || "";
+        if (url.includes("StreamGenerate")) {
+          targetReqId = m.params.requestId;
+          console.log("[gemini-ui] StreamGenerate responseReceived reqId=" + targetReqId);
+        }
+      }
+      if (m.method === "Network.loadingFinished") {
+        console.log("[gemini-ui] loadingFinished reqId=" + m.params.requestId + " target=" + targetReqId + " captured=" + captured);
+      }
+      if (m.method === "Network.loadingFinished" && m.params.requestId === targetReqId && !captured) {
+        captured = true;
+        clearTimeout(timer);
+        c.off(onMsg);
+        c.cmd("Network.getResponseBody", { requestId: targetReqId })
+          .then((b) => resolveBody((b.result && b.result.body) || ""))
+          .catch((e) => rejectBody(e));
+      }
+    } catch {}
+  };
+  c.on(onMsg);
+
+  // 2. UI 输入并发送
+  console.log("[gemini-ui] waiting input...");
+  try {
+    await geminiUIInput(c, prompt);
+  } catch (e) {
+    c.off(onMsg);
+    console.log("[gemini-ui] input failed:", e.message);
+    throw e;
+  }
+  console.log("[gemini-ui] sent, waiting response...");
+
+  // 3. 等响应(超时 120s)
+  let body;
+  try {
+    body = await Promise.race([
+      bodyP,
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error("gemini UI 响应超时(120s)")), 120000); }),
+    ]);
+  } catch (e) {
+    c.off(onMsg);
+    e.code = "upstream_error";
+    throw e;
+  }
+  clearTimeout(timer);
+
+  // 4. 解析
+  parser.feed(body);
+  parser.flush();
+
+  // 5. 错误识别(与 fetch 模式同规则)
+  const errMatch = body.match(/BardErrorInfo"?\s*,\s*\[?(\d+)/);
+  const errFrame = body.match(/wrb\.fr",null,null,null,null,\[(\d+)\]/);
+  if (!parser.text && (errMatch || errFrame)) {
+    const code = errMatch ? errMatch[1] : errFrame[1];
+    const e = new Error("Gemini 会话错误(错误码 " + code + ")。请在浏览器 gemini 页面确认登录状态后重试。");
+    e.code = "token_stale";
+    throw e;
+  }
+  if (!parser.text) {
+    const e = new Error("gemini 上游空回复: " + body.slice(0, 600));
+    e.code = "empty_reply";
+    throw e;
+  }
+  return parser;
+}
+
+// geminiUIInput:聚焦输入框 → 插入文本 → 点发送按钮(失败自动 reload 重试一次)
+async function geminiUIInput(c, text) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      console.log("[gemini-ui] reload page and retry...");
+      try { await c.cmd("Page.reload", { ignoreCache: true }); } catch {}
+      await sleep(12000);
+    }
+    const ok = await geminiUIInputOnce(c, text);
+    if (ok) return;
+  }
+  const e = new Error("gemini UI 发送失败(输入框/发送按钮异常)");
+  e.code = "upstream_error";
+  throw e;
+}
+
+async function geminiUIInputOnce(c, text) {
+  // 等输入框可用(回答生成期间输入框不可用,轮询等待)
+  let pos = null;
+  for (let i = 0; i < 90; i++) {
+    try {
+      const r = await c.cmd("Runtime.evaluate", {
+        expression: `(function(){
+          const el = document.querySelector('.ql-editor') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+          if (!el) return 'NONE';
+          const b = el.getBoundingClientRect();
+          if (b.width === 0 || b.height === 0) return 'NONE';
+          return JSON.stringify({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+        })()`,
+        returnByValue: true,
+      });
+      const v = r.result && r.result.result && r.result.result.value;
+      if (v && v !== "NONE") { pos = JSON.parse(v); break; }
+    } catch {}
+    await sleep(1000);
+  }
+  if (!pos) { console.log("[gemini-ui] input not ready"); return false; }
+  console.log("[gemini-ui] input ready at", pos.x, pos.y);
+
+  // 若有"停止回答"按钮(页面卡在生成中),reload 更可靠(点击实测无效)
+  const stop = await c.cmd("Runtime.evaluate", {
+    expression: `(function(){
+      const b = [...document.querySelectorAll('button')].find(x => /stop|停止/i.test(x.getAttribute('aria-label') || x.title || ''));
+      return b ? 'YES' : 'NO';
+    })()`,
+    returnByValue: true,
+  });
+  if (stop.result && stop.result.result && stop.result.result.value === "YES") {
+    console.log("[gemini-ui] page busy (stop btn), return false for reload");
+    return false;
+  }
+
+  // 清空输入框残留(真实按键 Ctrl+A + Delete,避免 execCommand 破坏 Quill 状态)
+  await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
+  await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
+  await sleep(400);
+
+  await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+  await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+  await sleep(400);
+  await c.cmd("Input.insertText", { text });
+  await sleep(500);
+
+  // 验证输入生效
+  const chk = await c.cmd("Runtime.evaluate", {
+    expression: `(function(){ const el = document.querySelector('.ql-editor') || document.querySelector('textarea'); return (el && (el.innerText || el.value)) || ''; })()`,
+    returnByValue: true,
+  });
+  const got = chk.result && chk.result.result && chk.result.result.value;
+  console.log("[gemini-ui] input content:", JSON.stringify(got).slice(0, 60));
+  if (!got || !got.trim()) { console.log("[gemini-ui] input empty"); return false; }
+
+  // 点发送按钮(实测 CDP 鼠标事件对 Angular 无效,须用 JS click();页面回答中时按钮显示"停止回答",轮询等待)
+  for (let i = 0; i < 20; i++) {
+    const btn = await c.cmd("Runtime.evaluate", {
+      expression: `(function(){
+        const b = [...document.querySelectorAll('button')].find(x => /send|发送/i.test(x.getAttribute('aria-label') || x.title || ''));
+        if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return 'NONE';
+        b.click();
+        return 'CLICKED';
+      })()`,
+      returnByValue: true,
+    });
+    const bv = btn.result && btn.result.result && btn.result.result.value;
+    if (bv === "CLICKED") {
+      console.log("[gemini-ui] clicked send (js click)");
+      return true;
+    }
+    await sleep(1000);
+  }
+  console.log("[gemini-ui] send btn not found");
+  return false;
+}
+
 // ─── HTTP 服务 ───────────────────────────────────────────────────
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -721,7 +907,14 @@ async function handleChat(res, body) {
     sendJSON(res, 400, { error: { message: "unknown model: " + model, type: "invalid_request_error" } });
     return;
   }
-  const prompt = adapter.flatten(body.messages);
+  // Gemini UI 模式:页面自维护会话,只发最后一条用户消息(不能拍平历史,否则与页面上下文重复)
+  const prompt = adapter.name === "gemini"
+    ? (() => {
+        const last = [...(body.messages || [])].reverse().find((m) => m.role === "user");
+        const c = last && last.content;
+        return Array.isArray(c) ? c.map((x) => (x && x.text ? x.text : "")).filter(Boolean).join("\n") : (typeof c === "string" ? c : "");
+      })()
+    : adapter.flatten(body.messages);
   if (!prompt) {
     sendJSON(res, 400, { error: { message: "no message content", type: "invalid_request_error" } });
     return;
