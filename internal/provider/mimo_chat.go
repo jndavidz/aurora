@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
@@ -122,6 +123,9 @@ func (d *Mimo) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 func (d *Mimo) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *mimoweb.Client, token string, streamReq mimoweb.CompletionRequest) {
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
+	if strings.Contains(fullText, "citation") {
+		log.Printf("[mimo][prov] fullText has citation: %q", fullText[:min(80, len(fullText))])
+	}
 	if res.Err != "" && fullText == "" {
 		c.JSON(502, gin.H{"error": res.Err})
 		return
