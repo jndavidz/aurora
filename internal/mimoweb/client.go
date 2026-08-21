@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -222,6 +223,9 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	}
 	// 最终兜底:整体剥离残留的 citation 标记(流式 cleaner 之外的遗漏,如未闭合片段)
 	res.Text = stripAllCitations(res.Text)
+	if strings.Contains(res.Text, "citation") {
+		log.Printf("[mimo] WARN citation remains after strip: %q", res.Text[0:min(80, len(res.Text))])
+	}
 	if res.Text == "" && res.Err == "" {
 		res.Err = "mimo: empty response"
 	}
