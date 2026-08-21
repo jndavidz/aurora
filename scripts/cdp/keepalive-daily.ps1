@@ -26,6 +26,10 @@ $scp = 'C:\Windows\System32\OpenSSH\scp.exe'
 
 $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 
+# 0. MiniMax 每日签到(每天执行,不受下方 7 天保活判断影响;签到积分补充 Token Plan 配额)
+$ck = 'D:\repos\aurora\scripts\cdp\minimax-checkin.mjs'
+& $node $ck *>&1 | Out-File -Append -Encoding utf8 $log
+
 # 1. 距上次成功保活 < 7 天 → 今天不跑
 if (Test-Path $state) {
     $last = ([string](Get-Content $state -Raw)).Trim()
