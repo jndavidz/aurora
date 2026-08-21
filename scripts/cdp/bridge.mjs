@@ -697,7 +697,12 @@ async function execute(adapter, prompt, onDelta) {
 // (页面 JS 实时生成有效 at),桥监听 StreamGenerate 响应并解析文本。
 // 代价:每次请求在页面产生一条可见对话;会话上下文由页面自行维护(多轮无需拍平)。
 async function executeGeminiUI(entry, prompt, onDelta) {
-  const c = entry.c;
+  // 用独立 CDP 连接执行 UI 操作与响应监听:共享连接上的事件风暴/监听器
+  // (applyCapture 等)会干扰 Input 事件时序(实测共享连接 Enter 不发送,独立连接成功)
+  const page = await findTarget(gemini.pageMatch);
+  if (!page) { const e = new Error("gemini 页面未打开"); e.code = "no_browser"; throw e; }
+  const c = await cdp(page.webSocketDebuggerUrl);
+  await c.cmd("Network.enable");
   const parser = gemini.createParser(onDelta);
 
   // 1. 挂一次性响应收集器:等 StreamGenerate 的 loadingFinished → getResponseBody
@@ -716,7 +721,7 @@ async function executeGeminiUI(entry, prompt, onDelta) {
         }
       }
       if (m.method === "Network.loadingFinished") {
-        console.log("[gemini-ui] loadingFinished reqId=" + m.params.requestId + " target=" + targetReqId + " captured=" + captured);
+        // 不打印(事件风暴);仅匹配 targetReqId 时处理
       }
       if (m.method === "Network.loadingFinished" && m.params.requestId === targetReqId && !captured) {
         captured = true;
@@ -799,7 +804,7 @@ async function geminiUIInputOnce(c, text) {
     try {
       const r = await c.cmd("Runtime.evaluate", {
         expression: `(function(){
-          const el = document.querySelector('.ql-editor') || document.querySelector('textarea') || document.querySelector('[contenteditable="true"]');
+          const el = document.querySelector('.ql-editor') || document.querySelector('[contenteditable="true"]');
           if (!el) return 'NONE';
           const b = el.getBoundingClientRect();
           if (b.width === 0 || b.height === 0) return 'NONE';
@@ -815,60 +820,46 @@ async function geminiUIInputOnce(c, text) {
   if (!pos) { console.log("[gemini-ui] input not ready"); return false; }
   console.log("[gemini-ui] input ready at", pos.x, pos.y);
 
-  // 若有"停止回答"按钮(页面卡在生成中),reload 更可靠(点击实测无效)
-  const stop = await c.cmd("Runtime.evaluate", {
-    expression: `(function(){
-      const b = [...document.querySelectorAll('button')].find(x => /stop|停止/i.test(x.getAttribute('aria-label') || x.title || ''));
-      return b ? 'YES' : 'NO';
-    })()`,
+  // 清空输入框残留:execCommand selectAll+delete(可靠;CDP Ctrl+A 依赖焦点,残留时失效)
+  await c.cmd("Runtime.evaluate", {
+    expression: `(function(){ const el = document.querySelector('.ql-editor') || document.querySelector('[contenteditable="true"]'); if (!el) return 'NO'; el.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); return 'ok'; })()`,
     returnByValue: true,
   });
-  if (stop.result && stop.result.result && stop.result.result.value === "YES") {
-    console.log("[gemini-ui] page busy (stop btn), return false for reload");
-    return false;
-  }
-
-  // 清空输入框残留(真实按键 Ctrl+A + Delete,避免 execCommand 破坏 Quill 状态)
-  await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
-  await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
-  await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
-  await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "Delete", code: "Delete", windowsVirtualKeyCode: 46 });
   await sleep(400);
 
   await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
   await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
   await sleep(400);
+  // 插入文本(CDP insertText 实测与 JS click 组合可用;SendButtonDesync 是页面偶发,
+  // 由外层 reload 重试兜底)
   await c.cmd("Input.insertText", { text });
   await sleep(500);
 
   // 验证输入生效
   const chk = await c.cmd("Runtime.evaluate", {
-    expression: `(function(){ const el = document.querySelector('.ql-editor') || document.querySelector('textarea'); return (el && (el.innerText || el.value)) || ''; })()`,
+    expression: `(function(){ const el = document.querySelector('.ql-editor') || document.querySelector('[contenteditable="true"]'); return (el && (el.innerText || el.value)) || ''; })()`,
     returnByValue: true,
   });
   const got = chk.result && chk.result.result && chk.result.result.value;
   console.log("[gemini-ui] input content:", JSON.stringify(got).slice(0, 60));
   if (!got || !got.trim()) { console.log("[gemini-ui] input empty"); return false; }
 
-  // 点发送按钮(实测 CDP 鼠标事件对 Angular 无效,须用 JS click();页面回答中时按钮显示"停止回答",轮询等待)
-  for (let i = 0; i < 20; i++) {
-    const btn = await c.cmd("Runtime.evaluate", {
-      expression: `(function(){
-        const b = [...document.querySelectorAll('button')].find(x => /send|发送/i.test(x.getAttribute('aria-label') || x.title || ''));
-        if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return 'NONE';
-        b.click();
-        return 'CLICKED';
-      })()`,
+  // 发送:CDP 真实 Enter 键(实测 JS click 被页面 isTrusted 拦截 [SendButtonDesync];
+  // CDP 键盘事件 isTrusted=true 有效;keyDown 必须带 text:"\r" 触发字符输入,否则不发送)
+  await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+  await sleep(100);
+  await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+  // 发送成功标志:输入框被清空(页面提交消息后清空输入)
+  for (let j = 0; j < 8; j++) {
+    const chk2 = await c.cmd("Runtime.evaluate", {
+      expression: `(function(){ const el = document.querySelector('.ql-editor') || document.querySelector('[contenteditable="true"]'); return (el && (el.innerText || el.value || '').trim()) || ''; })()`,
       returnByValue: true,
     });
-    const bv = btn.result && btn.result.result && btn.result.result.value;
-    if (bv === "CLICKED") {
-      console.log("[gemini-ui] clicked send (js click)");
-      return true;
-    }
+    const v2 = chk2.result && chk2.result.result && chk2.result.result.value;
+    if (!v2) { console.log("[gemini-ui] Enter sent, input cleared"); return true; }
     await sleep(1000);
   }
-  console.log("[gemini-ui] send btn not found");
+  console.log("[gemini-ui] Enter sent but input not cleared (page desync)");
   return false;
 }
 
