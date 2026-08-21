@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"log"
 	"net/http"
 	"strings"
 
@@ -65,6 +64,7 @@ func (d *Mimo) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 func (d *Mimo) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *mimoweb.Client, token string, streamReq mimoweb.CompletionRequest) {
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
+	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
 		c.JSON(502, gin.H{"error": res.Err})
 		return
@@ -123,9 +123,8 @@ func (d *Mimo) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 func (d *Mimo) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *mimoweb.Client, token string, streamReq mimoweb.CompletionRequest) {
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
-	if strings.Contains(fullText, "citation") {
-		log.Printf("[mimo][prov] fullText has citation: %q", fullText[:min(80, len(fullText))])
-	}
+	// 最终兜底:流式 cleaner 帧边界之外的 citation 残留整体剥一次
+	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
 		c.JSON(502, gin.H{"error": res.Err})
 		return
@@ -279,6 +278,7 @@ func (d *Mimo) codingResponsesStream(c *gin.Context, req *official.ResponsesAPIR
 func (d *Mimo) codingResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *mimoweb.Client, token string, streamReq mimoweb.CompletionRequest) {
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
+	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
 		c.JSON(502, gin.H{"error": res.Err})
 		return
@@ -385,6 +385,7 @@ func (d *Mimo) codingCompletionsStream(c *gin.Context, req *official.APIRequest,
 func (d *Mimo) codingCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *mimoweb.Client, token string, streamReq mimoweb.CompletionRequest) {
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
+	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
 		c.JSON(502, gin.H{"error": res.Err})
 		return

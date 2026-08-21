@@ -400,6 +400,9 @@ var citationFullRe = regexp.MustCompile(`[\[(]?\s*citation\s*[:：]?\s*\d*\s*(?:
 
 func stripAllCitations(s string) string { return citationFullRe.ReplaceAllString(s, "") }
 
+// CleanCitations 导出:整体剥离 citation 残留(供 provider 层对聚合文本兜底清洗)。
+func CleanCitations(s string) string { return stripAllCitations(s) }
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
