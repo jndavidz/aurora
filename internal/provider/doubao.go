@@ -79,17 +79,14 @@ func (d *Doubao) Handles(model string) bool {
 	return ok
 }
 
-// webClient 惰性构造网页客户端。
+// webClient 每次请求重新加载账号参数(a_bogus/web_tab_id/ms_token 等为会话级签名,
+// 由 PC 侧 capture-doubao.mjs 持续更新 doubao_accounts.json;缓存会导致签名过期失效)。
 func (d *Doubao) webClient() *doubaoweb.Client {
-	if d.client == nil {
-		accounts, err := doubaoweb.LoadAccounts(d.cfg.DoubaoAccounts)
-		if err != nil {
-			d.client = nil
-			return nil
-		}
-		d.client = doubaoweb.NewClient(accounts)
+	accounts, err := doubaoweb.LoadAccounts(d.cfg.DoubaoAccounts)
+	if err != nil || len(accounts) == 0 {
+		return nil
 	}
-	return d.client
+	return doubaoweb.NewClient(accounts)
 }
 
 // Responses 处理豆包 chat 变体(/v1/responses)。
