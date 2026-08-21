@@ -77,6 +77,12 @@ type Config struct {
 	ClaudeCDPKey string
 	ClaudeModels []string
 
+	// 混元(腾讯元宝)CDP 桥通道。走真实浏览器页内 fetch 重放(直连逆向已风控
+	// 2 个账号,见 docs/YUANBAO.md)。桥地址默认复用 GEMINI_CDP_URL。
+	HunyuanCDPURL string
+	HunyuanCDPKey string
+	HunyuanModels []string
+
 	// MiniMax(agent.minimaxi.com)网页逆向通道配置(直连,协议见 docs/MINIMAX.md)。
 	MinimaxWebTokens string // token 池文件路径(每行一个 JWT,localStorage._token)
 	MinimaxModels    []string
@@ -154,6 +160,10 @@ func Load() Config {
 		ClaudeCDPURL: os.Getenv("CLAUDE_CDP_URL"),
 		ClaudeCDPKey: os.Getenv("CLAUDE_CDP_KEY"),
 		ClaudeModels: splitCSV(os.Getenv("CLAUDE_MODELS")),
+
+		HunyuanCDPURL: os.Getenv("HUNYUAN_CDP_URL"),
+		HunyuanCDPKey: os.Getenv("HUNYUAN_CDP_KEY"),
+		HunyuanModels: splitCSV(os.Getenv("HUNYUAN_MODELS")),
 
 		MinimaxWebTokens: os.Getenv("MINIMAX_WEB_TOKENS"),
 		MinimaxModels:    splitCSV(os.Getenv("MINIMAX_MODELS")),

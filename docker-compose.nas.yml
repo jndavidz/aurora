@@ -66,6 +66,10 @@ services:
       # (纯 cookie 认证,无会话令牌;见 docs/CLAUDE.md)。
       - CLAUDE_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
       # - CLAUDE_MODELS=${CLAUDE_MODELS:-}
+      # 混元(腾讯元宝)真浏览器执行通道(CDP 桥页内 fetch 重放;直连逆向已风控,
+      # 见 docs/YUANBAO.md §风控)。桥地址默认复用 GEMINI_CDP_URL。
+      - HUNYUAN_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
+      # - HUNYUAN_MODELS=${HUNYUAN_MODELS:-}
       # MiniMax(agent.minimaxi.com)网页逆向通道(直连,非桥)。token 放
       # tokens/minimax_tokens.txt(每行一个 JWT,localStorage._token);
       # 签名算法与协议见 docs/MINIMAX.md。device/user id 为账号级参数(换账号需更新)。

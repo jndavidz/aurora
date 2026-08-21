@@ -572,8 +572,137 @@ const claude = {
   },
 };
 
+// ─── 腾讯元宝(混元)适配器(2026-08-22)──────────────────────────────────
+// 背景:直连逆向(bogdanfinn TLS 指纹模拟)已风控 2 个账号 —— 本适配器用
+// 真实浏览器**页内 fetch** 重放(同源自动带 cookie,无 TLS 指纹/签名问题,
+// 风控暴露与真人操作一致)。流程:每次请求 create 会话 → chat 重放,
+// 认证头(X-Uskey/X-HY93/X-device-id 等)会话级复用(从用户手动请求捕获一次,
+// 存 STATE_DIR/yuanbao_headers.json;登录态过期需重登后重抓)。
+const HUNYUAN_HEADERS_FILE = path.join(STATE_DIR, "yuanbao_headers.json");
+let hunyuanCfg = null; // { headers: {...}, chatBody: {...} }
+function loadHunyuanCfg() {
+  try {
+    if (fs.existsSync(HUNYUAN_HEADERS_FILE)) {
+      hunyuanCfg = JSON.parse(fs.readFileSync(HUNYUAN_HEADERS_FILE, "utf8"));
+      return true;
+    }
+  } catch (e) {
+    console.error("[state][hunyuan] config load failed:", e.message);
+  }
+  return false;
+}
+
+const hunyuan = {
+  name: "hunyuan",
+  prefix: "hunyuan-",
+  pageMatch: "yuanbao.tencent.com",
+  homeUrl: "https://yuanbao.tencent.com/chat/naQivTmsDa",
+  ready: () => !!(hunyuanCfg && hunyuanCfg.headers && hunyuanCfg.chatBody),
+  models: [
+    { id: "hunyuan-hy3-chat", object: "model", owned_by: "tencent", capabilities: ["web_search", "reasoning"] },
+  ],
+
+  flatten(messages) {
+    const parts = [];
+    for (const m of messages || []) {
+      let content = m.content;
+      if (Array.isArray(content)) {
+        content = content.map((c) => (c && c.text ? c.text : "")).filter(Boolean).join("\n");
+      }
+      if (typeof content !== "string" || !content.trim()) continue;
+      if (m.role === "assistant") parts.push("元宝：" + content);
+      else if (m.role === "system") parts.push("背景说明：" + content);
+      else parts.push("用户：" + content);
+    }
+    return parts.join("\n");
+  },
+
+  // SSE 解析:内容增量 {"type":"text","msg":"..."},meta 帧 endConv/stopReason 结束
+  createParser(onDelta) {
+    let buf = "";
+    const self = {
+      done: false,
+      text: "",
+      feed(chunk) {
+        buf += chunk;
+        let idx;
+        while ((idx = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, idx);
+          buf = buf.slice(idx + 1);
+          const t = line.trim();
+          if (!t.startsWith("data:")) continue;
+          const payload = t.slice(5).trim();
+          if (payload === "[DONE]") { self.done = true; continue; }
+          try {
+            const j = JSON.parse(payload);
+            if (j.type === "text" && typeof j.msg === "string" && j.msg) {
+              self.text += j.msg;
+              if (onDelta) onDelta(j.msg);
+            } else if (j.type === "meta" && (j.stopReason === "stop" || j.endConv)) {
+              self.done = true;
+            } else if (j.type === "error") {
+              // 记录但不中断(如 21007 重试提示),由外层判断空回复
+            }
+          } catch {}
+        }
+      },
+      flush() {
+        if (buf.trim().startsWith("data:")) self.feed(buf.trim() + "\n");
+      },
+    };
+    return self;
+  },
+};
+
+async function executeHunyuan(entry, prompt, onDelta) {
+  if (!hunyuanCfg || !hunyuanCfg.headers || !hunyuanCfg.chatBody) {
+    const e = new Error("hunyuan 会话头缺失(先运行 capture-yuanbao.mjs 抓一次)");
+    e.code = "no_tokens";
+    throw e;
+  }
+  const c = entry.c;
+  const parser = hunyuan.createParser(onDelta);
+  // 构造 chat body(模板替换 prompt/cid)
+  const chatBody = JSON.parse(JSON.stringify(hunyuanCfg.chatBody));
+  chatBody.prompt = prompt;
+  chatBody.displayPrompt = prompt;
+  // headers:X-AgentID 动态(agentId/cid)
+  const headers = { ...hunyuanCfg.headers };
+  const pageJs =
+    "(async () => {" +
+    "try {" +
+    "const H = " + JSON.stringify(headers) + ";" +
+    "const cr = await fetch('https://yuanbao.tencent.com/api/user/agent/conversation/create', { method: 'POST', headers: H, body: JSON.stringify({ agentId: 'naQivTmsDa' }), credentials: 'include' });" +
+    "const cj = await cr.json();" +
+    "const cid = cj && cj.id;" +
+    "if (!cid) return 'ERR create: ' + JSON.stringify(cj).slice(0, 300);" +
+    "H['X-AgentID'] = 'naQivTmsDa/' + cid;" +
+    "const cb = " + JSON.stringify(chatBody) + ";" +
+    "cb.conversationId = cid;" +
+    "const r = await fetch('https://yuanbao.tencent.com/api/chat/' + cid, { method: 'POST', headers: H, body: JSON.stringify(cb), credentials: 'include' });" +
+    "const txt = await r.text();" +
+    "return 'OK ' + txt;" +
+    "} catch (e) { return 'ERR ' + (e && e.message ? e.message : e); }" +
+    "})()";
+  const rr = await c.cmd("Runtime.evaluate", { expression: pageJs, awaitPromise: true, returnByValue: true });
+  const result = rr && rr.result && rr.result.result && rr.result.result.value;
+  if (typeof result !== "string" || !result.startsWith("OK")) {
+    const e = new Error("hunyuan 页内请求失败: " + result);
+    e.code = "upstream_error";
+    throw e;
+  }
+  parser.feed(result.slice(3));
+  parser.flush();
+  if (!parser.text) {
+    const e = new Error("hunyuan 上游空回复: " + result.slice(3, 400));
+    e.code = "empty_reply";
+    throw e;
+  }
+  return parser;
+}
+
 // 适配器注册表:model 前缀 → 适配器(加新模型只需在这里登记)
-const adapters = [gemini, claude];
+const adapters = [gemini, claude, hunyuan];
 
 function resolveAdapter(model) {
   return adapters.find((a) => model.startsWith(a.prefix)) || null;
@@ -620,6 +749,10 @@ async function execute(adapter, prompt, onDelta) {
   if (adapter.name === "gemini") {
     // Gemini UI 模式:页面自己发消息(JS 实时生成 at),不需要令牌模板
     return await executeGeminiUI(entry, prompt, onDelta);
+  }
+  if (adapter.name === "hunyuan") {
+    // 元宝:页内 fetch 重放(create 会话 + chat),认证头会话级复用
+    return await executeHunyuan(entry, prompt, onDelta);
   }
   if (!adapter.ready()) {
     const e = new Error(adapter.name + " 会话模板缺失(先跑 capture-" + adapter.name + ".mjs 抓一次)");
@@ -1008,11 +1141,13 @@ process.on("SIGINT", () => {
 // ─── 启动 ────────────────────────────────────────────────────────
 const hasTokens = loadState();
 const hasClaude = loadClaudeState();
+const hasHunyuan = loadHunyuanCfg();
 server.listen(PORT, HOST, async () => {
   console.log("[bridge] listening on http://" + HOST + ":" + PORT);
   console.log("[bridge] auth:", AUTH ? "enabled" : "disabled (localhost only)");
   console.log("[bridge] tokens:", hasTokens ? "loaded" : "MISSING (run capture-streamgenerate.mjs once)");
   console.log("[bridge] claude:", hasClaude ? "loaded" : "MISSING (run capture-claude.mjs once)");
+  console.log("[bridge] hunyuan:", hasHunyuan ? "loaded" : "MISSING (run capture-yuanbao.mjs once)");
   console.log("[bridge] idle auto-stop:", IDLE_TIMEOUT_MS > 0 ? Math.round(IDLE_TIMEOUT_MS / 60000) + "min" : "disabled");
   console.log("[bridge] rate limit:", MIN_INTERVAL_MS > 0 ? (MIN_INTERVAL_MS + "ms + jitter 0-" + JITTER_MS + "ms") : "disabled (chat free; coding limited by aurora)");
   const e1 = await ensureConn(gemini).catch(() => null);
