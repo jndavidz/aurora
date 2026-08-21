@@ -175,12 +175,17 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 	}
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	frameN := 0
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		frameN++
+		if frameN <= 3 || strings.Contains(payload, "citation") || strings.Contains(payload, "webSearch") {
+			log.Printf("[mimo] frame[%d] %s", frameN, truncate(payload, 120))
+		}
 		if payload == `{"content":"[DONE]"}` {
 			res.Done = true
 			continue
