@@ -221,6 +221,7 @@ func (c *Client) Complete(token string, req CompletionRequest, onDelta func(Delt
 		res.Err = fmt.Sprintf("mimo read: %v", err)
 	}
 	// 最终兜底:整体剥离残留的 citation 标记(流式 cleaner 之外的遗漏,如未闭合片段)
+	res.Text += cc.flush()
 	res.Text = stripAllCitations(res.Text)
 	if res.Text == "" && res.Err == "" {
 		res.Err = "mimo: empty response"
@@ -390,7 +391,27 @@ func (c *citationCleaner) push(text string) string {
 		c.buf = c.buf[start:] // 未闭合,留待下一帧
 		break
 	}
-	return out.String()
+	res := out.String()
+	// 帧尾孤立开括号(可能是 citation 开括号跨帧,如 "25℃(" + 下一帧 "citation:1)"),
+	// 回退到缓冲等待确认;非 citation 时下一帧会原样输出。
+	if res != "" && (strings.HasSuffix(res, "(") || strings.HasSuffix(res, "[")) {
+		c.buf = res[len(res)-1:] + c.buf
+		res = res[:len(res)-1]
+	}
+	return res
+}
+
+// flush 流结束时处理残留缓冲:未闭合 citation 标记丢弃;孤立开括号等输出。
+func (c *citationCleaner) flush() string {
+	if c.buf == "" {
+		return ""
+	}
+	res := c.buf
+	c.buf = ""
+	if strings.Contains(res, "citation") {
+		return "" // 未闭合引用标记,丢弃
+	}
+	return res
 }
 
 // stripAllCitations 整体剥离 citation 标记及流式分片残留(含未闭合片段)。

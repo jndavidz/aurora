@@ -61,4 +61,32 @@ func TestCitationCleaner(t *testing.T) {
 	if b2 != "风大" {
 		t.Errorf("bare-cit frame2 = %q, want 风大", b2)
 	}
+	// 跨帧开括号: "25℃(" 帧尾括号回退 + 下帧 citation → 一起吞
+	cc3 := newCitationCleaner()
+	a3 := cc3.push("气温25℃(")
+	if a3 != "气温25℃" {
+		t.Errorf("paren-retract frame = %q, want 气温25℃", a3)
+	}
+	b3 := cc3.push("citation:1)风大")
+	if b3 != "风大" {
+		t.Errorf("paren-cit frame2 = %q, want 风大", b3)
+	}
+	// 帧尾括号 + 非 citation 下帧:括号应输出
+	cc4 := newCitationCleaner()
+	a4 := cc4.push("气温25℃(")
+	b4 := cc4.push("左右")
+	if a4+b4 != "气温25℃(左右" {
+		t.Errorf("paren-normal = %q+%q, want 气温25℃(左右", a4, b4)
+	}
+	// flush:未闭合 citation 丢弃,孤立括号输出
+	cc5 := newCitationCleaner()
+	_ = cc5.push("abc(citation:")
+	if got := cc5.flush(); got != "" {
+		t.Errorf("flush pending-cit = %q, want empty", got)
+	}
+	cc6 := newCitationCleaner()
+	_ = cc6.push("abc(")
+	if got := cc6.flush(); got != "(" {
+		t.Errorf("flush lone-paren = %q, want (", got)
+	}
 }
