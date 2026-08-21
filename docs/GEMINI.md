@@ -275,6 +275,24 @@ StreamGenerate 请求**刷新 `at`/`SNlM6e`/`f.sid`/jspb 头(会话级令牌无�
 - 限制:单通道串行 + 2s+抖动间隔(防封号);一 profile 一账号,
   多账号 = 多桥(不同 PC)或多浏览器上下文
 
+### ⚠️ Chrome 生命周期铁律:必须优雅关闭,禁止强制杀进程(2026-08-22 血泪教训)
+
+**关闭 keeper 小号 Chrome 只能走优雅路径,任何脚本/命令都不得强杀进程
+(`taskkill /F`、`Stop-Process -Force`、杀进程树)。**
+
+- **正确的关闭方式**:
+  1. CDP `Browser.close`(keeper 的 idle 自动停止、`keepalive-node.mjs` 均已如此);
+  2. 或浏览器菜单正常退出。
+- **强制关闭的后果(实测多次踩坑)**:
+  1. Chrome 下次启动显示**"恢复上次异常关闭的标签"横幅** —— 此横幅存在时
+     **gemini 页面输入/发送失效**(桥的 UI 注入点击/输入不生效,请求报
+     "输入框/发送按钮异常"),必须**人工点击"恢复"横幅**页面才恢复正常;
+  2. 页面实例/令牌状态错乱(与 8/19 一次性 at 问题叠加,排障极费时);
+  3. Google 的 `RotateCookiesPage` 反复出现(风控信号)。
+- **需要重启 Chrome 时**:先 `POST /wake` 前确认旧实例已优雅退出;若发现
+  恢复横幅,人工点击后再使用桥。**调试脚本禁止用 Stop-Process 杀 Chrome**,
+  改用 CDP close(见 `scripts/cdp/` 中 keeper/keepalive 的做法)。
+
 ### 协议更新(2026-08-14 抓包,`internal/geminweb/client.go` 已滞后)
 
 直连通道若恢复,须按以下实测更新(否则 BardErrorInfo 1096/1157):
