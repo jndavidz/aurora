@@ -248,6 +248,27 @@ node scripts/cdp/bridge.mjs
 StreamGenerate 请求**刷新 `at`/`SNlM6e`/`f.sid`/jspb 头(会话级令牌无需人工重抓,
 浏览器保持登录即可)。用户手动在页面里聊天也会顺带刷新。
 
+### UI 注入模式(2026-08-21,at 一次性化后的替代方案)
+
+**背景**:8/19 前端升级后 `at` 令牌(`fsec:` 格式)变成**一次性** —— 捕获-复用
+被服务端拒绝(错误码 1097),自造 at 也 400(前缀绑定会话且含签名)。页内 fetch
+模式整体失效。
+
+**方案**:桥不再构造请求,改**在页面输入框键入 prompt 并 JS 点击发送按钮**,
+让页面 JS 自己生成有效 at 并发出 StreamGenerate;桥通过 Network 监听
+(`responseReceived`+`loadingFinished`+`getResponseBody`)收集响应流,复用原
+`createParser` 解析文本增量。实测:
+- 非流式/流式均正常(5-6s 首 token)
+- **CDP `Input.dispatchMouseEvent` 点击对 Angular 无效(不触发发送),必须用
+  JS `b.click()`**(实测)
+- 文本输入用 `Input.insertText`(真实插入,Quill 认可);发送前需 Ctrl+A+Delete
+  清空残留(页面卡"停止回答"时自动 reload 页面重试)
+- 多轮上下文由页面自行维护(桥只发最后一条 user 消息,不拍平历史)
+- 代价:每次请求在页面产生一条可见对话;请求串行(桥本来就串行)
+
+**自愈**:起桥后若对话报 `token_stale`,说明页面会话失效(登出/风控),
+在浏览器 gemini 页面重新登录即可,桥自动恢复。
+
 ### 资源占用与限制
 
 - Chrome 152 headful ~250-400MB + 桥 ~50-80MB,全部在 PC;NAS 零影响
