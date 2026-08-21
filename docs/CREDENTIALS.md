@@ -18,8 +18,9 @@
 | **Gemini**(CDP 桥) | Google 登录 cookie(profile) | Chrome profile 磁盘 | **~399 天滚动**(实测 2026-08-14 抓,至 2027-09-18) | **真浏览器全自动**:桥每次请求自捕获刷新会话令牌;30 分钟无活动休眠、请求自动唤醒;崩溃后恢复标签页令牌仍在;异常失效时"页面发一条消息"自愈;PC 每周保活任务见文末 |
 | | 会话令牌 at/SNlM6e/f.sid | `.runtime/bridge/gemini_session.json` | 会话级(随页面实例轮换) | 同上 |
 | **Claude**(CDP 桥) | 登录 cookie | Chrome profile 磁盘 | **~28 天滚动**(实测 2026-08-14,至 2026-09-11) | 全自动:模板/客户端头每次请求自刷新;**无会话令牌**;5h+7d 双限额实时监控与预警;PC 每周保活任务见文末 |
-| **MiniMax** | token(JWT) | `minimax_tokens.txt` | **~38 天**(实测 exp) | **PC 周保活代取**:登录态活着时自动抓回并同步 NAS;JWT 38 天/登录 cookie 最长 60 天,到期前预警,需人工重新登录;另有 Token Plan 配额耗尽风险 |
+| **MiniMax** | token(JWT) | `minimax_tokens.txt` | **~38 天**(实测 exp) | **PC 周保活代取** + **每日自动签到**(`minimax-checkin.mjs` 并入每日任务,400~1000 积分/天,30 天有效,持续补充 Token Plan 配额);JWT 38 天/登录 cookie 最长 60 天,到期前预警,需人工重新登录 |
 | **Mimo** | Cookie 串(ph/serviceToken/userId) | `mimo_tokens.txt` | **~30 天固定,不滚动**(实测 2026-08-14 抓,至 2026-09-13) | **PC 周保活代取**:cookie 固定 30 天,代取只省手动抓取;到期前预警,仍需每月人工登录一次 |
+| **豆包** | cookie + URL 签名参数 + body 会话模板 | `doubao_accounts.json` | `a_bogus` 绑定参数集+会话字段(改 prompt 无碍;实测 30 分钟+ 仍有效) | **模板重放**(2026-08-22 修复):`capture-doubao.mjs` 整段捕获 completion 请求的 query+postData 模板,aurora 每次请求重读文件、只替换 prompt 文本 —— **无需桥化**;签名失效时在页面发一条消息刷新模板 |
 | ~~元宝~~ | — | — | — | **已关停**(2026-08-14 风控冻结) |
 
 ## 保活机制分级
