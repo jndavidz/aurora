@@ -97,28 +97,28 @@ async function refreshMinimax() {
 }
 
 async function refreshMimo() {
-  const url = "https://aistudio.xiaomimimo.com/";
-  const t = await ensurePage(url);
+  const t = await ensurePage("https://aistudio.xiaomimimo.com/");
   const c = await cdp(t.webSocketDebuggerUrl);
-  let cookies = [];
+  let all = [];
   try {
-    const gr = await c.cmd("Network.getCookies", { urls: [url] });
-    cookies = gr.result.cookies;
+    const gr = await c.cmd("Network.getAllCookies");
+    all = gr.result.cookies || [];
   } catch (e) {
-    console.log("[refresh] mimo: FAIL getCookies:", e.message);
+    console.log("[refresh] mimo: FAIL getAllCookies:", e.message);
     c.close();
     return false;
   }
-  const get = (n) => cookies.find((x) => x.name === n);
-  const ph = get("xiaomichatbot_ph");
-  const st = get("xiaomichatbot_serviceToken");
-  const uid = get("userId");
-  if (!ph || !st) { console.log("[refresh] mimo: FAIL missing cookies (logged out?)"); c.close(); return false; }
-  if (ph.expires !== -1 && ph.expires * 1000 <= Date.now()) { console.log("[refresh] mimo: FAIL cookie expired"); c.close(); return false; }
-  const days = ph.expires === -1 ? null : Math.round((ph.expires * 1000 - Date.now()) / 86400000);
-  const line = `xiaomichatbot_ph="${ph.value}"; xiaomichatbot_serviceToken="${st.value}"; userId=${uid ? uid.value : ""}`;
+  // mimo 2026-08-23 改版:认证 = URL ph + 完整登录 cookie(含 .xiaomi.com 域)
+  const rel = all.filter((ck) => /xiaomimimo|xiaomi/i.test(ck.domain));
+  const ph = rel.find((x) => x.name === "xiaomichatbot_ph");
+  if (!ph || !ph.value) {
+    console.log("[refresh] mimo: FAIL no ph cookie (logged out?)");
+    c.close();
+    return false;
+  }
+  const line = rel.map((x) => `${x.name}=${x.value}`).join("; ");
   writeToken("mimo_tokens.txt", line);
-  console.log("[refresh] mimo: OK 剩余 " + (days === null ? "会话" : days + " 天") + (days !== null && days <= 14 ? "  <<< 请登录刷新!" : ""));
+  console.log("[refresh] mimo: OK ph len=" + ph.value.length + " cookie len=" + line.length);
   c.close();
   return true;
 }
