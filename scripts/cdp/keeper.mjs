@@ -43,6 +43,15 @@ const LOG_FILE = process.env.KEEPER_LOG || path.join(path.dirname(new URL(import
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function log(msg) {
   const line = "[" + new Date().toISOString() + "] [keeper] " + msg;
   console.log(line);
@@ -136,6 +145,7 @@ const chromeArgs = [
 
 let waking = false;
 let bridgePid = null;
+let doubaoHookPid = null;
 
 async function wake() {
   while (waking) await sleep(300); // 单飞:并发唤醒合并为一次
@@ -168,6 +178,16 @@ async function wake() {
         ...process.env,
         BRIDGE_HOST: process.env.BRIDGE_HOST || "0.0.0.0",
       }).pid;
+    }
+    // 豆包模板自动捕获器(方案 B:页面内 hook 捕获当前版本请求 → aurora 直连自动更新;
+    // 新版本 completion 无 a_bogus,模板需保持最新,见 docs/CREDENTIALS.md)
+    if (!doubaoHookPid || !isAlive(doubaoHookPid)) {
+      try {
+        doubaoHookPid = spawnDetached(process.execPath, ["D:\\repos\\aurora\\scripts\\cdp\\doubao-hook.mjs"], {}).pid;
+        log("wake: doubao-hook started pid=" + doubaoHookPid);
+      } catch (e) {
+        log("wake: doubao-hook start failed: " + e.message);
+      }
     }
     const t0 = Date.now();
     while (Date.now() - t0 < MAX_WAIT_MS) {
