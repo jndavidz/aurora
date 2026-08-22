@@ -175,7 +175,7 @@ func (c *Client) persistRefreshToken(oldToken, newToken string) {
 	if !replaced {
 		lines = append(lines, newToken)
 	}
-	out := strings.Join(lines, "\n")
+	out := strings.Join(lines, "\n") + "\n" // 末尾换行(loadTokens 按行读,无尾换行会导致加载异常)
 	tmp := c.tokenFile + ".tmp"
 	if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
 		return
