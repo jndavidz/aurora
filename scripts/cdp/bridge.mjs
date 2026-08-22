@@ -1007,21 +1007,14 @@ async function geminiUIInputOnce(c, text) {
 
   // 发送:CDP 真实 Enter 键(实测 JS click 被页面 isTrusted 拦截 [SendButtonDesync];
   // CDP 键盘事件 isTrusted=true 有效;keyDown 必须带 text:"\r" 触发字符输入,否则不发送)
+  // 注意:发送成功后输入框**可能残留**(实测 Gemini 偶发不清空,但消息已发出、响应正常)
+  // —— 不能以"输入框清空"判定成败(会误判 desync → reload 循环),改由
+  // executeGeminiUI 的响应监听判定,这里 Enter 后直接返回。
   await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
   await sleep(100);
   await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
-  // 发送成功标志:输入框被清空(页面提交消息后清空输入)
-  for (let j = 0; j < 8; j++) {
-    const chk2 = await c.cmd("Runtime.evaluate", {
-      expression: `(function(){ const el = document.querySelector('.ql-editor') || document.querySelector('[contenteditable="true"]'); return (el && (el.innerText || el.value || '').trim()) || ''; })()`,
-      returnByValue: true,
-    });
-    const v2 = chk2.result && chk2.result.result && chk2.result.result.value;
-    if (!v2) { console.log("[gemini-ui] Enter sent, input cleared"); return true; }
-    await sleep(1000);
-  }
-  console.log("[gemini-ui] Enter sent but input not cleared (page desync)");
-  return false;
+  console.log("[gemini-ui] Enter sent");
+  return true;
 }
 
 // ─── HTTP 服务 ───────────────────────────────────────────────────
