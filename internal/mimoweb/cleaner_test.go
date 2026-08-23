@@ -33,7 +33,7 @@ func TestCitationCleaner(t *testing.T) {
 		// 极细分片残留(2026-08-22 实测):无冒号/无括号
 		{"tmpcitation", "tmp"}, // 未闭合,缓冲等待
 		{"tmp(citation", "tmp"},
-		{"tmpcitation" + string(make([]byte, 120)), "tmpcitation" + string(make([]byte, 120))}, // 超限整体放行
+		{"tmpcitation" + string(make([]byte, 600)), "tmpcitation" + string(make([]byte, 600))}, // 超500上限整体放行
 	}
 	for _, c := range cases {
 		cc := newCitationCleaner()
