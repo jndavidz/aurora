@@ -56,6 +56,8 @@ func (d *Mimo) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 		w.event("response.failed", failedEvent(res.Err))
 		return
 	}
+	// 最终聚合兜底清洗(流式 cleaner 帧边界竞态的残留;客户端以 completed 文本为准)
+	fullText = mimoweb.CleanCitations(fullText)
 	w.event("response.output_item.done", outputItemDoneEvent(0, messageItem(messageItemID, fullText, "completed")))
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
 	w.event("response.completed", completedEvent(outResp))
@@ -243,7 +245,7 @@ func (d *Mimo) codingResponsesStream(c *gin.Context, req *official.ResponsesAPIR
 	calls = append(calls, parsed...)
 	calls = mergeRecoveredCalls(calls, textBuf.String(), req.Tools)
 
-	finalText := textBuf.String()
+	finalText := mimoweb.CleanCitations(textBuf.String()) // 聚合兜底清洗
 	if res.Err != "" && finalText == "" && len(calls) == 0 {
 		w.event("response.failed", failedEvent(res.Err))
 		return

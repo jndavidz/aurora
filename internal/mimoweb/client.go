@@ -377,7 +377,7 @@ func (c *citationCleaner) push(text string) string {
 			start--
 		}
 		// 缓冲过长仍无闭合:判定为正文(如模型回复里出现 citation 单词),整体放行
-		if len(c.buf)-start > 100 {
+		if len(c.buf)-start > 500 { // 500 覆盖含 URL 的完整引用标记
 			out.WriteString(c.buf)
 			c.buf = ""
 			break
