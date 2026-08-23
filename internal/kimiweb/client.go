@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 
 // Client 是 Kimi 网页客户端。
 type Client struct {
+	mu         sync.Mutex // 换发互斥(并发请求同时换发会互相作废轮换链)
 	baseURL    string
 	authURL    string
 	httpClient *http.Client
@@ -153,6 +155,8 @@ func parseClaims(token string) (map[string]any, error) {
 // RefreshAccessToken 用 refresh_token 换发新的 access_token + refresh_token。
 // 返回结构:{"accessToken":"...","refreshToken":"..."}(两者都轮换)。
 func (c *Client) RefreshAccessToken() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.refreshToken == "" {
 		return fmt.Errorf("kimi: no refresh token")
 	}

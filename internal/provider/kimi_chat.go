@@ -44,6 +44,8 @@ func (d *Kimi) chatResponses(c *gin.Context, m *kimiModel, req *official.Respons
 
 // ensureToken 确保有有效 access_token(必要时换发;换发失败轮询下一个池 token)。
 func (d *Kimi) ensureToken(client *kimiweb.Client) error {
+	d.tokMu.Lock()
+	defer d.tokMu.Unlock()
 	if client == nil || !client.HasToken() {
 		return fmt.Errorf("kimi web client unavailable: missing KIMI_WEB_TOKENS?")
 	}

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"aurora/internal/config"
@@ -31,6 +32,8 @@ type Kimi struct {
 	byID   map[string]*kimiModel
 	// lastToken 记录当前生效的池 token,轮换失败时避免死循环。
 	lastToken string
+	// tokMu 串行化换发(并发请求同时换发会互相作废轮换链)
+	tokMu sync.Mutex
 	// coding 限频(chat 不限)
 	limiter *CodingLimiter
 }
