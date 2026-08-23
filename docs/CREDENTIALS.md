@@ -10,7 +10,7 @@
 | **ChatGPT** | access_token(JWT) | `access_tokens.txt` | **~90 天**(实测 2026-08-21 抓,至 2026-11-19) | 页面上下文直接抓取(`capture-chatgpt.mjs`);**session→access exchange 链路 2026-08 起失效**(bogdanfinn 换出的 token 被 ChatGPT 判 `token_expired`),90 天到期需重抓 |
 | **DeepSeek** | userToken(localStorage) | `deepseek_tokens.txt` | 会话级(实测稳定) | 无自动保活;失效手动重抓浏览器 localStorage |
 | **GLM** | chatglm_refresh_token(JWT) | `glm_tokens.txt` | **~90 天**(实测 refresh 响应不带新 refresh_token → 静态不轮换) | **自动**:换发 access_token(JWT ~2h);`persistRefreshToken` 预防性回写(2026-08-22) |
-| **Kimi** | refresh_token(JWT) | `kimi_tokens.txt` | **~90 天**(换发轮换,已自动回写池文件) | **自动**:换发 access_token(~15 分钟),新 refresh_token 由 `persistRefreshToken` 原子回写(2026-08-22 修复"漂移":此前文件里永远是最旧的已作废 token → 重启 401) |
+| **Kimi** | refresh_token(JWT) | `kimi_tokens.txt` | **~90 天**(换发轮换,已自动回写池文件;⚠️ **禁止手动调 RefreshToken API 测试**——每次调用轮换作废池内 token,2026-08-23 实踩) | **自动**:换发 access_token(~15 分钟),新 refresh_token 由 `persistRefreshToken` 原子回写(2026-08-22 修复"漂移");token 失效用 `grab-kimi.mjs` 从页面 localStorage 重抓 |
 | **Grok** | cookie 串(uid\|cookie) | `grok_cookies.txt` | 会话级;有 `usage_limit_reached` 配额 | 无自动保活;超限/失效手动重抓 cookie |
 | **豆包** | cookie + 签名参数 | `doubao_accounts.json` | `a_bogus` **分钟级**;其余会话级 | **保活被否决**(成本高);低频备用,失效重抓 |
 | **千问** | tongyi_sso_ticket(cookie) | `qianwen_tokens.txt` | **~1 年** | 无自动保活 |
