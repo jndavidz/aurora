@@ -22,8 +22,8 @@ const getJSON = (p) => new Promise((res, rej) => {
   }).on("error", rej);
 });
 
-function findPage() {
-  return getJSON("/json").then((ts) => ts.find((t) => t.type === "page" && /doubao/.test(t.url)));
+function findAllPages() {
+  return getJSON("/json").then((ts) => ts.filter((t) => t.type === "page" && /doubao/.test(t.url)));
 }
 
 const HOOK_JS = `(() => {
@@ -88,7 +88,16 @@ async function saveCapture(c, url, body) {
     if (!Array.isArray(list)) list = [];
     list[0] = acct;
     fs.writeFileSync(OUT, JSON.stringify(list, null, 2));
-    console.log(`[doubao-hook] 捕获更新: a_bogus len=${aBogus.length} web_tab_id=${(q.web_tab_id || "").slice(0, 8)} body len=${(body && JSON.stringify(body).length) || 0} @${new Date().toLocaleTimeString()}`);
+    // 同步 NAS(aurora 直连读 NAS 文件;ssh 免密,Windows OpenSSH)
+    let pushed = false;
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync(`ssh -o BatchMode=yes zxsadmin@10.10.10.2 "cat > /volume2/docker/aurora/tokens/doubao_accounts.json" < "${OUT}"`, { stdio: "ignore", timeout: 20000, shell: "cmd.exe" });
+      pushed = true;
+    } catch (pe) {
+      console.log("[doubao-hook] push 失败:", String(pe.message).slice(0, 60));
+    }
+    console.log(`[doubao-hook] 捕获更新${pushed ? "+push" : "(本机)"}: a_bogus len=${aBogus.length} web_tab_id=${(q.web_tab_id || "").slice(0, 8)} @${new Date().toLocaleTimeString()}`);
   } catch (e) {
     console.log("[doubao-hook] 保存失败:", e.message);
   }
@@ -96,38 +105,46 @@ async function saveCapture(c, url, body) {
 
 async function main() {
 console.log("[doubao-hook] 启动...");
-let page = await findPage();
-if (!page) { console.log("no doubao page"); process.exit(1); }
-let c = await cdp(page.webSocketDebuggerUrl);
-await c.cmd("Network.enable");
-// 文档级注入(页面加载前执行,SDK 初始化时即拿到包装 fetch——晚注入对已缓存 fetch 引用的 SDK 无效)
-await c.cmd("Page.enable").catch(() => {});
-await c.cmd("Page.addScriptToEvaluateOnNewDocument", { source: HOOK_JS }).catch((e) => console.log("[doubao-hook] 文档注入失败:", e.message));
-console.log("[doubao-hook] 已连接:", page.url.slice(0, 60));
-
+let conns = []; // [{ url, c }]
 let lastCapture = 0;
-// 每 3s 检查一次捕获(页面刷新后 hook 丢失,重新注入)
+
+async function ensureConnections() {
+  const pages = await findAllPages();
+  // 关闭已消失的连接
+  conns = conns.filter((conn) => pages.some((p) => p.url === conn.url));
+  // 新页面建立连接
+  for (const p of pages) {
+    if (!conns.some((conn) => conn.url === p.url)) {
+      try {
+        const c = await cdp(p.webSocketDebuggerUrl);
+        await c.cmd("Network.enable").catch(() => {});
+        await c.cmd("Page.enable").catch(() => {});
+        await c.cmd("Page.addScriptToEvaluateOnNewDocument", { source: HOOK_JS }).catch(() => {});
+        conns.push({ url: p.url, c });
+        console.log("[doubao-hook] 连接:", p.url.slice(0, 60));
+      } catch (e) {}
+    }
+  }
+}
+
 while (true) {
   try {
-    const inj = await injectHook(c);
-    if (inj !== "already") console.log("[doubao-hook] hook 注入:", inj);
-    const r = await c.cmd("Runtime.evaluate", {
-      expression: `JSON.stringify(window.__dbHook ? window.__dbHook.latest : null)`,
-      returnByValue: true,
-    });
-    const latest = JSON.parse(r.result && r.result.result && r.result.result.value || "null");
-    if (latest && latest.ts > lastCapture && typeof latest.url === "string" && latest.url.startsWith("http")) {
-      lastCapture = latest.ts;
-      await saveCapture(c, latest.url, latest.body);
+    await ensureConnections();
+    for (const conn of conns) {
+      try {
+        const r = await conn.c.cmd("Runtime.evaluate", {
+          expression: `JSON.stringify(window.__dbHook ? window.__dbHook.latest : null)`,
+          returnByValue: true,
+        });
+        const latest = JSON.parse(r.result && r.result.result && r.result.result.value || "null");
+        if (latest && latest.ts > lastCapture && typeof latest.url === "string" && latest.url.startsWith("http")) {
+          lastCapture = latest.ts;
+          await saveCapture(conn.c, latest.url, latest.body);
+        }
+      } catch (e) {}
     }
   } catch (e) {
-    // 页面/CDP 断开:重新连接
-    try { c.close(); } catch (e2) {}
     await sleep(5000);
-    page = await findPage();
-    if (page) {
-      try { c = await cdp(page.webSocketDebuggerUrl); await c.cmd("Network.enable"); console.log("[doubao-hook] 重连:", page.url.slice(0, 50)); } catch (e2) {}
-    }
   }
   await sleep(3000);
 }
