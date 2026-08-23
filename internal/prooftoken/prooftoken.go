@@ -59,10 +59,12 @@ type Config struct {
 	Languages string
 	// Timezone IANA 时区名(如 "America/Los_Angeles"),传给
 	// fingerprint.Options.Timezone。如果为空,fingerprint 用 Go 本地时区。
+	Platform            string
 	Timezone            string
 	ScreenWidth         int
 	ScreenHeight        int
 	HardwareConcurrency int
+	JSHeapSizeLimit     int64
 	SentinelSV          string // SDK 版本, e.g. "20260423af3c"
 	BuildID             string // 来自 chatgpt.com 页面的 data-build
 	// 可选:固定 Math.random (用于测试)
@@ -81,10 +83,12 @@ func NewConfig(userAgent string) *Config {
 		UserAgent:           userAgent,
 		Language:            fp.Language,
 		Languages:           browserfp.LanguageJoin(fp.Language),
-		Timezone:            "America/Los_Angeles",
+		Platform:            fp.Platform,
+		Timezone:            fp.Timezone,
 		ScreenWidth:         fp.ScreenWidth,
 		ScreenHeight:        fp.ScreenHeight,
 		HardwareConcurrency: fp.HardwareConcurrency,
+		JSHeapSizeLimit:     fp.JSHeapSizeLimit,
 		SentinelSV:          util.SentinelSDKVersion(), // N3: 外置 SENTINEL_SDK_VERSION
 		BuildID:             fp.BuildID,
 	}
@@ -167,11 +171,11 @@ func (c *Config) buildConfig(rng *mathRand, attempt *int, elapsedMs *int64) []an
 	// 把 c 的字段映射成 fingerprint.Options;rng 注入保持 deterministic
 	opts := fingerprint.Options{
 		UserAgent:           c.UserAgent,
-		Platform:            "Win32",
+		Platform:            c.Platform,
 		ScreenWidth:         c.ScreenWidth,
 		ScreenHeight:        c.ScreenHeight,
 		HardwareConcurrency: c.HardwareConcurrency,
-		JSHeapSizeLimit:     4294967296,
+		JSHeapSizeLimit:     c.JSHeapSizeLimit,
 		BuildID:             c.BuildID,
 		Timezone:            c.Timezone,
 		Rand:                rng,
@@ -271,7 +275,7 @@ func (c *Config) SolveProofOfWork(seed, difficulty string) string {
 	// 两种情况都无法产出合法解,直接走 fallback。
 	diffLen := len(difficulty)
 	if diffLen <= 0 || diffLen > 8 {
-		return PrefixProof + ErrorPrefix + DefaultErrorPayload + Suffix
+		return BuildFailToken("invalid difficulty")
 	}
 	const maxIter = 500_000
 
