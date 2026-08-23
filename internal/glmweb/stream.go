@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"regexp"
 	"strings"
 )
+
+// turnSearchRe 匹配 GLM 联网搜索引用标记:【turn0search9】(全角括号;兼容半角与带后缀变体)
+var turnSearchRe = regexp.MustCompile(`[【\[]\s*turn0search[^】\]]*[】\]]`)
 
 // Delta 是解析出的一帧增量。
 type Delta struct {
@@ -120,6 +124,8 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 				}
 			}
 		}
+		// 搜索引用标记过滤(全量重发模式下直接清洗累计文本,差值自然干净)
+		text = turnSearchRe.ReplaceAllString(text, "")
 		// 差值输出增量(全量重发,只发新增部分)
 		if d := strings.TrimPrefix(think, lastReasoning); d != "" {
 			res.Reasoning = think
