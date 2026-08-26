@@ -4,6 +4,8 @@
 
 Aurora 将 ChatGPT Web 后端能力转换为类 OpenAI API，支持聊天、Responses、文件问答、图片生成、图片变体、语音转文字、文字转语音、模型列表，以及通过 `refresh_token` / `session_token` 获取可用的 ChatGPT `access_token`。
 
+> **Fork 扩展**：本仓库在上游基础上扩展为**多 Provider 网关**——DeepSeek、智谱 GLM、Kimi、Grok、Gemini、Claude、腾讯混元、MiniMax、Mimo、豆包、千问等网页端均经同一套 OpenAI 兼容表面接入，详见下方「多 Provider 网关」一节。
+
 ## 接口文档
 
 完整接口、鉴权、token 换取和 curl 示例请查看：[API.md](API.md)
@@ -30,6 +32,37 @@ Aurora 将 ChatGPT Web 后端能力转换为类 OpenAI API，支持聊天、Resp
 - **Capability 能力控制**：10 种按账号类型控制的能力（Chat / Responses / ToolCalling / ImageGenerate / ImageEdit / ImageVariation / TTS / Transcribe / FileUpload / WebSocket），noauth 仅可访问 chat/responses，其余需登录。
 - **后台健康检查**：每 10 分钟自动续期已过期的 `session_token` / `refresh_token` 账号。
 - **外部 access_token 支持**：`ENABLE_EXTERNAL_TOKEN=true` 时接受外部传入的 ChatGPT access_token，自动创建隔离的临时账号（含独立 TLS Client + UA + 代理 + 浏览器指纹），10 分钟无请求自动释放。
+
+> 以上为 ChatGPT 上游的能力；其余模型厂商的接入见下方「多 Provider 网关」。
+
+## 多 Provider 网关（Fork 扩展）
+
+除 ChatGPT 外，Aurora 已将多家模型的**网页端**接入同一套 OpenAI 兼容表面（`/v1/chat/completions` 与 `/v1/responses`）：
+
+- **统一分发**：每个 Provider 实现同一接口（`internal/provider/provider.go`），在 `internal/handler/router.go` 按其凭证池非空自动注册；请求按 `model` 字段路由到对应 Provider，未命中时回落到 ChatGPT 路径。
+- **chat / coding 双变体**：每个模型分 `-chat`（真人对话形态，带联网搜索 / 深度思考 / 识图）与 `-coding`（面向 coding agent，以文本协议模拟 function calling）两种形态。
+- **工具调用模拟**：上游网页端普遍不支持结构化 `tools` 字段，Aurora 将 tools 渲染进提示词、流式解析模型输出中的标签块，还原为标准 OpenAI `tool_calls` / Responses `function_call` 事件。
+- **限频策略**：chat 不限频；coding 通道全局串行 + 随机抖动（`internal/provider/coding_limit.go`），以贴合真人节奏、降低风控风险。
+
+### 支持矩阵
+
+| Provider | 模型 id 示例 | 凭证来源 |
+|---|---|---|
+| ChatGPT（默认兜底） | `auto`、`gpt-5-6`、`gpt-coding` | `access_tokens.txt`（固定路径） |
+| DeepSeek | `deepseek-v4-flash-chat`、`deepseek-v4-pro-coding` | `DEEPSEEK_WEB_TOKENS` |
+| 智谱 GLM | `glm-5.2-chat`、`glm-5.2-chat-thinking`、`glm-5.2-coding` | `GLM_WEB_TOKENS` |
+| Kimi | `kimi-chat`、`kimi-coding` | `KIMI_WEB_TOKENS` |
+| Grok | `grok-3-chat`、`grok-3-coding` | `GROK_COOKIES` |
+| Gemini | `gemini-3-flash-chat` | `GEMINI_CDP_URL`（CDP 桥转发） |
+| Claude | `claude-sonnet-5-chat`、`claude-sonnet-5-coding` | `CLAUDE_CDP_URL`（CDP 桥转发） |
+| 腾讯混元 | `hunyuan-hy3-chat` | `HUNYUAN_CDP_URL`（CDP 桥转发） |
+| MiniMax | `minimax-m3-chat`、`minimax-m3-coding` | `MINIMAX_WEB_TOKENS` |
+| Mimo | `mimo-v2.5-pro-chat`、`mimo-v2.5-pro-coding`、`mimo-v2.5-asr` | `MIMO_WEB_TOKENS` |
+| 豆包 | `doubao-chat` | `DOUBAO_ACCOUNTS`（JSON） |
+| 通义千问 | `Qwen3.8-Max` | `QIANWEN_WEB_TOKENS` |
+
+各凭证文件的格式、放置路径与每个 Provider 的完整环境变量见 [`env.template`](env.template)。token 文件优先放 `./.runtime/tokens/`（便于容器只读挂载），该目录不存在时回退到程序当前目录。未配置凭证的 Provider 不注册，其模型也不会出现在 `/v1/models` 中。
+
 ## 部署
 
 ### 编译部署
@@ -64,6 +97,8 @@ cd aurora
 # 3. docker-compose.yml 已包含 ./access_tokens.txt 的挂载，按需取消注释 free_tokens.txt 或 proxies.txt
 docker-compose up -d
 ```
+
+> NAS 部署：使用仓库内 `docker-compose.nas.yml`（宿主机端口 `65432` → 容器 `8080`），配合一键脚本 `scripts/deploy_nas.sh`（打包源码 → SSH → 本地构建镜像 → 探活）。
 
 ## 配置
 
@@ -142,6 +177,8 @@ ENABLE_EXTERNAL_TOKEN=true
 - 图片、TTS、文件能力依赖登录态 access token，免费 UUID 账号不可用。
 - `STREAM_MODE=false` 时会强制关闭 Chat Completions 流式返回。
 - 本项目是 ChatGPT Web 能力转换服务，接口形状尽量兼容 OpenAI API，但并非 OpenAI 官方服务。
+- 多 Provider 接入均为各模型厂商**网页端的非官方接口**，存在账号风控风险：请只使用可丢弃的小号，控制并发，勿在账号池中放入常用主账号。
+- 凭证文件与 `.runtime/tokens/` 含敏感 token，已由 `.gitignore` 排除，请勿提交或外传。
 
 ## 鸣谢
 
