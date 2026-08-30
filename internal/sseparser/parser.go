@@ -357,7 +357,9 @@ func EnsurePatchDefaults(state *PatchState) {
 	if state.Response.Message.Content.ContentType == "" {
 		state.Response.Message.Content.ContentType = "text"
 	}
-	if state.Response.Message.Content.Parts == nil {
+	if len(state.Response.Message.Content.Parts) == 0 {
+		// 用 len 而非 ==nil:上游可能显式下发空数组 value:[],
+		// 空但非 nil 的切片同样无法承载 parts/0 的 append patch。
 		state.Response.Message.Content.Parts = []interface{}{""}
 	}
 	if state.Response.Message.Metadata.MessageType == "" {
@@ -409,6 +411,11 @@ func ApplyPatch(state *PatchState, patchPath string, operation string, value int
 		}
 	case strings.HasPrefix(patchPath, "/message/content/parts/0"):
 		if text, ok := value.(string); ok {
+			// 防御:上游可能先 add value:[] 清空 parts,再对该路径 append。
+			// 此时 Parts 是空数组(非 nil),直接取 [0] 会 index out of range panic。
+			if len(state.Response.Message.Content.Parts) == 0 {
+				state.Response.Message.Content.Parts = []interface{}{""}
+			}
 			current, _ := state.Response.Message.Content.Parts[0].(string)
 			if operation == "append" {
 				text = current + text

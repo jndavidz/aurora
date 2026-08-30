@@ -3,6 +3,7 @@ package browserfp
 import (
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -147,13 +148,37 @@ type Profile struct {
 
 // ─── 全局单例 ──────────────────────────────────────────────────────────────
 
-var current *Profile
+var (
+	current *Profile
+	mu      sync.RWMutex
+)
 
-// Init 启动时调用一次，生成全局唯一的 Profile。
-func Init() { current = Generate(nil) }
+// Init 生成全局唯一的 Profile。约定在启动时(bootstrap)调用一次;
+// 之后可安全重复调用(测试场景),每次都会重新随机生成。
+func Init() {
+	mu.Lock()
+	current = Generate(nil)
+	mu.Unlock()
+}
 
 // Get 返回全局唯一的 Profile。
-func Get() *Profile { return current }
+// 若尚未调用 Init(例如单元测试或初始化顺序调整),会自动惰性生成,
+// 保证返回值永不为 nil —— 调用方无需判空。
+func Get() *Profile {
+	mu.RLock()
+	p := current
+	mu.RUnlock()
+	if p != nil {
+		return p
+	}
+	// 惰性初始化(double-checked locking):并发首调只生成一次。
+	mu.Lock()
+	defer mu.Unlock()
+	if current == nil {
+		current = Generate(nil)
+	}
+	return current
+}
 
 // Generate 从真实数据池中随机生成 Profile。
 func Generate(rng *rand.Rand) *Profile {
@@ -194,7 +219,7 @@ func Generate(rng *rand.Rand) *Profile {
 		NetworkDownlink: networkDownlinks[rng.Intn(len(networkDownlinks))],
 		NetworkRTT:      networkRTTs[rng.Intn(len(networkRTTs))],
 
-			DevicePixelRatio: devicePixelRatios[rng.Intn(len(devicePixelRatios))],
+		DevicePixelRatio: devicePixelRatios[rng.Intn(len(devicePixelRatios))],
 
 		TimezoneOffset: (rng.Intn(23) - 12) * 60,
 	}
@@ -203,5 +228,5 @@ func Generate(rng *rand.Rand) *Profile {
 // ─── 内部辅助 ──────────────────────────────────────────────────────────────
 
 func pickStr(rng *rand.Rand, opts []string) string { return opts[rng.Intn(len(opts))] }
-func pickInt(rng *rand.Rand, opts []int) int        { return opts[rng.Intn(len(opts))] }
-func pickInt64(rng *rand.Rand, opts []int64) int64  { return opts[rng.Intn(len(opts))] }
+func pickInt(rng *rand.Rand, opts []int) int       { return opts[rng.Intn(len(opts))] }
+func pickInt64(rng *rand.Rand, opts []int64) int64 { return opts[rng.Intn(len(opts))] }

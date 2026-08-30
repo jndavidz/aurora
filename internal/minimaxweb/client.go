@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"aurora/httpclient"
@@ -51,7 +52,9 @@ type Client struct {
 	deviceID string
 	userID   string
 	uuids    map[string]string // token -> 页面实例级 uuid(跨请求复用,服务端或校验一致性)
-	tls      *bogdanfinn.TlsClient
+	uuidMu   sync.Mutex        // 保护 uuids:并发请求对同一 map 读写会触发
+	// fatal error: concurrent map writes(不可 recover)
+	tls *bogdanfinn.TlsClient
 }
 
 // NewClient 构造客户端。
@@ -81,7 +84,10 @@ func (c *Client) NextToken() string {
 }
 
 // instanceUUID 返回该 token 的页面实例级 uuid(跨请求复用)。
+// 多个并发请求会同时经过 commonQuery 到达此处,必须加锁保护 map。
 func (c *Client) instanceUUID(token string) string {
+	c.uuidMu.Lock()
+	defer c.uuidMu.Unlock()
 	if u, ok := c.uuids[token]; ok {
 		return u
 	}

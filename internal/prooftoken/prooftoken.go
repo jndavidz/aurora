@@ -265,7 +265,14 @@ func (c *Config) SolveProofOfWork(seed, difficulty string) string {
 	}
 	startTime := time.Now()
 	rng := mathRandNew(time.Now().UnixNano())
+	// difficulty 来自服务端(requirements 响应),长度不可信:
+	// - 超过 8 位:FNV1aHash 只返回 8 位 hex,永远无法满足;
+	// - 为空或 0:hashResult[:0]=="" 与任何 difficulty 比较都成立,会无条件"成功"。
+	// 两种情况都无法产出合法解,直接走 fallback。
 	diffLen := len(difficulty)
+	if diffLen <= 0 || diffLen > 8 {
+		return PrefixProof + ErrorPrefix + DefaultErrorPayload + Suffix
+	}
 	const maxIter = 500_000
 
 	for i := 0; i < maxIter; i++ {

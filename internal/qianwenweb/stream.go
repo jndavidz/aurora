@@ -45,6 +45,11 @@ type streamFrame struct {
 //   - 取每帧最新文本 content,与上一帧做差值输出增量
 //   - 结尾是 event:complete + data:true(或 data.status == "complete")
 func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
+	if onDelta == nil {
+		// 调用方可能只关心聚合结果(StreamResult.Text),不提供增量回调。
+		// 直接解引用 nil 会 panic(其余 8 家客户端均有此守卫)。
+		onDelta = func(Delta) {}
+	}
 	var res StreamResult
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)

@@ -61,8 +61,10 @@ func NewSession(reqToken, collectorDX string) *Session {
 	}
 }
 
-// Start 异步跑 collector_dx(60 秒超时)。返回的 channel 会在 collector 跑完或
-// 失败时关闭;调用方可选择等待也可直接返回(SDK 行为是 fire-and-forget)。
+// Start 异步跑 collector_dx。返回的 channel 会在 collector 跑完或失败时
+// 关闭;调用方可选择等待也可直接返回(SDK 行为是 fire-and-forget)。
+// collector 的终止性由 runQueue 的 50000 步上限保证(损坏字节码不会无限空转);
+// "60 秒超时"的兜底由 Snapshot 的等待超时实现。
 func (s *Session) Start() <-chan struct{} {
 	ch := make(chan struct{})
 	s.mu.Lock()
@@ -86,13 +88,22 @@ func (s *Session) Start() <-chan struct{} {
 	return ch
 }
 
+// collectorTimeout Snapshot 等待 collector 完成的上限。
+// collector 全程本地计算(无网络),runQueue 又有 50000 步上限,
+// 正常应在毫秒级结束;超时视为异常,返回错误而非带病并发执行。
+const collectorTimeout = 60 * time.Second
+
 // Snapshot 跑 snapshot_dx,产出 base64 字符串(对齐 OpenSentinel/client.js:155
-// 返回值)。如果 collector 还没跑完,会自动等(started 后无 timeout 上限,
-// 实际业务里 collector 在发请求前几十秒就开始,正常早就完成)。
+// 返回值)。collector 尚未完成时先等它结束(带超时)——
+// collector 与 snapshot 共享同一份 regs,两个 goroutine 并发读写
+// 会触发 Go runtime 的 fatal error: concurrent map writes(不可 recover,
+// 整个进程崩溃)。超时未完成则返回错误。
 func (s *Session) Snapshot(snapshotDX string) (string, error) {
 	s.mu.Lock()
 	collector := s.collector
 	started := s.started
+	finished := s.finished
+	colErr := s.err
 	s.mu.Unlock()
 
 	if !started {
@@ -100,6 +111,21 @@ func (s *Session) Snapshot(snapshotDX string) (string, error) {
 	}
 	if collector == nil {
 		return "", errors.New("so: collector not initialized")
+	}
+	// 等待 collector 收尾(轮询检查,间隔 5ms,总量受 collectorTimeout 约束)
+	deadline := time.Now().Add(collectorTimeout)
+	for !finished {
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("so: collector not finished within %v", collectorTimeout)
+		}
+		time.Sleep(5 * time.Millisecond)
+		s.mu.Lock()
+		finished = s.finished
+		colErr = s.err
+		s.mu.Unlock()
+	}
+	if colErr != nil {
+		return "", fmt.Errorf("so: collector failed: %w", colErr)
 	}
 	return collector.run(s.reqToken, snapshotDX, false /* snapshot mode */)
 }
@@ -262,7 +288,12 @@ func (s *soSolver) initRuntime() {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		v, err := s.run(s.jsToString(s.getReg(xorKeyReg)), s.jsToString(args[0]), true)
+		// 递归执行子字节码时必须用独立 solver:复用自身(this)会触发
+		// run() 开头的 regs 清空,把外层指令队列(pcReg)、success/error/callback
+		// 寄存器全部抹掉,外层字节码随后被静默截断(对齐 turnstile 的
+		// opcode 0 用 SolveDX 新建 solver 的做法)。
+		sub := newSOSolver()
+		v, err := sub.run(s.jsToString(s.getReg(xorKeyReg)), s.jsToString(args[0]), true)
 		if err != nil {
 			return nil, err
 		}
@@ -663,15 +694,15 @@ func (s *soSolver) buildWindow() map[string]any {
 		"location":    location,
 		"performance": perf,
 		"screen": map[string]any{
-			"width":       fp.ScreenWidth,
-			"height":      fp.ScreenHeight,
-			"availWidth":  fp.ScreenWidth,
-			"availHeight": fp.ScreenAvailHeight,
-			"availLeft":   0,
-			"availTop":    0,
-			"colorDepth":  fp.ScreenColorDepth,
-			"pixelDepth":  fp.ScreenColorDepth,
-				"devicePixelRatio": fp.DevicePixelRatio,
+			"width":            fp.ScreenWidth,
+			"height":           fp.ScreenHeight,
+			"availWidth":       fp.ScreenWidth,
+			"availHeight":      fp.ScreenAvailHeight,
+			"availLeft":        0,
+			"availTop":         0,
+			"colorDepth":       fp.ScreenColorDepth,
+			"pixelDepth":       fp.ScreenColorDepth,
+			"devicePixelRatio": fp.DevicePixelRatio,
 		},
 		"localStorage":    newStorageProxy(),
 		"sessionStorage":  newStorageProxy(),
@@ -696,8 +727,16 @@ func (s *soSolver) setReg(key any, value any) { s.regs[regKey(key)] = value }
 func (s *soSolver) getReg(key any) any        { return s.regs[regKey(key)] }
 func (s *soSolver) copyQueue() []any          { q, _ := s.getReg(pcReg).([]any); return copyAnySlice(q) }
 
+// maxQueueSteps 单次 runQueue 最大执行条数。防止上游下发构造过的字节码
+// (如 opcode 22 自引用队列)导致 VM 无限循环空转 —— 旧实现无任何上限,
+// 一个损坏的 dx 就能让 goroutine 永久 100% CPU(对齐 turnstile 的 50000 步上限)。
+const maxQueueSteps = 50000
+
 func (s *soSolver) runQueue() error {
-	for {
+	for steps := 0; ; steps++ {
+		if steps >= maxQueueSteps {
+			return fmt.Errorf("so: runQueue exceeded %d steps (possible infinite loop)", maxQueueSteps)
+		}
 		q, ok := s.getReg(pcReg).([]any)
 		if !ok || len(q) == 0 {
 			return nil

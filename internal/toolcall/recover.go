@@ -65,32 +65,40 @@ func RecoverFromText(text string, tools []official.Tool) []official.ToolCall {
 	shellName, shellParam := ResolveShellTool(tools)
 	seen := make(map[string]bool)
 	var out []official.ToolCall
-		for _, obj := range iterJSONObjects(text) {
-			var tc *official.ToolCall
-			if name := pickString(obj, "name", "tool", "tool_name", "function"); name != "" {
+	for _, obj := range iterJSONObjects(text) {
+		var tc *official.ToolCall
+		if name := pickString(obj, "name", "tool", "tool_name", "function"); name != "" {
+			// 白名单校验:不校验的话,模型正文里任何含 "name" 字段的 JSON
+			// (代码示例/配置片段/说明性对象)都会被当成真实工具调用下发。
+			// declaredToolName 同时把大小写归一化为客户端声明的写法。
+			if canonical := declaredToolName(tools, name); canonical != "" {
 				tc = buildToolCallFromObject(obj)
-			} else if shellName != "" {
-				if cmd, ok := obj["cmd"]; ok {
-					if s := cmdToString(cmd); s != "" {
-						raw, _ := json.Marshal(map[string]string{shellParam: s})
-						tc = &official.ToolCall{
-							ID:   generateCallID(),
-							Type: "function",
-							Function: official.ToolCallFunc{
-								Name:      shellName,
-								Arguments: string(raw),
-							},
-						}
+				if tc != nil {
+					tc.Function.Name = canonical
+				}
+			}
+		} else if shellName != "" {
+			if cmd, ok := obj["cmd"]; ok {
+				if s := cmdToString(cmd); s != "" {
+					raw, _ := json.Marshal(map[string]string{shellParam: s})
+					tc = &official.ToolCall{
+						ID:   generateCallID(),
+						Type: "function",
+						Function: official.ToolCallFunc{
+							Name:      shellName,
+							Arguments: string(raw),
+						},
 					}
 				}
 			}
-			// "参数直给"格式(无 name):按参数键匹配工具 schema 推断工具名。
-			if tc == nil {
-				tc = InferToolFromParams(obj, tools)
-			}
-			if tc == nil {
-				continue
-			}
+		}
+		// "参数直给"格式(无 name):按参数键匹配工具 schema 推断工具名。
+		if tc == nil {
+			tc = InferToolFromParams(obj, tools)
+		}
+		if tc == nil {
+			continue
+		}
 		key := tc.Function.Name + "\x00" + tc.Function.Arguments
 		if seen[key] {
 			continue
@@ -99,6 +107,21 @@ func RecoverFromText(text string, tools []official.Tool) []official.ToolCall {
 		out = append(out, *tc)
 	}
 	return out
+}
+
+// declaredToolName 返回 tools 中与 name 大小写不敏感匹配的**声明名**;
+// 未声明返回 ""。tools 为空时返回 name 本身(无工具上下文无白名单可言,
+// 保持兼容不引入新行为)。调用方应只对非空返回值构造工具调用。
+func declaredToolName(tools []official.Tool, name string) string {
+	if len(tools) == 0 {
+		return name
+	}
+	for _, t := range tools {
+		if t.Type == "function" && strings.EqualFold(t.Function.Name, name) {
+			return t.Function.Name
+		}
+	}
+	return ""
 }
 
 // iterJSONObjects 扫描 text 中所有花括号平衡的 JSON 对象。
@@ -213,8 +236,8 @@ func contains(haystack []string, needle string) bool {
 
 // StreamToToolCallDeltas 把完整 ToolCall 列表切成 OpenAI 流式协议需要的
 // 多个 delta chunk(按出现顺序):
-//   1) 先发 {index, id, type, function.name}
-//   2) 再发 {index, function.arguments(分片)}
+//  1. 先发 {index, id, type, function.name}
+//  2. 再发 {index, function.arguments(分片)}
 //
 // 返回的每个元素对应一个 SSE chunk 的 delta.tool_calls 数组(每条只有一项)。
 func StreamToToolCallDeltas(calls []official.ToolCall) [][]official.ToolCallDelta {

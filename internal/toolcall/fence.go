@@ -42,11 +42,13 @@ func (p *FenceParser) Feed(chunk string) (textDelta string, toolCalls []official
 			start := strings.Index(p.buffer, "```")
 			if start < 0 {
 				// 未出现围栏起始:整段都是正文。但末尾可能是"半个 ```"前几个反引号,
-				// 保留最后 2 字符不输出,等下一段确认是否成围栏。
+				// 保留尾部连续反引号不输出,等下一段确认是否成围栏。
+				// 注意必须保留最多 2 个(而非 1 个):chunk 边界恰落在 "a``" 时
+				// 若只保留 1 个,另一个会被当正文吐出,下一段第 3 个反引号到来时
+				// 拼不出完整 ```,整段围栏 JSON 会泄漏进正文。
 				keep := 0
-				tail := p.buffer
-				if i := strings.LastIndex(tail, "`"); i >= 0 && i > len(tail)-3 {
-					keep = len(tail) - i
+				for k := 1; k <= 2 && k <= len(p.buffer) && p.buffer[len(p.buffer)-k] == '`'; k++ {
+					keep = k
 				}
 				if keep > 0 {
 					text.WriteString(p.buffer[:len(p.buffer)-keep])
@@ -133,8 +135,13 @@ func (p *FenceParser) FlushCallsFromText(text string) []official.ToolCall {
 	return calls
 }
 
-// StripFencedBlocks 移除文本中的所有 ```json ... ``` 围栏块(含内容),
-// 返回剩余正文。用于非流式场景:工具调用 JSON 已单独解析,正文不再保留围栏块。
+// StripFencedBlocks 移除文本中的工具调用围栏块(``` 或 ```json/jsonc/tool)
+// 并返回剩余正文。用于非流式场景:工具调用 JSON 已单独解析,正文不再保留围栏块。
+//
+// 注意:只剥离"工具调用围栏"。模型最终答案里的普通代码块
+// (如 ```python / ```go)是用户可见内容,必须原样保留 ——
+// 旧实现无条件删除所有围栏块,导致 6 个上游(glm/gemini/grok/minimax/mimo/cdp)
+// 的最终答案中代码块被静默删除。
 func StripFencedBlocks(text string) string {
 	var out strings.Builder
 	rest := text
@@ -147,17 +154,48 @@ func StripFencedBlocks(text string) string {
 		out.WriteString(rest[:start])
 		rest = rest[start+3:]
 		// 语言标识行
+		lang := ""
 		if nl := strings.Index(rest, "\n"); nl >= 0 {
+			lang = strings.TrimSpace(rest[:nl])
 			rest = rest[nl+1:]
 		}
 		closeIdx := findFenceClose(rest)
 		if closeIdx < 0 {
-			// 未闭合:丢弃剩余
+			// 未闭合:工具围栏直接丢弃;普通代码块回吐原文,避免吞掉用户可见内容
+			if isToolFenceLang(lang) {
+				break
+			}
+			writeFence(&out, lang, rest)
 			break
 		}
+		content := rest[:closeIdx]
 		rest = rest[closeIdx+3:]
+		if isToolFenceLang(lang) {
+			continue // 工具围栏:整块删除(含内容)
+		}
+		// 普通代码块:原样保留
+		writeFence(&out, lang, content)
 	}
 	return strings.TrimSpace(out.String())
+}
+
+// isToolFenceLang 判定围栏语言标识是否属于"工具调用围栏"。
+// 空标识(纯 ```)或 json/jsonc/tool 系视为工具围栏;其余(如 python/go/shell)
+// 视为普通代码块,必须保留。
+func isToolFenceLang(lang string) bool {
+	l := strings.ToLower(strings.TrimSpace(lang))
+	return l == "" || l == "json" || l == "jsonc" || l == "tool"
+}
+
+// writeFence 按原样重新拼接一个围栏块(保留语言标识与内容,统一闭合符)。
+func writeFence(out *strings.Builder, lang, content string) {
+	out.WriteString("```")
+	if lang != "" {
+		out.WriteString(lang)
+		out.WriteString("\n")
+	}
+	out.WriteString(content)
+	out.WriteString("\n```")
 }
 
 // buildToolCallFromRaw 复用 Parser 的围栏 JSON 解析逻辑。

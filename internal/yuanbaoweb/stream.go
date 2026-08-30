@@ -36,6 +36,11 @@ type frame struct {
 //   - data: {"type":"error","msg":"...","code":"21007"}  错误帧
 //   - data: [DONE]                       结束
 func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
+	if onDelta == nil {
+		// 调用方可能只关心错误汇总,不提供增量回调。
+		// 直接解引用 nil 会 panic(其余 8 家客户端均有此守卫)。
+		onDelta = func(Delta) {}
+	}
 	var res StreamResult
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)

@@ -220,7 +220,7 @@ func TestRobustJSONTruncatesUnbalanced(t *testing.T) {
 
 func TestRecoverFromTextExtractsToolCall(t *testing.T) {
 	tools := []official.Tool{
-		{Type: "function", Function: official.ToolFunction{Name: "bash", Parameters: json.RawMessage(`{"properties":{"command":{"type":"string"}}}`)}},
+		{Type: "function", Function: official.ToolFunction{Name: "read", Parameters: json.RawMessage(`{"properties":{"filePath":{"type":"string"}}}`)}},
 	}
 	// 模型绕过标签,直接输出 JSON
 	text := `some text {"name":"read","arguments":{"filePath":"/tmp/x"}} more text`
@@ -230,6 +230,30 @@ func TestRecoverFromTextExtractsToolCall(t *testing.T) {
 	}
 	if calls[0].Function.Name != "read" {
 		t.Fatalf("name = %q", calls[0].Function.Name)
+	}
+}
+
+// 白名单回归(P0-9):模型正文里出现"未声明"工具名的 JSON(代码示例/配置片段/
+// 说明性对象)不得被恢复成工具调用,否则客户端会收到虚构的 tool_calls。
+// 声明过的工具名(大小写不敏感)仍可正常恢复。
+func TestRecoverFromTextSkipsUnknownToolName(t *testing.T) {
+	tools := []official.Tool{
+		{Type: "function", Function: official.ToolFunction{Name: "bash", Parameters: json.RawMessage(`{"properties":{"command":{"type":"string"}}}`)}},
+	}
+	// "read" 不在 tools 列表:这是说明性 JSON,不是工具调用
+	text := `Here's a config: {"name":"read","filePath":"/tmp/x"}`
+	calls := RecoverFromText(text, tools)
+	if len(calls) != 0 {
+		t.Fatalf("calls = %d, want 0 (unknown tool name must not be recovered)", len(calls))
+	}
+	// 声明过的工具名仍可恢复(大小写不敏感)
+	text2 := `use {"name":"Bash","arguments":{"command":"ls"}} now`
+	calls2 := RecoverFromText(text2, tools)
+	if len(calls2) != 1 {
+		t.Fatalf("calls2 = %d, want 1", len(calls2))
+	}
+	if calls2[0].Function.Name != "bash" {
+		t.Fatalf("name2 = %q, want bash", calls2[0].Function.Name)
 	}
 }
 
