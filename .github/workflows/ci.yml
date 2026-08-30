@@ -1,0 +1,44 @@
+name: CI
+
+# 持续质量门禁:每次 push / PR 都跑 格式检查 + vet + 测试(含 -race)。
+# 与 build.yml(发版构建)分离:这里是质量底线,不发 artifact。
+on:
+  push:
+    branches:
+      - main
+      - master
+      - local-toolfix
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 格式门禁:gofmt -l 有任何输出即失败。
+      # 历史欠账(44 个文件)已由 2026-08-31 的 gofmt -w 一次性清理,
+      # 之后新增代码必须过 gofmt。
+      - name: Format check
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::以下文件未通过 gofmt:" >&2
+            echo "${unformatted}" >&2
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # -race 在本机 Windows(缺 gcc)无法运行,CI(ubuntu,默认 CGO)可以。
+      # 文件名含 _live 的用例由 DS_TEST_TOKEN 等环境变量守卫,缺省自动跳过。
+      - name: Test (with race detector)
+        run: go test -race -count=1 ./...

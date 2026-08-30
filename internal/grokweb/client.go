@@ -4,10 +4,10 @@
 //   - 认证:httpOnly cookie(sso / sso-rw / cf_clearance / grok_device_id 等)
 //     随 WebSocket 握手发送;URL = wss://grok.com/ws/mgw/?uid=<x-userid>
 //   - 协议:OpenAI Realtime 风格事件(envelope 带 session_id + event):
-//       1. session.create        → 建会话(event 里必须带 session 对象,缺则 invalid_envelope)
-//       2. conversation.item.create → 发用户消息(x_grok.input_chunks[{text:{text}}])
-//       3. response.create       → 请求回复(castle_request_token 可选,实测缺省正常)
-//       4. 响应:response.created → output_text.delta → response.done
+//     1. session.create        → 建会话(event 里必须带 session 对象,缺则 invalid_envelope)
+//     2. conversation.item.create → 发用户消息(x_grok.input_chunks[{text:{text}}])
+//     3. response.create       → 请求回复(castle_request_token 可选,实测缺省正常)
+//     4. 响应:response.created → output_text.delta → response.done
 //   - 多轮:item.create 带 parent_response_id(上一轮 response.id)即可续上下文
 package grokweb
 
@@ -246,12 +246,12 @@ type eventEnvelope struct {
 func (c *Client) dial(uid, cookie string) (*stream, error) {
 	u := url.URL{Scheme: "wss", Host: defaultWSHost, Path: "/ws/mgw/", RawQuery: "uid=" + uid}
 	header := http.Header{
-		"Origin":         []string{"https://grok.com"},
-		"Cookie":         []string{cookie},
-		"User-Agent":     []string{webUserAgent},
+		"Origin":          []string{"https://grok.com"},
+		"Cookie":          []string{cookie},
+		"User-Agent":      []string{webUserAgent},
 		"Accept-Language": []string{"zh-CN,zh;q=0.9"},
-		"Pragma":         []string{"no-cache"},
-		"Cache-Control":  []string{"no-cache"},
+		"Pragma":          []string{"no-cache"},
+		"Cache-Control":   []string{"no-cache"},
 	}
 	ws, resp, err := c.dialer.Dial(u.String(), header)
 	if err != nil {
@@ -284,8 +284,8 @@ func (s *stream) send(prompt, parentResponseID string) error {
 			"type":     "conversation.item.create",
 			"event_id": "evt_msg_" + fmt.Sprint(time.Now().UnixMilli()),
 			"item": map[string]any{
-				"type":    "message",
-				"role":    "user",
+				"type": "message",
+				"role": "user",
 				"x_grok": map[string]any{
 					"client_message_id": "cm_" + randHex(16),
 					"input_chunks":      []map[string]any{{"text": map[string]any{"text": prompt}}},

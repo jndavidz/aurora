@@ -3,8 +3,8 @@ package audioflow
 import (
 	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
 	"aurora/httpclient"
-	"aurora/internal/chatgpt"
 	"aurora/internal/accounts"
+	"aurora/internal/chatgpt"
 	chatgpt_types "aurora/typings/chatgpt"
 	"fmt"
 	"net/http"
@@ -47,7 +47,10 @@ type SynthesizeResult struct {
 }
 
 // Synthesize 执行 TTS 合成流程。
-func Synthesize(client interface{ SetProxy(string); SetCookies(string, interface{}) }, account *accounts.Account, input, voice, format, proxyURL string) (*SynthesizeResult, int, error) {
+func Synthesize(client interface {
+	SetProxy(string)
+	SetCookies(string, interface{})
+}, account *accounts.Account, input, voice, format, proxyURL string) (*SynthesizeResult, int, error) {
 	if account == nil || account.Token == "" || account.Type == accounts.TypeNoAuth {
 		return nil, http.StatusBadRequest, fmt.Errorf("TTS requires a logged-in ChatGPT access token")
 	}

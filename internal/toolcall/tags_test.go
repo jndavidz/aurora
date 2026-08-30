@@ -12,12 +12,12 @@ var dsTags = TagSet{StartTag: "<|tool\u2581calls\u2581begin|>", EndTag: "<|tool\
 func TestNormalizeTaggedDeepSeek(t *testing.T) {
 	cases := map[string]string{
 		// 模型实际输出的变体(缺前导 |、ASCII 下划线、▁)
-		"<tool_calls_begin|>{\"name\":\"x\"}<tool_calls_end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
-		"<|tool_call_begin|>{\"name\":\"x\"}<|tool_call_end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<tool_calls_begin|>{\"name\":\"x\"}<tool_calls_end|>":   "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<|tool_call_begin|>{\"name\":\"x\"}<|tool_call_end|>":   "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
 		"<|tool_calls_begin|>{\"name\":\"x\"}<|tool_calls_end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
 		"<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>": "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
-		"<tool_calls>{\"name\":\"x\"}</tool_calls>":                "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
-		"<tool call>{\"name\":\"x\"}</tool call>":                  "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<tool_calls>{\"name\":\"x\"}</tool_calls>":              "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
+		"<tool call>{\"name\":\"x\"}</tool call>":                "<|tool▁calls▁begin|>{\"name\":\"x\"}<|tool▁calls▁end|>",
 	}
 	for in, want := range cases {
 		if got := NormalizeTagged(in, dsTags); got != want {

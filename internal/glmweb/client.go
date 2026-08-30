@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	defaultBase   = "https://chatglm.cn"
-	webUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
-	clientVersion = "0.0.1"
+	defaultBase        = "https://chatglm.cn"
+	webUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+	clientVersion      = "0.0.1"
 	defaultAssistantID = "65940acff94777010aa6b796" // 默认助手(全部工具智能体)
 )
 
@@ -129,7 +129,7 @@ func (c *Client) RefreshAccessToken() error {
 		return err
 	}
 	var ar struct {
-		Status int    `json:"status"`
+		Status int `json:"status"`
 		Result struct {
 			AccessToken  string `json:"access_token"`
 			RefreshToken string `json:"refresh_token"`
@@ -205,12 +205,12 @@ func (c *Client) setSignedHeaders(req *http.Request, token string) {
 
 // CompletionRequest 是 assistant/stream 的请求体。
 type CompletionRequest struct {
-	AssistantID     string
-	ConversationID  string // 首轮空;续轮用上一轮返回的 conversation_id
-	Messages        []Message
-	ChatMode        string // "thinking"(深度思考) | "" 等
-	IsNetworking    bool   // 联网搜索
-	Platform        string // "pc"
+	AssistantID    string
+	ConversationID string // 首轮空;续轮用上一轮返回的 conversation_id
+	Messages       []Message
+	ChatMode       string // "thinking"(深度思考) | "" 等
+	IsNetworking   bool   // 联网搜索
+	Platform       string // "pc"
 }
 
 // Message 是一条消息。
@@ -221,7 +221,7 @@ type Message struct {
 
 // Content 是消息内容(文本 / 图片)。
 type Content struct {
-	Type     string `json:"type"`           // "text" | "image_url"
+	Type     string `json:"type"` // "text" | "image_url"
 	Text     string `json:"text,omitempty"`
 	ImageURL *struct {
 		URL string `json:"url"`

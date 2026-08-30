@@ -27,7 +27,7 @@ func TestParseDeepSeekModel(t *testing.T) {
 		{"deepseek-v4-pro-chat", variantChat, modeExpert, []Capability{CapReasoning}},
 		{"deepseek-v4-flash-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
 		{"deepseek-v4-pro-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
-		{"gpt-5", "", "", nil},           // 非 deepseek 命名 → nil
+		{"gpt-5", "", "", nil}, // 非 deepseek 命名 → nil
 		{"deepseek-v4-chat", variantChat, modeExpert, []Capability{CapReasoning}}, // 无 flash/pro → 默认 expert
 	}
 	for _, c := range cases {

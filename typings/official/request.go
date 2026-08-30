@@ -15,29 +15,29 @@ type APIRequest struct {
 	// - Tools:      客户端声明的可调用工具列表
 	// - ToolChoice: 强制 / 允许 / 禁止模型调用工具
 	// - ParallelToolCalls: 是否允许同一轮发起多个 tool_call(默认 true)
-	Tools              []Tool      `json:"tools,omitempty"`
-	ToolChoice         *ToolChoice `json:"tool_choice,omitempty"`
-	ParallelToolCalls  *bool       `json:"parallel_tool_calls,omitempty"`
+	Tools             []Tool      `json:"tools,omitempty"`
+	ToolChoice        *ToolChoice `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool       `json:"parallel_tool_calls,omitempty"`
 
 	// ── 标准生成参数 ──
-	Temperature         *float64   `json:"temperature,omitempty"`
-	TopP                *float64   `json:"top_p,omitempty"`
-	N                   *int       `json:"n,omitempty"`
-	Stop                *StopParam `json:"stop,omitempty"`
-	MaxTokens           *int       `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int       `json:"max_completion_tokens,omitempty"`
-	PresencePenalty     *float64   `json:"presence_penalty,omitempty"`
-	FrequencyPenalty    *float64   `json:"frequency_penalty,omitempty"`
+	Temperature         *float64    `json:"temperature,omitempty"`
+	TopP                *float64    `json:"top_p,omitempty"`
+	N                   *int        `json:"n,omitempty"`
+	Stop                *StopParam  `json:"stop,omitempty"`
+	MaxTokens           *int        `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int        `json:"max_completion_tokens,omitempty"`
+	PresencePenalty     *float64    `json:"presence_penalty,omitempty"`
+	FrequencyPenalty    *float64    `json:"frequency_penalty,omitempty"`
 	LogitBias           map[int]int `json:"logit_bias,omitempty"`
-	Seed                *int       `json:"seed,omitempty"`
+	Seed                *int        `json:"seed,omitempty"`
 
 	// ── 扩展参数 ──
-	ResponseFormat  *ResponseFormat  `json:"response_format,omitempty"`
-	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
-	StreamOptions   *StreamOptions   `json:"stream_options,omitempty"`
-	User            string           `json:"user,omitempty"`
+	ResponseFormat  *ResponseFormat   `json:"response_format,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
+	StreamOptions   *StreamOptions    `json:"stream_options,omitempty"`
+	User            string            `json:"user,omitempty"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
-	Store           *bool            `json:"store,omitempty"`
+	Store           *bool             `json:"store,omitempty"`
 }
 
 // StopParam 接受 string 或 []string。
@@ -82,6 +82,7 @@ type Tool struct {
 // UnmarshalJSON 兼容两种工具格式:
 //   - chat.completions:{"type":"function","function":{"name":...,"description":...,"parameters":...}}
 //   - Responses API:  {"type":"function","name":...,"description":...,"parameters":...}(顶层)
+//
 // pi / ZCode 等 Responses 客户端发顶层格式,缺此兼容会导致 name/description 全空,
 // 渲染出的 TOOLS AVAILABLE 变成 "- :" 占位,模型只能瞎猜工具名(实测踩坑)。
 func (t *Tool) UnmarshalJSON(data []byte) error {
@@ -122,7 +123,7 @@ type ToolFunction struct {
 //   - "any"     : 强制至少调用一个
 //   - &ToolChoice{Type: "function", Function: {Name: "X"}} : 强制调用 X
 type ToolChoice struct {
-	Type     string             `json:"type"`
+	Type     string              `json:"type"`
 	Function *ToolChoiceFunction `json:"function,omitempty"`
 }
 
@@ -437,6 +438,7 @@ type ReasoningConfig struct {
 //   - {"type":"message", role, content}          普通消息
 //   - {"type":"function_call", call_id, name, arguments}
 //   - {"type":"function_call_output", call_id, output}
+//
 // 旧客户端可能不带 type,按 message 处理。
 type responseInputItem struct {
 	Type      string          `json:"type"`

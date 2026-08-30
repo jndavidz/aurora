@@ -17,8 +17,8 @@ type TagSet struct {
 var DefaultTags = TagSet{StartTag: "<tool_call>", EndTag: "</tool_call>"}
 
 var (
-	toolCallsOpenRe  = regexp.MustCompile(`(?i)<tool_calls>`)
-	toolCallsCloseRe = regexp.MustCompile(`(?i)</tool_calls>`)
+	toolCallsOpenRe    = regexp.MustCompile(`(?i)<tool_calls>`)
+	toolCallsCloseRe   = regexp.MustCompile(`(?i)</tool_calls>`)
 	toolCallAltOpenRe  = regexp.MustCompile(`(?i)<tool[_\s]call>`)
 	toolCallAltCloseRe = regexp.MustCompile(`(?i)</tool[_\s]call>`)
 	// DeepSeek 系(网页实测,2026-08):模型输出 <|tool▁calls▁begin|>(▁=U+2581)

@@ -6,7 +6,8 @@ import (
 )
 
 // 官方测试向量(取自 ai-wen/ds2api,与 DeepSeek 官方 WASM 一致):
-//   hash("testsalt_1700000000_42") == d4a2ea58c89e40887c933484868380c6f803eaa8dc53a3b9df8e431b921a4f09
+//
+//	hash("testsalt_1700000000_42") == d4a2ea58c89e40887c933484868380c6f803eaa8dc53a3b9df8e431b921a4f09
 func TestDeepSeekHashV1Vector(t *testing.T) {
 	got := hashDeepSeekV1([]byte("testsalt_1700000000_42"))
 	want := "d4a2ea58c89e40887c933484868380c6f803eaa8dc53a3b9df8e431b921a4f09"
@@ -33,12 +34,12 @@ func TestSolvePow(t *testing.T) {
 	target := hex.EncodeToString(hashDeepSeekV1([]byte(salt + "_1700000000_42")))
 
 	ch := &powChallenge{
-		Algorithm: "DeepSeekHashV1",
-		Challenge: target,
-		Salt:      salt,
-		Signature: "sig",
+		Algorithm:  "DeepSeekHashV1",
+		Challenge:  target,
+		Salt:       salt,
+		Signature:  "sig",
 		Difficulty: 1000000,
-		ExpireAt:  expire,
+		ExpireAt:   expire,
 	}
 	header, solved, err := SolvePow(ch)
 	if err != nil {

@@ -26,21 +26,21 @@ import (
 // TurnStile 表示一次 sentinel 风控流程的完整状态，
 // 包含所有从 prepare / finalize / ping 等端点获得的 token。
 type TurnStile struct {
-	TurnStileToken              string
-	ProofOfWorkToken            string
-	TurnstileToken              string
+	TurnStileToken               string
+	ProofOfWorkToken             string
+	TurnstileToken               string
 	ChatRequirementsPrepareToken string // prepare 接口返回的 prepare_token, 在 sentinel/ping 时注入
-	ChatRequirementsToken       string // finalize 接口返回的 chat-requirements token (sentinel/ping 复用)
-	SentinelReqToken            string // /sentinel/req 返回的 token
-	SentinelReqPersona          string // /sentinel/req 返回的 persona
-	SOToken                     string
-	soSession                   *so.Session
-	soSnapshotDX                string
-	soChatToken                 string
-	soFlow                      string
-	soOnce                      sync.Once
-	soResult                    string
-	soErr                       error
+	ChatRequirementsToken        string // finalize 接口返回的 chat-requirements token (sentinel/ping 复用)
+	SentinelReqToken             string // /sentinel/req 返回的 token
+	SentinelReqPersona           string // /sentinel/req 返回的 persona
+	SOToken                      string
+	soSession                    *so.Session
+	soSnapshotDX                 string
+	soChatToken                  string
+	soFlow                       string
+	soOnce                       sync.Once
+	soResult                     string
+	soErr                        error
 }
 
 // ProofWork 表示 proof-of-work 要求。
@@ -93,11 +93,11 @@ type pingSentinelResponse struct {
 
 // sentinelExtraData 对齐 chatgpt.com JS 中编码的 OpenAI-Sentinel-Extra-Data header。
 type sentinelExtraData struct {
-	Version        int                `json:"v"`
-	SequenceNumber int                `json:"sequence_number"`
+	Version        int                  `json:"v"`
+	SequenceNumber int                  `json:"sequence_number"`
 	Signals        sentinelExtraSignals `json:"signals"`
-	ConversationID string             `json:"conversation_id,omitempty"`
-	LastMessageID  string             `json:"last_message_id,omitempty"`
+	ConversationID string               `json:"conversation_id,omitempty"`
+	LastMessageID  string               `json:"last_message_id,omitempty"`
 }
 
 type sentinelExtraSignals struct {
@@ -307,11 +307,11 @@ func buildSentinelExtraData(conversationID, lastMessageID string, prepareToken s
 		pingSource = "session_observer_background_submit"
 	}
 	signals := sentinelExtraSignals{
-		PingSource:                  pingSource,
-		SOTokenPresent:              boolToStr(soTokenPresent),
-		TurnstileTokenPresent:       boolToStr(turnstileTokenPresent),
-		ProofTokenPresent:           boolToStr(proofTokenPresent),
-		PrepareTokenPresent:         boolToStr(prepareToken != ""),
+		PingSource:                   pingSource,
+		SOTokenPresent:               boolToStr(soTokenPresent),
+		TurnstileTokenPresent:        boolToStr(turnstileTokenPresent),
+		ProofTokenPresent:            boolToStr(proofTokenPresent),
+		PrepareTokenPresent:          boolToStr(prepareToken != ""),
 		ChatRequirementsTokenPresent: boolToStr(chatRequirementsToken != ""),
 	}
 	data := sentinelExtraData{
@@ -482,7 +482,7 @@ func buildSentinelReqToken(state *ChatClientState, account *accounts.Account) st
 	}
 
 	config := fingerprint.Build25(opts)
-	config[3] = 2      // nonce: req 用 2 (prepare 用 1)
+	config[3] = 2 // nonce: req 用 2 (prepare 用 1)
 	config[14] = deviceID
 
 	encoded := prooftoken.EncodeConfig(config)

@@ -106,9 +106,9 @@ func TestWithTurnTraceID(t *testing.T) {
 
 func TestWithSentinelTokens(t *testing.T) {
 	sentinelTokens := SentinelTokens{
-		TurnStileToken:  "turnstile-123",
+		TurnStileToken:   "turnstile-123",
 		ProofOfWorkToken: "proof-123",
-		TurnstileToken:  "turnstile-token-123",
+		TurnstileToken:   "turnstile-token-123",
 	}
 	h := New().WithSentinelTokens(sentinelTokens).Build()
 	if h["Openai-Sentinel-Chat-Requirements-Token"] != "turnstile-123" {

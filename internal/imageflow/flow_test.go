@@ -95,8 +95,8 @@ func TestCollectResponsesAPIParts_TextPart(t *testing.T) {
 func TestCollectResponsesAPIParts_ImagePart(t *testing.T) {
 	input := []interface{}{
 		map[string]interface{}{
-			"type":       "input_image",
-			"image_url":  "https://example.com/image.png",
+			"type":      "input_image",
+			"image_url": "https://example.com/image.png",
 		},
 	}
 	text, urls := CollectResponsesAPIParts(input)
@@ -115,8 +115,8 @@ func TestCollectResponsesAPIParts_MixedParts(t *testing.T) {
 			"text": "what is this?",
 		},
 		map[string]interface{}{
-			"type":       "input_image",
-			"image_url":  "https://example.com/photo.jpg",
+			"type":      "input_image",
+			"image_url": "https://example.com/photo.jpg",
 		},
 	}
 	text, urls := CollectResponsesAPIParts(input)

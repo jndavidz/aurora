@@ -54,7 +54,7 @@ func outputItemDoneEvent(outputIndex int, item map[string]any) map[string]any {
 
 func failedEvent(msg string) map[string]any {
 	return map[string]any{
-		"type": "response.failed",
+		"type":     "response.failed",
 		"response": map[string]any{"error": map[string]any{"message": msg, "type": "server_error"}},
 	}
 }

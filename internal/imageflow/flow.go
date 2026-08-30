@@ -3,8 +3,8 @@ package imageflow
 import (
 	"aurora/httpclient"
 	"aurora/httpclient/bogdanfinn"
-	"aurora/internal/chatgpt"
 	"aurora/internal/accounts"
+	"aurora/internal/chatgpt"
 	"encoding/base64"
 	"fmt"
 	"io"

@@ -151,11 +151,11 @@ func (b *Builder) WithTargetPath(path string) *Builder {
 
 // WithSentinelTokens 设置 sentinel 相关的 token header。
 type SentinelTokens struct {
-	TurnStileToken              string
+	TurnStileToken               string
 	ChatRequirementsPrepareToken string
-	ProofOfWorkToken            string
-	TurnstileToken              string
-	SOToken                     string
+	ProofOfWorkToken             string
+	TurnstileToken               string
+	SOToken                      string
 }
 
 // WithSentinelTokens 设置 sentinel token header。

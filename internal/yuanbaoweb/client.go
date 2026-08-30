@@ -19,8 +19,8 @@ import (
 
 const (
 	defaultBase    = "https://yuanbao.tencent.com"
-	defaultAgentID = "naQivTmsDa"               // 元宝主 agent(hy3/deepseek 共用,页面 /chat/naQivTmsDa)
-	webModelField  = "gpt_175B_0404"            // agent 主模型标识,固定;真正的模型由 chatModelId 决定
+	defaultAgentID = "naQivTmsDa"    // 元宝主 agent(hy3/deepseek 共用,页面 /chat/naQivTmsDa)
+	webModelField  = "gpt_175B_0404" // agent 主模型标识,固定;真正的模型由 chatModelId 决定
 	webUserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 	webAccept      = "text/event-stream, application/json, text/plain, */*"
 	webVersion     = "2.80.10"
@@ -29,7 +29,7 @@ const (
 
 // 上游 chatModelId(网页 ModelInfoCacheV1 实测,2026-08-13)。
 const (
-	ModelHy3     = "hunyuan_gpt_175B_0404"
+	ModelHy3      = "hunyuan_gpt_175B_0404"
 	ModelDeepSeek = "deep_seek_v3"
 )
 

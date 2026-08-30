@@ -20,14 +20,14 @@ import (
 
 // powChallenge 对应 create_pow_challenge 响应里的 challenge 对象。
 type powChallenge struct {
-	Algorithm  string `json:"algorithm"`
-	Challenge  string `json:"challenge"`
-	Salt       string `json:"salt"`
-	Signature  string `json:"signature"`
-	Difficulty int64  `json:"difficulty"`
-	ExpireAt   int64  `json:"expire_at"`
-	ExpireAfter int64 `json:"expire_after,omitempty"`
-	TargetPath string `json:"target_path"`
+	Algorithm   string `json:"algorithm"`
+	Challenge   string `json:"challenge"`
+	Salt        string `json:"salt"`
+	Signature   string `json:"signature"`
+	Difficulty  int64  `json:"difficulty"`
+	ExpireAt    int64  `json:"expire_at"`
+	ExpireAfter int64  `json:"expire_after,omitempty"`
+	TargetPath  string `json:"target_path"`
 }
 
 // SolvePow 求解 PoW,返回 x-ds-pow-response 头的值。

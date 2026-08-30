@@ -147,10 +147,10 @@ type CompletionRequest struct {
 
 // StreamResult 是整条流的汇总。
 type StreamResult struct {
-	Text   string
-	RCID   string // 本轮回复的 rc_id(多轮续聊的 PrevRCID)
-	Err    string
-	Done   bool
+	Text string
+	RCID string // 本轮回复的 rc_id(多轮续聊的 PrevRCID)
+	Err  string
+	Done bool
 }
 
 // Complete 发起一次对话,流式返回增量。
@@ -287,10 +287,10 @@ func (c *Client) streamURL(acct *Account) string {
 // buildHeaders 构造请求头(cookie 用 cookies 参数传,见 parseCookies)。
 func (c *Client) buildHeaders(acct *Account) httpclient.AuroraHeaders {
 	h := httpclient.AuroraHeaders{
-		"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-		"User-Agent":   webUA,
-		"Origin":       defaultBase,
-		"Referer":      defaultBase + "/u/1/app",
+		"Content-Type":  "application/x-www-form-urlencoded;charset=UTF-8",
+		"User-Agent":    webUA,
+		"Origin":        defaultBase,
+		"Referer":       defaultBase + "/u/1/app",
 		"X-Same-Domain": "1",
 	}
 	// Google 前端升级(2026-08-14,bl 20260812)后校验 jspb 头。

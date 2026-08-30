@@ -12,8 +12,8 @@ import (
 // 模型 id 前缀保护:只认 Qwen 系,防误吃其它 provider 的模型。
 func TestIsQianwenModel(t *testing.T) {
 	cases := []struct {
-		id    string
-		want  bool
+		id   string
+		want bool
 	}{
 		{"Qwen3.8-Max", true},
 		{"Qwen3.7", true},

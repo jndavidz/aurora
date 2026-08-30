@@ -44,9 +44,9 @@ type Delta struct {
 // ToolCallDelta 是 OpenAI 协议里 delta.tool_calls 元素的最小形态:
 // 流式响应中 name / arguments 按"先 name 后 arguments"分块发出。
 type ToolCallDelta struct {
-	Index    int             `json:"index"`
-	ID       string          `json:"id,omitempty"`
-	Type     string          `json:"type,omitempty"`
+	Index    int               `json:"index"`
+	ID       string            `json:"id,omitempty"`
+	Type     string            `json:"type,omitempty"`
 	Function ToolCallFuncDelta `json:"function"`
 }
 
@@ -259,8 +259,8 @@ type ResponsesResponse struct {
 	Usage            ResponsesUsage        `json:"usage"`
 	ReasoningContent string                `json:"reasoning_content,omitempty"`
 	// MsSinceStart / MsTTFT 是流式响应的耗时信息（毫秒），嵌入 response.completed 事件。
-	MsSinceStart     int64                 `json:"ms_since_start,omitempty"`
-	MsTTFT           int64                 `json:"ms_ttft,omitempty"`
+	MsSinceStart int64 `json:"ms_since_start,omitempty"`
+	MsTTFT       int64 `json:"ms_ttft,omitempty"`
 }
 
 type ResponsesTextDeltaEvent struct {
@@ -371,11 +371,11 @@ func ResponsesCompleted(response ResponsesResponse) string {
 
 // ResponsesUsage 对齐 OpenAI ResponseUsage。
 type ResponsesUsage struct {
-	InputTokens         int                        `json:"input_tokens"`
+	InputTokens         int                          `json:"input_tokens"`
 	InputTokensDetails  ResponsesInputTokensDetails  `json:"input_tokens_details"`
-	OutputTokens        int                        `json:"output_tokens"`
+	OutputTokens        int                          `json:"output_tokens"`
 	OutputTokensDetails ResponsesOutputTokensDetails `json:"output_tokens_details"`
-	TotalTokens         int                        `json:"total_tokens"`
+	TotalTokens         int                          `json:"total_tokens"`
 }
 
 type ResponsesInputTokensDetails struct {

@@ -11,7 +11,7 @@ func fenceTools() []official.Tool {
 	return []official.Tool{{Type: "function", Function: official.ToolFunction{
 		Name:        "list_files",
 		Description: "list files in a directory",
-		Parameters: []byte(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
+		Parameters:  []byte(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`),
 	}}}
 }
 

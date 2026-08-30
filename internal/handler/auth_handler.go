@@ -3,10 +3,10 @@ package handler
 import (
 	"net/http"
 
+	bogdanfinn "aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
 	"aurora/internal/chatgpt"
 	officialtypes "aurora/typings/official"
-	bogdanfinn "aurora/httpclient/bogdanfinn"
 
 	"github.com/gin-gonic/gin"
 )

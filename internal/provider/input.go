@@ -127,7 +127,7 @@ func contentPartsFromMessage(c official.MessageContent) (string, []string) {
 }
 
 // contentPartsText 从 content 里抽取文本与图片 URL。
-func contentPartsText(raw json.RawMessage) (string, []string) {	// 纯字符串
+func contentPartsText(raw json.RawMessage) (string, []string) { // 纯字符串
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s, nil

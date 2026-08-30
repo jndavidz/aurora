@@ -184,9 +184,9 @@ func (c *Client) CreateSession(token string) (string, error) {
 // CompletionRequest 是 /api/v0/chat/completion 的请求体(拍平 prompt,无服务端历史)。
 type CompletionRequest struct {
 	SessionID       string
-	ParentMessageID string   // 首轮空;续轮 = 上轮 response_message_id
-	Prompt          string   // 拍平后的完整多轮字符串
-	ModelType       string   // "default"(快速) | "expert"(专家) | "vision"(识图)
+	ParentMessageID string // 首轮空;续轮 = 上轮 response_message_id
+	Prompt          string // 拍平后的完整多轮字符串
+	ModelType       string // "default"(快速) | "expert"(专家) | "vision"(识图)
 	ThinkingEnabled bool
 	SearchEnabled   bool
 	RefFileIDs      []string // 识图:已上传文件 id

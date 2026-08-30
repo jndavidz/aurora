@@ -39,10 +39,10 @@ const (
 // (JA3)风控:Go 标准库 http.Client 请求量一上来就被拦截(返回 RGV587 captcha),
 // 浏览器指纹(Chrome_146)实测可长期通过。
 type Client struct {
-	baseURL    string
-	tlsClient  *bogdanfinn.TlsClient
-	cookies    string // 当前生效的 cookie header(ticket + x5sec 等)
-	userID     string // ut / x-device-id(非空即可,服务端不校验绑定)
+	baseURL   string
+	tlsClient *bogdanfinn.TlsClient
+	cookies   string // 当前生效的 cookie header(ticket + x5sec 等)
+	userID    string // ut / x-device-id(非空即可,服务端不校验绑定)
 	// token 池(从文件加载,每行一个完整 cookie header)
 	tokens []string
 	cursor int

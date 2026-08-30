@@ -6,8 +6,8 @@
 //     固定可复用)+ Cookie(登录凭证,bd_sso/sessionid 等)
 //   - 请求 body:JSON(client_meta.conversation_id/bot_id + messages[] + option)
 //   - 响应:SSE 事件流
-//       SSE_HEARTBEAT → SSE_ACK(question_id/section_id)
-//       → FULL_MSG_NOTIFY(回显)→ STREAM_CHUNK(增量文本)×N → 完成
+//     SSE_HEARTBEAT → SSE_ACK(question_id/section_id)
+//     → FULL_MSG_NOTIFY(回显)→ STREAM_CHUNK(增量文本)×N → 完成
 //   - 增量文本在 STREAM_CHUNK.patch_op[].patch_value.content_block[].content.text_block.text
 //   - 完成标记:patch_object=50 ext.is_finish="1";patch_type=2 是删除操作
 package doubaoweb
@@ -43,22 +43,22 @@ const (
 //   - 下述 URL 参数:aid/device_id/fp/msToken/a_bogus/web_id/tea_uuid/web_tab_id
 //   - 全部会话级固定可复用(实测跨请求稳定)
 type Account struct {
-	Cookie    string `json:"cookie"`
-	Aid       string `json:"aid"`
-	DeviceID  string `json:"device_id"`
-	FP        string `json:"fp"`
-	MsToken   string `json:"ms_token"`
-	ABogus    string `json:"a_bogus"`
-	WebID     string `json:"web_id"`
-	TeaUUID   string `json:"tea_uuid"`
-	WebTabID  string `json:"web_tab_id"`
-	BotID     string `json:"bot_id,omitempty"`
-	Version   string `json:"version,omitempty"` // doubao_pc_version / pc_version
+	Cookie   string `json:"cookie"`
+	Aid      string `json:"aid"`
+	DeviceID string `json:"device_id"`
+	FP       string `json:"fp"`
+	MsToken  string `json:"ms_token"`
+	ABogus   string `json:"a_bogus"`
+	WebID    string `json:"web_id"`
+	TeaUUID  string `json:"tea_uuid"`
+	WebTabID string `json:"web_tab_id"`
+	BotID    string `json:"bot_id,omitempty"`
+	Version  string `json:"version,omitempty"` // doubao_pc_version / pc_version
 	// 会话续接:豆包必须用已有 conversation(不能创建新会话)。
 	// 从浏览器抓一次(completion 请求的 client_meta),之后每次请求基于它续接。
-	ConvID      string `json:"conv_id,omitempty"`
-	SectionID   string `json:"section_id,omitempty"`
-	LastMsgIdx  int    `json:"last_msg_idx,omitempty"`
+	ConvID     string `json:"conv_id,omitempty"`
+	SectionID  string `json:"section_id,omitempty"`
+	LastMsgIdx int    `json:"last_msg_idx,omitempty"`
 	// Query 与 Template(2026-08-21 起):a_bogus 绑定 URL 参数 + body 的
 	// conversation 字段 —— 改 prompt 无碍,但参数集/会话字段变了报
 	// "common invalid param"。因此 capture-doubao.mjs 整段复用捕获的
@@ -141,13 +141,13 @@ type Delta struct {
 
 // CompletionRequest 是一次对话请求。
 type CompletionRequest struct {
-	Prompt     string // 用户消息(多轮用拍平文本或消息数组)
-	ConvID     string // 多轮:上一轮 conversation_id(首轮空)
-	SectionID  string // 多轮:上一轮 section_id(首轮空)
-	MsgIndex   int    // 多轮:上一轮 last_message_index(首轮 0)
-	DeepThink  bool   // 深度思考
-	WebSearch  bool   // 联网搜索
-	Messages   []Message // 可选:直接给消息数组(多轮精确回放)
+	Prompt    string    // 用户消息(多轮用拍平文本或消息数组)
+	ConvID    string    // 多轮:上一轮 conversation_id(首轮空)
+	SectionID string    // 多轮:上一轮 section_id(首轮空)
+	MsgIndex  int       // 多轮:上一轮 last_message_index(首轮 0)
+	DeepThink bool      // 深度思考
+	WebSearch bool      // 联网搜索
+	Messages  []Message // 可选:直接给消息数组(多轮精确回放)
 }
 
 // Message 是一条历史消息。
@@ -418,12 +418,12 @@ func (c *Client) buildReqBody(acct *Account, req CompletionRequest) ([]byte, err
 		"regen_query_id": []any{}, "edit_query_id": []any{}, "regen_instruction": "",
 		"no_replace_for_regen": false, "message_from": 0, "shared_app_name": "", "shared_app_id": "",
 		"sse_recv_event_options": map[string]any{"support_chunk_delta": true},
-		"is_ai_playground": false, "is_old_user": true,
-		"recovery_option": map[string]any{"is_recovery": false, "req_create_time_sec": time.Now().Unix(), "append_sse_event_scene": 0},
+		"is_ai_playground":       false, "is_old_user": true,
+		"recovery_option":      map[string]any{"is_recovery": false, "req_create_time_sec": time.Now().Unix(), "append_sse_event_scene": 0},
 		"message_storage_type": 0, "related_deleted_message_ids": map[string]any{},
 		"connector_info_list": []any{},
-		"model_config": map[string]any{"model_item_key": "0", "model_extra_params": map[string]any{}},
-		"aggregate_params": map[string]any{"model_item_key": "0", "provider_id": ""},
+		"model_config":        map[string]any{"model_item_key": "0", "model_extra_params": map[string]any{}},
+		"aggregate_params":    map[string]any{"model_item_key": "0", "provider_id": ""},
 	}
 	botID := acct.BotID
 	if botID == "" {
@@ -453,28 +453,28 @@ func (c *Client) completionURL(acct *Account) string {
 		ver = "3.32.3"
 	}
 	q := map[string]string{
-		"aid":                  acct.Aid,
-		"device_id":            acct.DeviceID,
-		"device_platform":      "web",
+		"aid":                    acct.Aid,
+		"device_id":              acct.DeviceID,
+		"device_platform":        "web",
 		"doubao_device_platform": "web",
-		"doubao_pc_version":    ver,
-		"fp":                   acct.FP,
-		"language":             "zh",
-		"pc_version":           ver,
-		"pkg_type":             "release_version",
-		"real_aid":             acct.Aid,
-		"region":               "CN",
-		"samantha_web":         "1",
-		"sys_region":           "CN",
-		"tea_uuid":             acct.TeaUUID,
-		"tz_name":              "Asia/Shanghai",
-		"use-olympus-account":  "1",
-		"version_code":         "20800",
-		"web_id":               acct.WebID,
-		"web_platform":         "browser",
-		"web_tab_id":           acct.WebTabID,
-		"msToken":              acct.MsToken,
-		"a_bogus":              acct.ABogus,
+		"doubao_pc_version":      ver,
+		"fp":                     acct.FP,
+		"language":               "zh",
+		"pc_version":             ver,
+		"pkg_type":               "release_version",
+		"real_aid":               acct.Aid,
+		"region":                 "CN",
+		"samantha_web":           "1",
+		"sys_region":             "CN",
+		"tea_uuid":               acct.TeaUUID,
+		"tz_name":                "Asia/Shanghai",
+		"use-olympus-account":    "1",
+		"version_code":           "20800",
+		"web_id":                 acct.WebID,
+		"web_platform":           "browser",
+		"web_tab_id":             acct.WebTabID,
+		"msToken":                acct.MsToken,
+		"a_bogus":                acct.ABogus,
 	}
 	var sb strings.Builder
 	sb.WriteString(defaultBase + "/chat/completion?")

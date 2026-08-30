@@ -9,8 +9,9 @@
 //   - UUID 设备号: 创建临时账号 (TypeNoAuth)
 //
 // 配合 handler 的使用模式:
-//   authresolver.ResolveAccessToken(c) → 返回 access_token 字符串
-//   handler 拿字符串去 pool.Lookup() / pool.CreateTemporary()
+//
+//	authresolver.ResolveAccessToken(c) → 返回 access_token 字符串
+//	handler 拿字符串去 pool.Lookup() / pool.CreateTemporary()
 package authresolver
 
 import (

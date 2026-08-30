@@ -52,9 +52,9 @@ func bootstrapCookieJar(client httpclient.AuroraHttpClient, account *accounts.Ac
 	// 2) 拉首页 + 几个 warm-up 端点
 	header := createBaseHeader()
 	urls := []string{
-		"https://chatgpt.com/",                       // 首页 — CF 注入核心 cookie
-		"https://chatgpt.com/api/auth/session",       // 拉 session 状态,触发更多 Set-Cookie
-		"https://chatgpt.com/cdn-cgi/trace",          // CF trace,简单 200
+		"https://chatgpt.com/",                 // 首页 — CF 注入核心 cookie
+		"https://chatgpt.com/api/auth/session", // 拉 session 状态,触发更多 Set-Cookie
+		"https://chatgpt.com/cdn-cgi/trace",    // CF trace,简单 200
 	}
 	for _, u := range urls {
 		resp, err := client.Request(http.MethodGet, u, header, nil, nil)

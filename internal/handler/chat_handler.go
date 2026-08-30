@@ -744,7 +744,6 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 	c.JSON(200, outResp)
 }
 
-
 // responsesTextDeltaEventText 构造 response.output_text.delta 事件字符串。
 func responsesTextDeltaEventText(itemID string, outputIndex int, delta string) string {
 	evt := officialtypes.ResponsesTextDeltaEvent{

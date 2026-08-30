@@ -6,7 +6,8 @@ import (
 )
 
 // TestSolveProofOfWork_FallbackFormat 验证 fallback 格式对齐 SDK:
-//   "gAAAAAB" + ErrorPrefix + base64(JSON.stringify("e")) + "~S"
+//
+//	"gAAAAAB" + ErrorPrefix + base64(JSON.stringify("e")) + "~S"
 //
 // 期望 token 形如: gAAAAABwQ8Lk5FbGpA2NcR9dShT6gYjU7VxZ4DImUi~S
 //   - gAAAAAB                            PrefixProof

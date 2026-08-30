@@ -40,15 +40,15 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		Data   []ResData `json:"data"`
 	}
 
-// ChatGPT 网页逆向实际可用模型(2026-08-21,免费账号视角)。
-		// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
-		// OpenAI 已把 Free/Go 默认模型切换为 GPT-5.6 Luna(slug=gpt-5-6,文字聊天无限量)。
-		// gpt-coding 是 -coding 变体(强制工具调用),标注 function_call 能力。
-		models := []string{
-			"auto",
-			"gpt-5-6",
-			"gpt-coding",
-		}
+	// ChatGPT 网页逆向实际可用模型(2026-08-21,免费账号视角)。
+	// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
+	// OpenAI 已把 Free/Go 默认模型切换为 GPT-5.6 Luna(slug=gpt-5-6,文字聊天无限量)。
+	// gpt-coding 是 -coding 变体(强制工具调用),标注 function_call 能力。
+	models := []string{
+		"auto",
+		"gpt-5-6",
+		"gpt-coding",
+	}
 
 	var resModelList []ResData
 	for _, model := range models {

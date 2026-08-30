@@ -92,10 +92,10 @@ func UploadFile(client httpclient.AuroraHttpClient, account *accounts.Account, p
 
 	// ---- Step 1: POST /backend-api/files ----
 	step1Payload := map[string]interface{}{
-		"file_name":  filename,
-		"file_size":  len(data),
-		"use_case":   useCase,
-		"mime_type":  mime,
+		"file_name":                filename,
+		"file_size":                len(data),
+		"use_case":                 useCase,
+		"mime_type":                mime,
 		"store_in_library":         true,
 		"library_persistence_mode": "opportunistic",
 	}

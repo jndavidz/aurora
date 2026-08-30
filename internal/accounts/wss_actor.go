@@ -18,7 +18,7 @@ import (
 
 // wssCommand 是 Service 层向 WSS goroutine 发送的指令
 type wssCommand struct {
-	Type    string      // "subscribe", "close"
+	Type    string // "subscribe", "close"
 	Payload interface{}
 	Result  chan<- wssResult
 }
@@ -364,8 +364,8 @@ func (a *WSSActor) sendPresence() {
 	}
 	msg := []map[string]interface{}{
 		{"id": a.nextID(), "command": map[string]interface{}{
-			"type":    "presence",
-			"state":   "foreground",
+			"type":  "presence",
+			"state": "foreground",
 		}},
 	}
 	_ = a.conn.WriteJSON(msg)
@@ -389,4 +389,3 @@ func websocketProxyFunc(proxy string) (func(*fhttp.Request) (*url.URL, error), e
 	}
 	return fhttp.ProxyURL(proxyURL), nil
 }
-

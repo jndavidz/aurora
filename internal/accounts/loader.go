@@ -11,8 +11,8 @@ import (
 
 // RawToken 从文件加载的原始 token 信息
 type RawToken struct {
-	Token     string // access_token / refresh_token / session_token
-	TeamID    string // 冒号后（仅 access_tokens.txt 支持）
+	Token  string // access_token / refresh_token / session_token
+	TeamID string // 冒号后（仅 access_tokens.txt 支持）
 }
 
 // LoadTokensFromFile 从文件读取 token，空行和 # 开头被忽略
