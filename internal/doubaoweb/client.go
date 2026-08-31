@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"aurora/httpclient/factory"
+
 	"github.com/google/uuid"
 )
 
@@ -74,13 +76,13 @@ type Client struct {
 	mu       sync.Mutex
 	lastUsed []time.Time
 	cursor   int
-	client   *http.Client
+	client   factory.Client
 }
 
 // NewClient 构造客户端。accounts 至少一个。
 func NewClient(accounts []*Account) *Client {
 	return &Client{
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   factory.NewWebClient(factory.Profile{Mode: factory.ModeGoNative, Upgradable: true, Timeout: 120 * time.Second}),
 		lastUsed: make([]time.Time, len(accounts)),
 		accounts: accounts,
 	}

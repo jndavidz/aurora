@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"aurora/httpclient/factory"
 	"aurora/internal/jwtutil"
 	"aurora/internal/poolfile"
 )
@@ -28,7 +29,7 @@ const (
 type Client struct {
 	mu         sync.Mutex // 换发/回写互斥(并发换发会互相作废轮换链,同 kimi)
 	baseURL    string
-	httpClient *http.Client
+	httpClient factory.Client
 	tokenFile  string // token 池文件路径(换发轮换时回写,防"重启后旧 token 作废")
 	// 凭据
 	refreshToken string // 当前生效的 chatglm_refresh_token(长期)
@@ -51,7 +52,7 @@ func NewClient(baseURL, tokenFile, refreshToken, accessToken, deviceID string) *
 	}
 	c := &Client{
 		baseURL:      strings.TrimRight(baseURL, "/"),
-		httpClient:   &http.Client{},
+		httpClient:   factory.NewWebClient(factory.Profile{Mode: factory.ModeGoNative, Upgradable: true}),
 		refreshToken: refreshToken,
 		accessToken:  accessToken,
 		deviceID:     deviceID,

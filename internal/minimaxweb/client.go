@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"aurora/httpclient"
-	"aurora/httpclient/bogdanfinn"
+	"aurora/httpclient/factory"
 
 	"github.com/google/uuid"
 )
@@ -54,7 +54,7 @@ type Client struct {
 	uuids    map[string]string // token -> 页面实例级 uuid(跨请求复用,服务端或校验一致性)
 	uuidMu   sync.Mutex        // 保护 uuids:并发请求对同一 map 读写会触发
 	// fatal error: concurrent map writes(不可 recover)
-	tls *bogdanfinn.TlsClient
+	tls factory.Client
 }
 
 // NewClient 构造客户端。
@@ -66,7 +66,7 @@ func NewClient(tokens []string, agentID, deviceID, userID string) *Client {
 		deviceID: deviceID,
 		userID:   userID,
 		uuids:    make(map[string]string),
-		tls:      bogdanfinn.NewStdClient(),
+		tls:      factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked}),
 	}
 }
 

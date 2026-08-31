@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"aurora/httpclient"
-	"aurora/httpclient/bogdanfinn"
+	"aurora/httpclient/factory"
 )
 
 const (
@@ -67,7 +67,7 @@ type Client struct {
 	mu       sync.Mutex
 	lastUsed []time.Time // 每账号上次请求时间
 	cursor   int
-	tls      *bogdanfinn.TlsClient
+	tls      factory.Client
 }
 
 // NewClient 构造客户端。accounts 至少一个(空则请求时返回错误)。
@@ -75,7 +75,7 @@ type Client struct {
 // 按 JA3/TLS 指纹校验,标准 Go http.Client / curl 返回 BardErrorInfo 1096。
 func NewClient(accounts []*Account) *Client {
 	c := &Client{
-		tls:      bogdanfinn.NewStdClient(),
+		tls:      factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked}),
 		lastUsed: make([]time.Time, len(accounts)),
 	}
 	c.accounts = accounts

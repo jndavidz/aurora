@@ -34,7 +34,7 @@ import (
 	"time"
 
 	"aurora/httpclient"
-	"aurora/httpclient/bogdanfinn"
+	"aurora/httpclient/factory"
 
 	"github.com/google/uuid"
 )
@@ -49,13 +49,13 @@ type Client struct {
 	tokens []string
 	cursor int
 	base   string
-	tls    *bogdanfinn.TlsClient
+	tls    factory.Client
 }
 
 // NewClient 构造客户端。tokens 每行一个完整 Cookie 串
 // (形如 'xiaomichatbot_ph="..."; xiaomichatbot_serviceToken="..."; userId=...')。
 func NewClient(tokens []string) *Client {
-	return &Client{tokens: tokens, base: DefaultBase, tls: bogdanfinn.NewStdClient()}
+	return &Client{tokens: tokens, base: DefaultBase, tls: factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked})}
 }
 
 // HasToken 报告是否有可用 token。

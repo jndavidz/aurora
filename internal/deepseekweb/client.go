@@ -16,6 +16,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"aurora/httpclient/factory"
 )
 
 const (
@@ -27,7 +29,7 @@ const (
 // Client 持有一个网页 token 池并复用 HTTP 连接。
 type Client struct {
 	baseURL string
-	client  *http.Client
+	client  factory.Client
 	tokens  []string
 	cursor  int
 }
@@ -37,15 +39,13 @@ func NewClient(baseURL, tokenFile, proxyURL string) (*Client, error) {
 	if baseURL == "" {
 		baseURL = defaultBase
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if proxyURL != "" {
-		if err := setTransportProxy(transport, proxyURL); err != nil {
-			return nil, err
-		}
-	}
 	c := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Transport: transport, Timeout: 0},
+		client: factory.NewWebClient(factory.Profile{
+			Mode:       factory.ModeGoNative,
+			Upgradable: true,
+			ProxyURL:   proxyURL, // 代理语义由工厂内化(clone DefaultTransport + 注入)
+		}),
 	}
 	if tokenFile != "" {
 		tokens, err := loadTokens(tokenFile)
@@ -398,15 +398,3 @@ func truncate(s string, n int) string {
 }
 
 // setTransportProxy 设置 transport 的代理(HTTP 与 HTTPS 都生效)。
-func setTransportProxy(t *http.Transport, proxyURL string) error {
-	u := proxyURL
-	if !strings.Contains(u, "://") {
-		u = "http://" + u
-	}
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return err
-	}
-	t.Proxy = http.ProxyURL(parsed)
-	return nil
-}

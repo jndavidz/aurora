@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"aurora/httpclient"
-	"aurora/httpclient/bogdanfinn"
+	"aurora/httpclient/factory"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -50,7 +50,7 @@ type tokenPair struct {
 type Client struct {
 	baseURL   string
 	agentID   string
-	tlsClient *bogdanfinn.TlsClient
+	tlsClient factory.Client
 	// token 池
 	tokens []tokenPair
 	cursor int
@@ -72,7 +72,7 @@ func NewClient(baseURL, tokenFile, agentID string) *Client {
 	c := &Client{
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		agentID:   agentID,
-		tlsClient: bogdanfinn.NewStdClient(),
+		tlsClient: factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked}),
 	}
 	if tokenFile != "" {
 		if tokens, err := loadTokens(tokenFile); err == nil && len(tokens) > 0 {

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"aurora/httpclient/factory"
 	"aurora/internal/jwtutil"
 	"aurora/internal/poolfile"
 )
@@ -43,7 +44,7 @@ type Client struct {
 	mu         sync.Mutex // 换发互斥(并发请求同时换发会互相作废轮换链)
 	baseURL    string
 	authURL    string
-	httpClient *http.Client
+	httpClient factory.Client
 	tokenFile  string // token 池文件路径(换发轮换时回写,防"重启后旧 token 作废")
 	// 凭据
 	accessToken  string // 短期 JWT(~15 分钟),Authorization: Bearer
@@ -65,7 +66,7 @@ func NewClient(baseURL, tokenFile string) *Client {
 	c := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		authURL:    authBase,
-		httpClient: &http.Client{},
+		httpClient: factory.NewWebClient(factory.Profile{Mode: factory.ModeGoNative, Upgradable: true}),
 		tokenFile:  tokenFile,
 	}
 	if tokenFile != "" {

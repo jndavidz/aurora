@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"aurora/httpclient"
-	"aurora/httpclient/bogdanfinn"
+	"aurora/httpclient/factory"
 
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
@@ -40,7 +40,7 @@ const (
 // 浏览器指纹(Chrome_146)实测可长期通过。
 type Client struct {
 	baseURL   string
-	tlsClient *bogdanfinn.TlsClient
+	tlsClient factory.Client
 	cookies   string // 当前生效的 cookie header(ticket + x5sec 等)
 	userID    string // ut / x-device-id(非空即可,服务端不校验绑定)
 	// token 池(从文件加载,每行一个完整 cookie header)
@@ -60,7 +60,7 @@ func NewClient(baseURL, tokenFile, cookies, userID string) *Client {
 	}
 	c := &Client{
 		baseURL:   strings.TrimRight(baseURL, "/"),
-		tlsClient: bogdanfinn.NewStdClient(),
+		tlsClient: factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked}),
 		cookies:   cookies,
 		userID:    userID,
 	}
