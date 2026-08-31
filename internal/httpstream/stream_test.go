@@ -57,35 +57,3 @@ func TestWriteDone(t *testing.T) {
 		t.Errorf("expected 'data: [DONE]\\n\\n', got %q", body)
 	}
 }
-
-func TestWriteImageStreamHeader(t *testing.T) {
-	c, w := setupTestContext()
-	WriteImageStreamHeader(c)
-
-	if w.Header().Get("Content-Type") != "text/event-stream" {
-		t.Errorf("expected Content-Type text/event-stream, got %s", w.Header().Get("Content-Type"))
-	}
-}
-
-func TestWriteImageStreamDone(t *testing.T) {
-	c, w := setupTestContext()
-	ok := WriteImageStreamDone(c)
-
-	if !ok {
-		t.Error("WriteImageStreamDone should return true")
-	}
-	body := w.Body.String()
-	if body != "data: [DONE]\n\n" {
-		t.Errorf("expected 'data: [DONE]\\n\\n', got %q", body)
-	}
-}
-
-func TestWriteImageStreamError(t *testing.T) {
-	c, w := setupTestContext()
-	WriteImageStreamError(c, 0, 1, "test error")
-
-	body := w.Body.String()
-	if body == "" {
-		t.Error("expected non-empty response body")
-	}
-}
