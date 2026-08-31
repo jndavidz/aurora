@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"aurora/internal/kimiweb"
 	"aurora/typings/official"
@@ -12,6 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+// kimiRefreshSkew 是 access_token 的提前换发余量(Kimi access 仅 ~15 分钟)。
+// 距过期不足 3 分钟即视为需要换发。
+const kimiRefreshSkew = 3 * time.Minute
 
 // kimiSearchTool 是联网搜索的原生工具(chat 变体默认开启,同网页端;正文里的
 // 🛠...🛠 引用标记由 kimiweb.ConsumeStream 剥离)。
@@ -49,7 +54,7 @@ func (d *Kimi) ensureToken(client *kimiweb.Client) error {
 	if client == nil || !client.HasToken() {
 		return fmt.Errorf("kimi web client unavailable: missing KIMI_WEB_TOKENS?")
 	}
-	if client.HasAccessToken() {
+	if client.HasAccessToken() && !client.AccessTokenNearExpiry(kimiRefreshSkew) {
 		return nil
 	}
 	for attempt := 0; attempt <= client.PoolSize(); attempt++ {
@@ -64,6 +69,17 @@ func (d *Kimi) ensureToken(client *kimiweb.Client) error {
 		}
 	}
 	return fmt.Errorf("kimi: all refresh tokens failed")
+}
+
+// completeWithAuth 调 client.Complete;请求失败即清票(401/403 或传输错误),
+// 下一次请求经 ensureToken 重换发 —— 同 glm 侧,修复过期票短路。
+// Kimi 换发走 c.mu 互斥,并发安全。
+func (d *Kimi) completeWithAuth(client *kimiweb.Client, req kimiweb.CompletionRequest) (*http.Response, error) {
+	resp, err := client.Complete(req)
+	if err != nil {
+		client.ClearAccessToken()
+	}
+	return resp, err
 }
 
 // kimiFlattenResponses 把 Responses input 拍平成单条用户消息文本。
@@ -113,7 +129,7 @@ func kimiRoleLabel(role string) string {
 
 // chatResponsesStream 流式输出 Responses 事件。
 func (d *Kimi) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -162,7 +178,7 @@ func (d *Kimi) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 
 // chatResponsesNonStream 非流式。
 func (d *Kimi) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -247,7 +263,7 @@ func kimiFlattenAPIMessages(sb *strings.Builder, messages []official.APIMessage,
 
 // chatCompletionsStream 流式 chat.completion.chunk。
 func (d *Kimi) chatCompletionsStream(c *gin.Context, req *official.APIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -292,7 +308,7 @@ func (d *Kimi) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 
 // chatCompletionsNonStream 非流式 ChatCompletion。
 func (d *Kimi) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return

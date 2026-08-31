@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"aurora/internal/glmweb"
 	"aurora/typings/official"
@@ -12,6 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+// glmRefreshSkew 是 access_token 的提前换发余量(GLM access ~2h)。
+// 距过期不足 10 分钟即视为需要换发,避免拿到临界票打到一半过期。
+const glmRefreshSkew = 10 * time.Minute
 
 // chatResponses 处理智谱 chat 变体(/v1/responses)。
 //
@@ -42,7 +47,7 @@ func (d *Glm) ensureToken(client *glmweb.Client) error {
 	if client == nil || !client.HasToken() {
 		return fmt.Errorf("glm web client unavailable: missing GLM_WEB_TOKENS?")
 	}
-	if client.HasAccessToken() {
+	if client.HasAccessToken() && !client.AccessTokenNearExpiry(glmRefreshSkew) {
 		return nil
 	}
 	for attempt := 0; attempt <= client.PoolSize(); attempt++ {
@@ -57,6 +62,17 @@ func (d *Glm) ensureToken(client *glmweb.Client) error {
 		}
 	}
 	return fmt.Errorf("glm: all refresh tokens failed")
+}
+
+// completeWithAuth 调 client.Complete;请求失败即清票(401/403 或传输错误),
+// 下一次请求经 ensureToken 重换发 —— 修复"access_token 过期后拿废票打到进程重启"的短路。
+// 对传输类瞬时错误多清一次票的代价只是一次额外换发(纯 HTTP,毫秒级),可接受。
+func (d *Glm) completeWithAuth(client *glmweb.Client, req glmweb.CompletionRequest) (*http.Response, error) {
+	resp, err := client.Complete(req)
+	if err != nil {
+		client.ClearAccessToken()
+	}
+	return resp, err
 }
 
 // glmMessagesFromResponses 把 Responses input 转成智谱 messages(chat 变体剥离 tools)。
@@ -88,7 +104,7 @@ func glmMessagesFromResponses(req *official.ResponsesAPIRequest, stripTools bool
 
 // chatResponsesStream 流式输出 Responses 事件。
 func (d *Glm) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -133,7 +149,7 @@ func (d *Glm) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequ
 
 // chatResponsesNonStream 非流式。
 func (d *Glm) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -192,7 +208,7 @@ func glmMessagesFromAPI(req *official.APIRequest) []glmweb.Message {
 
 // chatCompletionsStream 流式 chat.completion.chunk。
 func (d *Glm) chatCompletionsStream(c *gin.Context, req *official.APIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return
@@ -234,7 +250,7 @@ func (d *Glm) chatCompletionsStream(c *gin.Context, req *official.APIRequest, cl
 
 // chatCompletionsNonStream 非流式 ChatCompletion。
 func (d *Glm) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
-	resp, err := client.Complete(streamReq)
+	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
 		c.JSON(502, gin.H{"error": err.Error()})
 		return

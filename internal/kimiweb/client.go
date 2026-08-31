@@ -23,6 +23,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
+
+	"aurora/internal/jwtutil"
 )
 
 const (
@@ -77,6 +80,25 @@ func NewClient(baseURL, tokenFile string) *Client {
 
 // HasAccessToken 报告是否已有 access_token(避免重复换发)。
 func (c *Client) HasAccessToken() bool { return c.accessToken != "" }
+
+// AccessTokenNearExpiry 报告 access_token 缺失、exp 无法解析或将在 skew 内过期。
+// Kimi 的 access_token 仅 ~15 分钟,skew 取 3 分钟即"过 12 分钟就该换"。
+// exp 解析失败按"临近过期"处理:宁可多换发一次,不可拿过期票打上游。
+func (c *Client) AccessTokenNearExpiry(skew time.Duration) bool {
+	exp, ok := jwtutil.Exp(c.accessToken)
+	if !ok {
+		return true
+	}
+	return time.Until(exp) < skew
+}
+
+// ClearAccessToken 加锁丢弃当前 access_token(上游 401/403 或请求失败后调用,
+// 确保下一次请求经 ensureToken 重换发)。走 c.mu 与 RefreshAccessToken 互斥。
+func (c *Client) ClearAccessToken() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.accessToken = ""
+}
 
 // HasToken 报告是否有可用的 refresh_token(池或直传)。
 func (c *Client) HasToken() bool { return c.refreshToken != "" }

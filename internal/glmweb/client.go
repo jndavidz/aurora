@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"aurora/internal/jwtutil"
 )
 
 const (
@@ -64,6 +67,21 @@ func NewClient(baseURL, tokenFile, refreshToken, accessToken, deviceID string) *
 
 // HasAccessToken 报告是否已有 access_token(避免重复换发)。
 func (c *Client) HasAccessToken() bool { return c.accessToken != "" }
+
+// AccessTokenNearExpiry 报告 access_token 缺失、exp 无法解析或将在 skew 内过期。
+// exp 解析失败按"临近过期"处理:宁可多换发一次,不可拿过期票打上游。
+// 注:并发换发的互斥(审计 C4)由 B/E 阶段的 webclient 工厂统一收口,此处不引入锁。
+func (c *Client) AccessTokenNearExpiry(skew time.Duration) bool {
+	exp, ok := jwtutil.Exp(c.accessToken)
+	if !ok {
+		return true
+	}
+	return time.Until(exp) < skew
+}
+
+// ClearAccessToken 丢弃当前 access_token(上游 401/403 或请求失败后调用,
+// 确保下一次请求经 ensureToken 重换发,而不是拿废票继续打到进程重启)。
+func (c *Client) ClearAccessToken() { c.accessToken = "" }
 
 // HasToken 报告是否有可用的 refresh_token(池或直传)。
 func (c *Client) HasToken() bool { return c.refreshToken != "" }
