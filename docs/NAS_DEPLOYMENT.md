@@ -73,7 +73,7 @@
 | 项 | 实测/要求 | 备注 |
 |---|---|---|
 | 系统 | DSM 7.2+ | Container Manager 前提 |
-| Docker | 24.0.2(`/usr/local/bin/docker`,默认不在 PATH) | 用全路径 |
+| Docker | Container Manager(2026-08-31 勘误:旧记录 `/usr/local/bin/docker` **已失效**;实际 `/var/packages/ContainerManager/target/usr/bin/docker`,默认不在 PATH) | 用全路径;部署脚本已做自动探测 |
 | BuildKit | 必须启用(Dockerfile 用了 `--mount=type=cache`) | `export DOCKER_BUILDKIT=1` 或 buildx |
 | 操作权限 | `zxsadmin` 在 docker 组 | 免 sudo |
 | 磁盘 | <2GB | golang-alpine 构建层 + distroless 运行层 ~30MB + 缓存 |
