@@ -64,11 +64,15 @@ ls -la $DEPLOY_DIR | head -20
 echo -e "\033[36m==> 2/4 构建并启动容器(BuildKit 缓存命中则秒级)\033[0m"
 $SSH "cd $DEPLOY_DIR && DOCKER_BUILDKIT=1 $DOCKER compose up -d --build"
 
-echo -e "\033[36m==> 3/4 等待服务就绪(3s)\033[0m"
-sleep 3
+echo -e "\033[36m==> 3/4 等待服务就绪(启动含 token 换发,最长 60s)\033[0m"
+RESP=""
+for i in $(seq 1 30); do
+  sleep 2
+  RESP=$(curl -s -m 5 -w '\n[HTTP %{http_code}]' -H "Authorization: Bearer $AUTH" "http://$NAS_IP:$PORT/v1/models" || true)
+  case "$RESP" in *'[HTTP 200]'*) break;; esac
+done
 
 echo -e "\033[36m==> 4/4 验证 /v1/models\033[0m"
-RESP=$(curl -s -w '\n[HTTP %{http_code}]' -H "Authorization: Bearer $AUTH" "http://$NAS_IP:$PORT/v1/models" || true)
 echo "$RESP" | head -c 800
 echo
 case "$RESP" in
