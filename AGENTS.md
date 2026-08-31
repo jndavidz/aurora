@@ -35,7 +35,8 @@ Aurora 是「网页端 → OpenAI 兼容 API」网关(Go):对外暴露 `/v1/chat
 
 ## 浏览器抓取 / CDP(scripts/cdp/,零依赖)
 
-- 方法论入口:`docs/CDP_BROWSER_DEBUG.md`;登录态复用是过强风控站的关键,裸 curl 会被 zse-ck WAF / 登录墙 / 接口风控拦截。
+- 方法论入口:`docs/CDP_BROWSER_DEBUG.md`(三通道全景+资产地图);登录态复用是过强风控站的关键,裸 curl 会被 zse-ck WAF / 登录墙 / 接口风控拦截。
+- 本目录 37 个脚本的分类索引(核心桥/抓取引导/一次性实验)见 `scripts/cdp/README.md`;抓取产物一律落 `_scratch/`,勿放脚本目录。
 - Chrome for Testing 启停:`bash scripts/cdp/start-chrome-cdp.sh {start|stop|status}`;通用抓取:`node scripts/cdp/cdp-drive.mjs <url> [--out f.txt]`;各站协议抓包:`node scripts/cdp/capture-<site>.mjs`(抓 /api/ 请求)。
 - 抓取统一在 **Windows 侧**跑(`D:\PortableApps\_sys\node\node.exe`):WSL NAT 下 `127.0.0.1` 不可达 Windows 回环端口(Chrome 强制绑回环)。
 - 关闭浏览器走优雅路径(graceful-close),强杀会损坏 profile 登录态。

@@ -35,3 +35,17 @@ ssh root@10.10.10.3 'systemctl daemon-reload'
 ## 同步状态基线(2026-08-31)
 
 以上文件均从 NUC 实拉入库;后续任何 NUC systemd/脚本改动**先改本目录**。
+
+## NUC 文档与脚本全图(2026-08-31 起,防两仓散乱)
+
+NUC(nuc-hifi, 10.10.10.3)的资产分布在两个仓库,分工如下:
+
+| 内容 | 位置 | 角色 |
+|---|---|---|
+| **生产配置(systemd/运维脚本)** | `aurora/scripts/nuc/`(本目录) | **唯一权威**:装机后一切配置改动先改这里 |
+| 裸机装机初始化(nuc-setup.sh: Debian→squeezelite/WOL/CPU) | `open-xiaoai/deploy/nuc/` | 装机一次性;装完即由本目录接管 |
+| 音乐入库流水线(ape2flac/metadata/roon) | `open-xiaoai/deploy/nuc/` | 音乐主题,归 open-xiaoai |
+| 装机指引 / Roon 部署方案 | `open-xiaoai/doc/plan/nuc-install-guide.md`、`nuc-roon-deploy.md` | 方案文档 |
+| 资源实测分析(Chrome 上 NUC 可行性) | `aurora/docs/NUC_RESOURCE_ANALYSIS_2026-08-31.md` | 决策依据 |
+
+**判据**:与 aurora 桥/Chrome/凭证相关的配置 → 本目录;与音乐库/roon 相关 → open-xiaoai;裸机初始化一次性脚本 → open-xiaoai(装完不再改,变更走本目录)。

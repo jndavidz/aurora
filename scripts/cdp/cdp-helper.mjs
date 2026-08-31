@@ -1,5 +1,8 @@
 // 零依赖 CDP over WebSocket 客户端(供 Node 内核 / 命令行使用)
 //
+// ★ 权威源:本文件。副本在 open-xiaoai/scripts/cdp/ 与 repos/soft-query/,
+//   改动只改这里,再同步副本,防止三份漂移。
+//
 // 用途:接管带 --remote-debugging-port 启动的 Chromium/Electron 浏览器
 // (如 Min 浏览器),读 cookie/localStorage、抓 Network 请求、驱动页面。
 // 用法:
