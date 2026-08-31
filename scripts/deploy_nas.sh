@@ -55,11 +55,16 @@ if [ ! -s tokens/session_tokens.txt ]; then
 fi
 # A2:GLM/Kimi 池迁入 tokens-state(rw,轮换回写);已有则保留(内含轮换后的新票)
 for f in glm_tokens.txt kimi_tokens.txt; do
-  if [ ! -s "tokens-state/$f" ] && [ -s "tokens/$f" ]; then
-    cp "tokens/$f" "tokens-state/$f"
-    echo "  已播种 tokens-state/$f"
+  if [ ! -s "tokens-state/\$f" ] && [ -s "tokens/\$f" ]; then
+    cp "tokens/\$f" "tokens-state/\$f"
+    echo "  已播种 tokens-state/\$f"
   fi
 done
+# A2:tokens-state 属主改为容器 uid 65532(nonroot)——否则容器内轮换回写
+# Permission denied(2026-08-31 实测)。借 root 容器 chown(zxsadmin 无权直改)。
+$DOCKER run --rm -v $DEPLOY_DIR/tokens-state:/fix alpine:3.20 chown -R 65532:65532 /fix 2>/dev/null \
+  || echo '  ⚠ tokens-state 属主修复失败,池文件回写可能 Permission denied'
+chmod 755 $DEPLOY_DIR/tokens-state 2>/dev/null || true
 # 解压新源码
 tar -xzf -
 # compose 文件就位:仓库内 docker-compose.nas.yml → docker-compose.yml
