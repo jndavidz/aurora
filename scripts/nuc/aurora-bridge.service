@@ -1,0 +1,22 @@
+[Unit]
+Description=Aurora CDP bridge (Gemini/Claude via resident Chrome)
+After=chrome-cdp.service
+Wants=chrome-cdp.service
+
+[Service]
+User=cdpbridge
+WorkingDirectory=/opt/aurora-bridge
+Environment=BRIDGE_HOST=0.0.0.0
+Environment=BRIDGE_PORT=8799
+Environment=CDP_PORT=9222
+Environment=IDLE_TIMEOUT_MIN=0
+ExecStart=/usr/bin/node /opt/aurora-bridge/scripts/cdp/bridge.mjs
+Restart=on-failure
+RestartSec=5
+Nice=+10
+CPUAffinity=1 3
+CPUQuota=80%
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

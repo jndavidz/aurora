@@ -1,0 +1,37 @@
+# NUC 生产配置版本化
+
+NUC(nuc-hifi,10.10.10.3)上所有 systemd 单元与运维脚本的**权威副本**。
+2026-08-31 起生效:改 NUC 生产配置必须先改这里、提交,再同步到 NUC——
+防止"直接改生产没有记录"的漂移(本日 Chrome 渲染参数即因此产生认知分叉)。
+
+## 文件与部署目标
+
+| 本仓库文件 | NUC 目标路径 | 说明 |
+|---|---|---|
+| `vnc.service` | `/etc/systemd/system/vnc.service` | Xvfb+openbox+x11vnc;分辨率定稿 **1280x720x24**(2026-08-31 下午,渲染优化;原 2560x1440 软件渲染过慢) |
+| `vnc-session.sh` | `/usr/local/bin/vnc-session.sh` | vnc.service 的 ExecStart 脚本 |
+| `chrome-cdp.service` | `/etc/systemd/system/chrome-cdp.service` | 桥用 Chrome;含 `--disable-gpu --num-raster-threads=4 --disable-gpu-compositing --disable-dev-shm-usage`(禁 SwiftShader 软件渲染)+ CPUAffinity=1,3 + MemoryMax=2G |
+| `aurora-bridge.service` | `/etc/systemd/system/aurora-bridge.service` | 桥常驻;BRIDGE_HOST=0.0.0.0 / IDLE_TIMEOUT_MIN=0 |
+| `credential-keeper.service` | `/etc/systemd/system/credential-keeper.service` | D4 凭证探测(oneshot;SuccessExitStatus=1) |
+| `credential-keeper.timer` | `/etc/systemd/system/credential-keeper.timer` | 每日 06:30+rand30min |
+| `audio-aware-ml.sh` | `/usr/local/bin/audio-aware-ml.sh` | 播放感知的 ML cpuset 降级(10s 轮询) |
+| `pin-audio-irq.sh` | `/usr/local/bin/pin-audio-irq.sh` | 音频 IRQ 绑核(oneshot,动态找 IRQ 号) |
+| `squeezelite-affinity.conf` | `/etc/systemd/system/squeezelite.service.d/affinity.conf` | squeezelite CPUAffinity=0 + Nice=-10 |
+
+## 同步命令(仓库 → NUC)
+
+```bash
+scp scripts/nuc/vnc.service root@10.10.10.3:/etc/systemd/system/
+# ...逐文件,然后:
+ssh root@10.10.10.3 'systemctl daemon-reload'
+```
+
+## 不入库的 NUC 文件
+
+- `/etc/credential-keeper.env`(600,含网关 token)
+- `/root/vnc-password.txt`(600,VNC 密码)
+- `/opt/chrome-cdp/profile/`(登录态)、`/opt/aurora-bridge/.runtime/`(桥会话令牌)
+
+## 同步状态基线(2026-08-31)
+
+以上文件均从 NUC 实拉入库;后续任何 NUC systemd/脚本改动**先改本目录**。

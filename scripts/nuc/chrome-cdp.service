@@ -1,0 +1,18 @@
+[Unit]
+Description=Chrome for Testing (CDP 9222, virtual display :1)
+After=vnc.service
+Requires=vnc.service
+
+[Service]
+User=cdpbridge
+Environment=DISPLAY=:1
+ExecStart=/opt/chrome-for-testing/chrome-linux64/chrome --remote-debugging-port=9222 --user-data-dir=/opt/chrome-cdp/profile --no-first-run --no-default-browser-check --disable-background-networking --disable-component-update --disable-sync --window-size=1280,720 --disable-gpu --num-raster-threads=4 --disable-gpu-compositing --disable-dev-shm-usage about:blank
+Restart=on-failure
+RestartSec=5
+Nice=+10
+CPUAffinity=1 3
+CPUQuota=80%
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

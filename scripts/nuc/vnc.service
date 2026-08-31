@@ -1,0 +1,13 @@
+[Unit]
+Description=Xvfb :1 + x11vnc (headless login desktop for CDP bridge)
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/vnc-session.sh
+Restart=on-failure
+RestartSec=5
+Nice=+10
+CPUAffinity=1 3
+
+[Install]
+WantedBy=multi-user.target
