@@ -102,6 +102,18 @@ func (d *Glm) webClient() *glmweb.Client {
 	return d.client
 }
 
+// CredentialHealth 实现 HealthReporter:报告 GLM 凭证池的过期时间线。
+// refresh_token ~90 天有效,池内最早过期者决定"距重抓还剩多久"。
+func (d *Glm) CredentialHealth() CredentialHealth {
+	client := d.webClient()
+	h := CredentialHealth{Name: d.Name(), Accounts: client.PoolSize()}
+	if !fillRefreshExpiry(&h, client.RefreshTokenExps()) {
+		h.Status = "empty"
+		h.Detail = "refresh token 池为空或均无法解析 exp,需重抓或补充有效 token"
+	}
+	return h
+}
+
 // Responses 按模型 id 路由 chat / coding 变体。
 func (d *Glm) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]

@@ -54,3 +54,30 @@ func TestAccessTokenNearExpiryAndClear(t *testing.T) {
 		t.Fatal("清票后应视为临近过期")
 	}
 }
+
+// 回归:A3 —— 池内 exp 解析(健康端点的数据源):非法条目跳过,
+// 池空但直传单 token 时解析直传值。
+func TestRefreshTokenExps(t *testing.T) {
+	c := NewClient("", "", "", "", "dev")
+	if got := c.RefreshTokenExps(); len(got) != 0 {
+		t.Fatalf("空池应返回空集, got %d", len(got))
+	}
+
+	far := time.Now().Add(90 * 24 * time.Hour).Unix()
+	near := time.Now().Add(24 * time.Hour).Unix()
+	c.tokens = []string{
+		mkTestJWT(t, far),
+		"garbage", // 解析失败跳过
+		mkTestJWT(t, near),
+	}
+	exps := c.RefreshTokenExps()
+	if len(exps) != 2 {
+		t.Fatalf("应解析出 2 条(跳过 garbage), got %d", len(exps))
+	}
+
+	// 池空但直传了单 refresh_token:回退解析直传值
+	c2 := NewClient("", "", mkTestJWT(t, time.Now().Add(48*time.Hour).Unix()), "", "dev")
+	if got := c2.RefreshTokenExps(); len(got) != 1 {
+		t.Fatalf("直传 token 应回退解析, got %d", len(got))
+	}
+}

@@ -95,6 +95,18 @@ func (d *Kimi) webClient() *kimiweb.Client {
 	return d.client
 }
 
+// CredentialHealth 实现 HealthReporter:报告 Kimi 凭证池的过期时间线。
+// refresh_token ~90 天有效且换发时轮换,池内最早过期者决定"距重抓还剩多久"。
+func (d *Kimi) CredentialHealth() CredentialHealth {
+	client := d.webClient()
+	h := CredentialHealth{Name: d.Name(), Accounts: client.PoolSize()}
+	if !fillRefreshExpiry(&h, client.RefreshTokenExps()) {
+		h.Status = "empty"
+		h.Detail = "refresh token 池为空或均无法解析 exp(当前 NAS 池即此状态,需 grab-kimi.mjs 重抓)"
+	}
+	return h
+}
+
 // Responses 按模型 id 路由 chat / coding 变体。
 func (d *Kimi) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]

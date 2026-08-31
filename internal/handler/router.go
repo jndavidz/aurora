@@ -110,6 +110,8 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	authGroup.POST("/v1/models/responses", chatHandler.Responses)
 	authGroup.POST("/v1/files", chatHandler.Files)
 	authGroup.GET("/v1/models", modelsHandler.ListModels)
+	// 凭证健康端点(可靠性 A3):汇总 ChatGPT 池与各 provider 凭证有效期,内网运维用。
+	authGroup.GET("/v1/health/credentials", chatHandler.CredentialHealth)
 	authGroup.POST("/backend-api/conversation", chatHandler.ChatGPTConversation)
 	authGroup.POST("/v1/images/generations", imageHandler.Generations)
 	authGroup.POST("/v1/images/edits", imageHandler.Edits)

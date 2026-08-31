@@ -83,6 +83,24 @@ func (c *Client) AccessTokenNearExpiry(skew time.Duration) bool {
 // 确保下一次请求经 ensureToken 重换发,而不是拿废票继续打到进程重启)。
 func (c *Client) ClearAccessToken() { c.accessToken = "" }
 
+// RefreshTokenExps 返回池内各 refresh_token 的 exp(供凭证健康端点报告
+// "距重抓还剩多久");池空但直传了单 token 时解析直传值。
+// 无法解析的条目跳过 —— 非即时报错路径,解析率由健康端点的 accounts 字段体现。
+func (c *Client) RefreshTokenExps() []time.Time {
+	exps := make([]time.Time, 0, len(c.tokens)+1)
+	for _, tok := range c.tokens {
+		if exp, ok := jwtutil.Exp(tok); ok {
+			exps = append(exps, exp)
+		}
+	}
+	if len(exps) == 0 && c.refreshToken != "" {
+		if exp, ok := jwtutil.Exp(c.refreshToken); ok {
+			exps = append(exps, exp)
+		}
+	}
+	return exps
+}
+
 // HasToken 报告是否有可用的 refresh_token(池或直传)。
 func (c *Client) HasToken() bool { return c.refreshToken != "" }
 

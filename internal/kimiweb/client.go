@@ -100,6 +100,24 @@ func (c *Client) ClearAccessToken() {
 	c.accessToken = ""
 }
 
+// RefreshTokenExps 返回池内各 refresh_token 的 exp(供凭证健康端点报告
+// "距重抓还剩多久");池空但直传了单 token 时解析直传值。
+// Kimi 的 refresh_token 每次换发都会轮换,这里反映的是当前池内值的到期时间。
+func (c *Client) RefreshTokenExps() []time.Time {
+	exps := make([]time.Time, 0, len(c.tokens)+1)
+	for _, tok := range c.tokens {
+		if exp, ok := jwtutil.Exp(tok); ok {
+			exps = append(exps, exp)
+		}
+	}
+	if len(exps) == 0 && c.refreshToken != "" {
+		if exp, ok := jwtutil.Exp(c.refreshToken); ok {
+			exps = append(exps, exp)
+		}
+	}
+	return exps
+}
+
 // HasToken 报告是否有可用的 refresh_token(池或直传)。
 func (c *Client) HasToken() bool { return c.refreshToken != "" }
 
