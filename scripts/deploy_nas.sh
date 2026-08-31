@@ -12,7 +12,9 @@ set -euo pipefail
 NAS_HOST=zxsadmin@10.10.10.2          # SSH 免密,密钥 D:\dev\data\ssh\id_ed25519
 DEPLOY_DIR=/volume2/docker/aurora      # 构建上下文(非 Drive 同步区)
 TOKEN_SRC=/volume2/dev/apps/aurora/.runtime/tokens  # Drive 同步过来的 token 源
-DOCKER=/usr/local/bin/docker          # NAS 上 docker 默认不在 PATH,用全路径
+# docker 可执行文件自动探测(DSM 7.2 起 ContainerManager 取代 Docker 套件,
+# /usr/local/bin/docker 已失效——2026-08-31 实测确认;探测在 SSH 定义后执行)
+DOCKER_CANDIDATES="/var/packages/ContainerManager/target/usr/bin/docker /usr/local/bin/docker"
 AUTH=david                            # 与 compose 内 Authorization 一致
 NAS_IP=10.10.10.2
 PORT=65432   # compose 映射 65432→8080(容器内 8080,宿主 65432)
@@ -23,6 +25,14 @@ REPO=$(git rev-parse --show-toplevel)
 cd "$REPO"
 
 SSH="ssh -o BatchMode=yes $NAS_HOST"
+
+# docker 探测(需 SSH 可用后执行)
+DOCKER=""
+for d in $DOCKER_CANDIDATES; do
+  $SSH "[ -x '$d' ]" 2>/dev/null && DOCKER="$d" && break
+done
+[ -z "$DOCKER" ] && { echo "✗ NAS 上找不到 docker 可执行文件"; exit 1; }
+echo "==> NAS docker: $DOCKER"
 
 echo -e "\033[36m==> 1/4 打包源码并传输(tar,排除敏感/无关项)\033[0m"
 tar -czf - \
