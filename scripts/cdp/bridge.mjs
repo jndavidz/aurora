@@ -959,6 +959,10 @@ async function geminiUIInput(c, text) {
 }
 
 async function geminiUIInputOnce(c, text) {
+  // 窗口失焦时 Enter 的字符输入(text:"\r")不进编辑器 → 消息永远不提交
+  // (2026-08-31 实测:Xvfb 桌面长时间无交互后必现,表现为"Enter sent 但无回复")。
+  // 输入前强制把 Gemini 页面带前台。对 claude 通道无影响(模板请求不走页面 UI)。
+  await c.cmd("Page.bringToFront").catch(() => {});
   // 等输入框可用(回答生成期间输入框不可用,轮询等待)
   let pos = null;
   for (let i = 0; i < 90; i++) {
