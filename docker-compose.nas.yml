@@ -60,13 +60,14 @@ services:
       # 桥池逗号分隔:轮询 + 故障转移(某桥不通自动换下一个);每桥登录不同小号。
       # 前置:各 PC 桥已启动并监听局域网(见 docs/GEMINI.md §八);NAS 需能路由到
       # 办公室网段(经 AX6000 WireGuard → 10.20.0.0/24)。
-      - GEMINI_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
+      # D5:NUC 桥置首(D3 三测通过);PC 桥降为备份
+      - GEMINI_CDP_URL=http://10.10.10.3:8799,http://10.10.10.6:8799,http://10.20.0.2:8799
       # - GEMINI_CDP_KEY=      # 可选:与桥的 BRIDGE_AUTH 一致(桥开放局域网时建议配)
       # - GEMINI_MODELS=${GEMINI_MODELS:-}
       # Claude(claude.ai)真浏览器执行通道(CDP 桥转发,与 Gemini 共用同一桥服务)。
       # 桥的 claude 适配器在页面上下文里 fetch claude.ai 的 completion 端点
       # (纯 cookie 认证,无会话令牌;见 docs/CLAUDE.md)。
-      - CLAUDE_CDP_URL=http://10.10.10.6:8799,http://10.20.0.2:8799
+      - CLAUDE_CDP_URL=http://10.10.10.3:8799,http://10.10.10.6:8799,http://10.20.0.2:8799
       # - CLAUDE_MODELS=${CLAUDE_MODELS:-}
       # 混元(腾讯元宝):已停用(2026-08-22,连续 3 个账号被风控冻结 —— 腾讯对
       # 元宝的自动化检测极严;桥的"每次新建会话"请求模式仍被识别,不再接入)。
