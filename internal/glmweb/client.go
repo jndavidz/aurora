@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"aurora/internal/jwtutil"
+	"aurora/internal/poolfile"
 )
 
 const (
@@ -24,6 +26,7 @@ const (
 
 // Client 是智谱网页客户端。
 type Client struct {
+	mu         sync.Mutex // 换发/回写互斥(并发换发会互相作废轮换链,同 kimi)
 	baseURL    string
 	httpClient *http.Client
 	tokenFile  string // token 池文件路径(换发轮换时回写,防"重启后旧 token 作废")
@@ -81,7 +84,11 @@ func (c *Client) AccessTokenNearExpiry(skew time.Duration) bool {
 
 // ClearAccessToken 丢弃当前 access_token(上游 401/403 或请求失败后调用,
 // 确保下一次请求经 ensureToken 重换发,而不是拿废票继续打到进程重启)。
-func (c *Client) ClearAccessToken() { c.accessToken = "" }
+func (c *Client) ClearAccessToken() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.accessToken = ""
+}
 
 // RefreshTokenExps 返回池内各 refresh_token 的 exp(供凭证健康端点报告
 // "距重抓还剩多久");池空但直传了单 token 时解析直传值。
@@ -146,6 +153,8 @@ func loadTokens(path string) ([]string, error) {
 
 // RefreshAccessToken 用 refresh_token 换发新的 access_token(JWT)。
 func (c *Client) RefreshAccessToken() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.refreshToken == "" {
 		return fmt.Errorf("glm: no refresh token")
 	}
@@ -192,32 +201,18 @@ func (c *Client) persistRefreshToken(oldToken, newToken string) {
 	if c.tokenFile == "" || newToken == "" || oldToken == "" {
 		return
 	}
-	data, err := os.ReadFile(c.tokenFile)
-	if err != nil {
-		return
+	// A2:回写逻辑收口到 poolfile(唯一 tmp + 锁 + 原子 rename)。
+	// 旧实现所有错误静默吞掉 —— 只读挂载下"内存轮换成功、文件仍旧值",
+	// 重启后拿已作废旧票(与 kimi 同病,2026-08-31 确认)。写失败必须告警。
+	replaced, err := poolfile.ReplaceToken(c.tokenFile, oldToken, newToken, "glm")
+	switch {
+	case err != nil:
+		log.Printf("[glm][ERROR] refresh_token 回写失败(%s): %v —— 重启后将用旧票,需人工重抓", c.tokenFile, err)
+	case replaced:
+		log.Printf("[glm] refresh_token rotated & persisted (%s)", c.tokenFile)
+	default:
+		log.Printf("[glm] refresh_token 旧值不在池文件中,已追加 (%s)", c.tokenFile)
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	replaced := false
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if line == oldToken || line == newToken {
-			lines[i] = newToken
-			replaced = true
-		}
-	}
-	if !replaced {
-		lines = append(lines, newToken)
-	}
-	out := strings.Join(lines, "\n") + "\n" // 末尾换行(loadTokens 按行读,无尾换行会导致加载异常)
-	tmp := c.tokenFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, c.tokenFile)
-	log.Printf("[glm] refresh_token rotated & persisted (%s)", c.tokenFile)
 }
 
 // setSignedHeaders 设置签名头 + 固定头。token 作 Authorization。

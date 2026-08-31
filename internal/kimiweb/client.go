@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"aurora/internal/jwtutil"
+	"aurora/internal/poolfile"
 )
 
 const (
@@ -244,32 +245,18 @@ func (c *Client) persistRefreshToken(oldToken, newToken string) {
 	if c.tokenFile == "" || newToken == "" || oldToken == "" {
 		return
 	}
-	data, err := os.ReadFile(c.tokenFile)
-	if err != nil {
-		return
+	// A2:回写逻辑收口到 poolfile(唯一 tmp + 锁 + 原子 rename)。
+	// 旧实现所有错误静默吞掉 —— 只读挂载下"内存轮换成功、文件仍旧值",
+	// 重启后拿已作废旧票(实测 401 "invalid claims")。写失败必须告警。
+	replaced, err := poolfile.ReplaceToken(c.tokenFile, oldToken, newToken, "kimi")
+	switch {
+	case err != nil:
+		log.Printf("[kimi][ERROR] refresh_token 回写失败(%s): %v —— 重启后将用旧票,需人工重抓", c.tokenFile, err)
+	case replaced:
+		log.Printf("[kimi] refresh_token rotated & persisted (%s)", c.tokenFile)
+	default:
+		log.Printf("[kimi] refresh_token 旧值不在池文件中,已追加 (%s)", c.tokenFile)
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	replaced := false
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if line == oldToken || line == newToken {
-			lines[i] = newToken
-			replaced = true
-		}
-	}
-	if !replaced {
-		lines = append(lines, newToken)
-	}
-	out := strings.Join(lines, "\n") + "\n" // 末尾换行(loadTokens 按行读,无尾换行会导致加载异常)
-	tmp := c.tokenFile + ".tmp"
-	if err := os.WriteFile(tmp, []byte(out), 0o644); err != nil {
-		return
-	}
-	_ = os.Rename(tmp, c.tokenFile)
-	log.Printf("[kimi] refresh_token rotated & persisted (%s)", c.tokenFile)
 }
 
 // setHeaders 设置通用头。token 非空时作 Authorization: Bearer。

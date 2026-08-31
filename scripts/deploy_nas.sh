@@ -43,16 +43,23 @@ tar -czf - \
   --exclude='*.test' --exclude='*.out' --exclude='*.prof' --exclude='*.pprof' \
   . | $SSH "
 set -e
-mkdir -p $DEPLOY_DIR/tokens $DEPLOY_DIR/logs
+mkdir -p $DEPLOY_DIR/tokens $DEPLOY_DIR/logs $DEPLOY_DIR/tokens-state
 cd $DEPLOY_DIR
 # 清空旧源码(保留 tokens/ logs/)
-find . -mindepth 1 -maxdepth 1 ! -name tokens ! -name logs -exec rm -rf {} +
+find . -mindepth 1 -maxdepth 1 ! -name tokens ! -name logs ! -name tokens-state -exec rm -rf {} +
 # 首次或 token 缺失:从同步区拷入独立副本
 if [ ! -s tokens/session_tokens.txt ]; then
   echo '  tokens 缺失,从 $TOKEN_SRC 拷入'
   cp $TOKEN_SRC/*.txt tokens/ 2>/dev/null || true
   chmod 644 tokens/*.txt 2>/dev/null || true
 fi
+# A2:GLM/Kimi 池迁入 tokens-state(rw,轮换回写);已有则保留(内含轮换后的新票)
+for f in glm_tokens.txt kimi_tokens.txt; do
+  if [ ! -s "tokens-state/$f" ] && [ -s "tokens/$f" ]; then
+    cp "tokens/$f" "tokens-state/$f"
+    echo "  已播种 tokens-state/$f"
+  fi
+done
 # 解压新源码
 tar -xzf -
 # compose 文件就位:仓库内 docker-compose.nas.yml → docker-compose.yml

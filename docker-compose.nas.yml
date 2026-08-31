@@ -32,13 +32,15 @@ services:
       - DEEPSEEK_PROXY=${DEEPSEEK_PROXY:-}
       # 智谱清言(chatglm.cn)网页逆向通道。token 放 tokens/glm_tokens.txt(每行一个
       # chatglm_refresh_token),只读挂载;仅当文件非空时 Glm provider 注册。
-      - GLM_WEB_TOKENS=/work/.runtime/tokens/glm_tokens.txt
+      # A2:GLM/Kimi 池文件放 tokens-state(rw)——轮换回写必须可写;
+      # tokens/ 保持只读保护其余凭证。详见 deploy_nas.sh 与 MEMORY.md。
+      - GLM_WEB_TOKENS=/work/.runtime/tokens-state/glm_tokens.txt
       - GLM_MODELS=${GLM_MODELS:-}
       - GLM_WEB_BASE=${GLM_WEB_BASE:-https://chatglm.cn}
       - GLM_PROXY=${GLM_PROXY:-}
       # Kimi(www.kimi.com)网页逆向通道。token 放 tokens/kimi_tokens.txt(每行一个
       # refresh_token,从 localStorage 提取),只读挂载;仅当文件非空时 Kimi provider 注册。
-      - KIMI_WEB_TOKENS=/work/.runtime/tokens/kimi_tokens.txt
+      - KIMI_WEB_TOKENS=/work/.runtime/tokens-state/kimi_tokens.txt
       - KIMI_MODELS=${KIMI_MODELS:-}
       - KIMI_WEB_BASE=${KIMI_WEB_BASE:-https://www.kimi.com}
       - KIMI_PROXY=${KIMI_PROXY:-}
@@ -95,4 +97,5 @@ services:
       # - YUANBAO_PROXY=${YUANBAO_PROXY:-}
     volumes:
       - /volume2/docker/aurora/tokens:/work/.runtime/tokens:ro   # token 只读,命中 tokenFilePath 隔离目录
+      - /volume2/docker/aurora/tokens-state:/work/.runtime/tokens-state  # A2:GLM/Kimi 轮换回写卷(rw)
       - /volume2/docker/aurora/logs:/work/.runtime/logs          # 调试日志(可选)
