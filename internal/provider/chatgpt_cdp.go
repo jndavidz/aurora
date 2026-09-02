@@ -113,10 +113,11 @@ func (d *ChatgptCDP) runCodingWithRetry(model, prompt string, tools []official.T
 		if len(calls) > 0 {
 			return text, calls, nil
 		}
-		if text != "" && !isRefusalText(text) {
-			return text, nil, nil
-		}
-		// 拒绝话术或空回复 → 重试
+		// 带 tools 的 agent 请求,响应无 tool_calls 即视为失败 → 重试。
+		// 注意:不能按拒绝话术特征判定 —— 模型每次拒绝的措辞都在变(实测"没有
+		// 可用的 bash/read 工具,且实际工具调用失败"就绕过了特征表,导致重试被
+		// 跳过),结构性判定才追得上。代价:真无需工具的回答会多花 2 轮(~50s),
+		// 功能正确性不受影响;agent 场景可靠性优先。
 	}
 	if lastErr != nil {
 		return "", nil, lastErr
