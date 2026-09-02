@@ -929,17 +929,35 @@ async function execute(adapter, prompt, onDelta) {
 const CHATGPT_ASSISTANT_SEL = '[data-message-author-role="assistant"]';
 const CHATGPT_COMPOSER_SEL = 'textarea#prompt-textarea, [contenteditable="true"], div[role="textbox"]';
 
-async function executeChatgptUI(entry, prompt, onDelta) {
-  // 用独立 CDP 连接执行 UI 操作:共享连接上的事件风暴/监听器会干扰 Input
-  // 事件时序(同 gemini UI 模式的实测教训)
+// chatgpt 页面 CDP 连接缓存:省去每请求的 /json 枚举 + WebSocket 握手(~100-350ms)。
+// 仍是"专用独立连接"(每请求串行独占使用,非共享 entry.c),不违背事件时序隔离原则;
+// 每次取用前 ping + 校验 URL 仍在 chatgpt.com,失效/被导航走则重建。
+let chatgptConn = null;
+async function getChatgptConn() {
+  if (chatgptConn) {
+    try {
+      const u = await chatgptConn.ws.cmd("Runtime.evaluate", { expression: "location.href", returnByValue: true });
+      const href = (u && u.result && u.result.result && u.result.result.value) || "";
+      if (typeof href === "string" && href.includes("chatgpt.com")) return chatgptConn.ws;
+    } catch {}
+    try { chatgptConn.ws.close(); } catch {}
+    chatgptConn = null;
+  }
   const page = await findTarget(chatgpt.pageMatch);
   if (!page) {
     const e = new Error("chatgpt 页面未打开(请先在 CDP 浏览器登录 chatgpt.com)");
     e.code = "no_browser";
     throw e;
   }
-  const c = await cdp(page.webSocketDebuggerUrl);
-  await c.cmd("Network.enable").catch(() => {});
+  const ws = await cdp(page.webSocketDebuggerUrl);
+  chatgptConn = { ws };
+  return ws;
+}
+
+async function executeChatgptUI(entry, prompt, onDelta) {
+  // 用专用 CDP 连接执行 UI 操作:共享连接上的事件风暴/监听器会干扰 Input
+  // 事件时序(同 gemini UI 模式的实测教训)。连接缓存复用(见 getChatgptConn)。
+  const c = await getChatgptConn();
 
   // 首轮直接在当前对话里发;若静默失败(旧对话上下文污染/限频导致服务端不回复),
   // 自愈:导航开新对话重发一次(实测新对话稳定,旧对话偶发静默失败)。
@@ -990,6 +1008,7 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
   await c.cmd("Page.bringToFront").catch(() => {});
 
   // 1) 等 composer 可用并拿到坐标(回答生成期间不可用,轮询等待)
+  const t0 = Date.now();
   let pos = null;
   for (let i = 0; i < 90; i++) {
     try {
@@ -1007,25 +1026,34 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
     e.code = "upstream_error";
     throw e;
   }
+  const tComposer = Date.now();
+  if (tComposer - t0 > 500) console.log("[chatgpt-ui] composer wait", (tComposer - t0) + "ms");
 
   // 2) 清空残留 → 点击聚焦 → CDP insertText(真实输入,React 必响应)
+  //    sleep 经多轮实测压缩(400/400/500→250/300/350→120/100/轮询化):每步都有
+  //    后续校验兜底(输入验证、按钮探测),过短只多花一轮重试,不影响正确性。
   await c.cmd("Runtime.evaluate", {
     expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); if (!el) return 'NO'; el.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); return 'ok'; })()",
     returnByValue: true,
   });
-  await sleep(250);
+  await sleep(120);
   await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
   await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
-  await sleep(300);
+  await sleep(100);
   await c.cmd("Input.insertText", { text: prompt });
-  await sleep(350);
 
-  // 3) 验证输入生效(React 状态未同步则 composer 仍为空)
-  const chk = await c.cmd("Runtime.evaluate", {
-    expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); return (el && (el.innerText || el.value)) || ''; })()",
-    returnByValue: true,
-  });
-  const got = (chk.result && chk.result.result && chk.result.result.value) || "";
+  // 3) 验证输入生效:轮询式(通常首查即中 ~10ms,替代原固定 350ms sleep;React 未同步
+  //    时自动重试,比固定等待更稳)
+  let got = "";
+  for (let i = 0; i < 6; i++) {
+    await sleep(i === 0 ? 60 : 90);
+    const chk = await c.cmd("Runtime.evaluate", {
+      expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); return (el && (el.innerText || el.value)) || ''; })()",
+      returnByValue: true,
+    });
+    got = (chk.result && chk.result.result && chk.result.result.value) || "";
+    if (got.trim()) break;
+  }
   if (!got.trim()) {
     const e = new Error("ChatGPT 输入未生效(composer 为空)");
     e.code = "upstream_error";
@@ -1047,7 +1075,7 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
       await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: p.x, y: p.y, button: "left", clickCount: 1 });
       await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: p.x, y: p.y, button: "left", clickCount: 1 });
       clicked = true;
-      console.log("[chatgpt-ui] send-button clicked at", Math.round(p.x), Math.round(p.y));
+      console.log("[chatgpt-ui] send-button clicked at", Math.round(p.x), Math.round(p.y), "| send phase", (Date.now() - t0) + "ms");
       break;
     }
     await sleep(300);
