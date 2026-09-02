@@ -69,6 +69,10 @@ services:
       # (纯 cookie 认证,无会话令牌;见 docs/CLAUDE.md)。
       - CLAUDE_CDP_URL=http://10.10.10.3:8799,http://10.10.10.6:8799,http://10.20.0.2:8799
       # - CLAUDE_MODELS=${CLAUDE_MODELS:-}
+      # ChatGPT(chatgpt.com)真浏览器执行通道(CDP 桥转发)。背景:ChatGPT 已改浏览器
+      # 会话绑定鉴权,服务端 token 被 403,故对话改走桥的 chatgpt adapter(页内 fetch
+      # /backend-api/conversation 自动带 cookie)。桥地址复用 GEMINI_CDP_URL。
+      - CHATGPT_CDP_URL=http://10.10.10.3:8799,http://10.10.10.6:8799,http://10.20.0.2:8799
       # 混元(腾讯元宝):已停用(2026-08-22,连续 3 个账号被风控冻结 —— 腾讯对
       # 元宝的自动化检测极严;桥的"每次新建会话"请求模式仍被识别,不再接入)。
       # MiniMax(agent.minimaxi.com)网页逆向通道(直连,非桥)。token 放

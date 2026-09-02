@@ -38,6 +38,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.ClaudeCDPURL != "" {
 		registry.Register(provider.NewClaudeCDP(cfg))
 	}
+	if cfg.ChatgptCDPURL != "" {
+		registry.Register(provider.NewChatgptCDP(cfg))
+	}
 	if cfg.HunyuanCDPURL != "" {
 		registry.Register(provider.NewHunyuanCDP(cfg))
 	}

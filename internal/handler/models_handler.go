@@ -40,15 +40,23 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		Data   []ResData `json:"data"`
 	}
 
-	// ChatGPT 网页逆向实际可用模型(2026-08-21,免费账号视角)。
+	// ChatGPT 网页逆向实际可用模型。
 	// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
-	// OpenAI 已把 Free/Go 默认模型切换为 GPT-5.6 Luna(slug=gpt-5-6,文字聊天无限量)。
-	// gpt-coding 是 -coding 变体(强制工具调用),标注 function_call 能力。
+	// 来源:2026-09-02 经 NUC Chrome(CDP 9222)已登录 chatgpt.com 标签页
+	//       直接调用 /backend-api/models 实测,保留 5.6 家族 + Auto:
+	//         slug=gpt-5-6       title=GPT-5.6 Luna        ← 当前默认最强模型
+	//         slug=gpt-5-6-mini  title=GPT-5.6 Luna (Mini) ← 同 GPT-5.6 Luna 家族
+	//         slug=auto          title=Auto
+	// (GPT-5.5 / 5.3 Mini 等经用户确认不在映射内,故不暴露。)
+	// gpt-coding 是 -coding 别名(非真实 slug):请求时改写为 gpt-5-6 并强制工具调用,
+	//         标注 function_call 能力;其本身不出现在 ChatGPT 网页模型选择器里,故单列于后。
 	models := []string{
 		"auto",
 		"gpt-5-6",
-		"gpt-coding",
+		"gpt-5-6-mini",
 	}
+	// -coding 变体别名(强制工具调用),单独追加,不计入网页选择器 slug。
+	codingAlias := "gpt-coding"
 
 	var resModelList []ResData
 	for _, model := range models {
@@ -62,6 +70,17 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 			entry.Capabilities = []string{string(provider.CapFunctionCall)}
 		}
 		resModelList = append(resModelList, entry)
+	}
+
+	// 追加 -coding 别名(gpt-coding → gpt-5-6 透传上游,强制工具调用)。
+	if _, coding := normalizeCodingModel(codingAlias); coding {
+		resModelList = append(resModelList, ResData{
+			ID:           codingAlias,
+			Object:       "model",
+			Created:      1685474247,
+			OwnedBy:      "openai",
+			Capabilities: []string{string(provider.CapFunctionCall)},
+		})
 	}
 
 	// 聚合 provider 模型(DeepSeek 等),并附能力标注。
@@ -81,9 +100,24 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		}
 	}
 
+	// 去重:同 ID 保留带能力标注的更完整条目(ChatgptCDP 经 registry 聚合后
+	// 可能与手写列表重复出现 gpt-5-6 / gpt-5-6-mini)。
+	deduped := make([]ResData, 0, len(resModelList))
+	seenIdx := make(map[string]int)
+	for _, mdl := range resModelList {
+		if i, ok := seenIdx[mdl.ID]; ok {
+			if len(mdl.Capabilities) > 0 && len(deduped[i].Capabilities) == 0 {
+				deduped[i] = mdl
+			}
+			continue
+		}
+		seenIdx[mdl.ID] = len(deduped)
+		deduped = append(deduped, mdl)
+	}
+
 	c.JSON(200, JSONData{
 		Object: "list",
-		Data:   resModelList,
+		Data:   deduped,
 	})
 }
 

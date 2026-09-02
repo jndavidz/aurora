@@ -83,6 +83,14 @@ type Config struct {
 	HunyuanCDPKey string
 	HunyuanModels []string
 
+	// ChatGPT(chatgpt.com)CDP 桥通道。背景:ChatGPT 已改为浏览器会话绑定鉴权,
+	// 服务端无法复用 token,aurora 直连 backend-api 的 token 文件会被 403。
+	// 故 ChatGPT 对话改走真实浏览器页内 fetch(bridge.mjs 的 chatgpt adapter),
+	// 与 Gemini/Claude 同机制。桥地址默认复用 GEMINI_CDP_URL;CHATGPT_CDP_URL
+	// 可单独指定。仅当 URL 非空时注册(用 ChatgptCDP)。
+	ChatgptCDPURL string
+	ChatgptCDPKey string
+
 	// MiniMax(agent.minimaxi.com)网页逆向通道配置(直连,协议见 docs/MINIMAX.md)。
 	MinimaxWebTokens string // token 池文件路径(每行一个 JWT,localStorage._token)
 	MinimaxModels    []string
@@ -164,6 +172,9 @@ func Load() Config {
 		HunyuanCDPURL: os.Getenv("HUNYUAN_CDP_URL"),
 		HunyuanCDPKey: os.Getenv("HUNYUAN_CDP_KEY"),
 		HunyuanModels: splitCSV(os.Getenv("HUNYUAN_MODELS")),
+
+		ChatgptCDPURL: os.Getenv("CHATGPT_CDP_URL"),
+		ChatgptCDPKey: os.Getenv("CHATGPT_CDP_KEY"),
 
 		MinimaxWebTokens: os.Getenv("MINIMAX_WEB_TOKENS"),
 		MinimaxModels:    splitCSV(os.Getenv("MINIMAX_MODELS")),

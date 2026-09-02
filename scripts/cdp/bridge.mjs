@@ -744,8 +744,52 @@ async function executeHunyuan(entry, prompt, onDelta) {
   return parser;
 }
 
+// ─── OpenAI ChatGPT 适配器(2026-09-02)──────────────────────────────
+// 背景:ChatGPT 已改为「浏览器会话绑定」鉴权(Cloudflare + oai-did 设备指纹 +
+// sentinel 反自动化 header),不再提供服务端可复用的 session/access token ——
+// aurora 直连 backend-api 用的 token 文件会被 403;页内手造 fetch 缺
+// OpenAI-Sentinel-* 等实时 header 也被 403 "Unusual activity"(2026-09-02 抓包实测)。
+// 唯一稳的通道是 UI 驱动:让已登录页面自己发消息(页面 JS 实时生成全部 header),
+// 桥注入文本 + 轮询 DOM 读回复(与 gemini UI 模式同思路)。
+
+const chatgpt = {
+  name: "chatgpt",
+  // 特判 gpt-5-6 / gpt-5-6-mini(aurora 把这两个模型原样转给桥)
+  prefix: "gpt-",
+  pageMatch: "chatgpt.com",
+  homeUrl: "https://chatgpt.com/",
+  // 无 capture 钩子(UI 驱动模式:页面自己完成反自动化握手,无需令牌模板)
+  capture: null,
+  // UI 驱动模式无需模板文件:只要页面登录即可
+  ready: () => true,
+
+  models: [
+    { id: "gpt-5-6", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning", "vision"] },
+    { id: "gpt-5-6-mini", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning"] },
+  ],
+
+  flatten(messages) {
+    const parts = [];
+    for (const m of messages || []) {
+      let content = m.content;
+      if (Array.isArray(content)) {
+        content = content.map((c) => (c && c.text ? c.text : "")).filter(Boolean).join("\n");
+      }
+      if (typeof content !== "string" || !content.trim()) continue;
+      if (m.role === "assistant") parts.push("ChatGPT：" + content);
+      else if (m.role === "system") parts.push("系统：" + content);
+      else parts.push("用户：" + content);
+    }
+    return parts.join("\n");
+  },
+
+  // 设定期望模型(由 handleChat 在分发时按请求 model 设置;UI 模式下仅作记录,
+  // 页面实际用其当前选中的模型)
+  setModel(m) { this._model = m; },
+};
+
 // 适配器注册表:model 前缀 → 适配器(加新模型只需在这里登记)
-const adapters = [gemini, claude, hunyuan];
+const adapters = [gemini, claude, hunyuan, chatgpt];
 
 function resolveAdapter(model) {
   return adapters.find((a) => model.startsWith(a.prefix)) || null;
@@ -796,6 +840,12 @@ async function execute(adapter, prompt, onDelta) {
   if (adapter.name === "hunyuan") {
     // 元宝:页内 fetch 重放(create 会话 + chat),认证头会话级复用
     return await executeHunyuan(entry, prompt, onDelta);
+  }
+  if (adapter.name === "chatgpt") {
+    // ChatGPT UI 驱动模式:页面自己完成 sentinel/反自动化握手(实时 header),
+    // 桥只注入文本 + 轮询 DOM 读回复(页内手造 fetch 缺 sentinel header 必 403)。
+    // 自愈:旧对话可能静默失败(上下文污染/限频),一次重试时先开新对话。
+    return await executeChatgptUI(entry, prompt, onDelta);
   }
   if (!adapter.ready()) {
     const e = new Error(adapter.name + " 会话模板缺失(先跑 capture-" + adapter.name + ".mjs 抓一次)");
@@ -865,6 +915,186 @@ async function execute(adapter, prompt, onDelta) {
     throw e;
   }
   return parser;
+}
+
+// ─── ChatGPT UI 驱动模式(2026-09-02)───────────────────────────────
+// 背景:新版 ChatGPT 的 /backend-api/f/conversation 请求需带一整套实时生成的
+// 反自动化 header(Authorization JWT + OpenAI-Sentinel-Chat-Requirements-Token +
+// OpenAI-Sentinel-Turnstile-Token + OpenAI-Sentinel-Proof-Token + x-conduit-token
+// 等,见 2026-09-02 抓包),页内手造 fetch 缺这些 header 必被 403
+// "Unusual activity"。唯一稳的通道是让页面自己发消息(UI 驱动),页面 JS 实时
+// 生成全部 header;桥只负责注入文本 + 轮询 DOM 读回复(实测可行)。
+// 代价:每次请求在页面产生一条可见对话;会话上下文由页面自行维护(多轮无需拍平,
+// prompt 只发最后一条用户消息,同 gemini UI 模式)。
+const CHATGPT_ASSISTANT_SEL = '[data-message-author-role="assistant"]';
+const CHATGPT_COMPOSER_SEL = 'textarea#prompt-textarea, [contenteditable="true"], div[role="textbox"]';
+
+async function executeChatgptUI(entry, prompt, onDelta) {
+  // 用独立 CDP 连接执行 UI 操作:共享连接上的事件风暴/监听器会干扰 Input
+  // 事件时序(同 gemini UI 模式的实测教训)
+  const page = await findTarget(chatgpt.pageMatch);
+  if (!page) {
+    const e = new Error("chatgpt 页面未打开(请先在 CDP 浏览器登录 chatgpt.com)");
+    e.code = "no_browser";
+    throw e;
+  }
+  const c = await cdp(page.webSocketDebuggerUrl);
+  await c.cmd("Network.enable").catch(() => {});
+
+  // 首轮直接在当前对话里发;若静默失败(旧对话上下文污染/限频导致服务端不回复),
+  // 自愈:导航开新对话重发一次(实测新对话稳定,旧对话偶发静默失败)。
+  let text = await chatgptSendOnce(c, prompt, onDelta);
+  if (text === null) {
+    console.log("[chatgpt-ui] silent failure, self-heal: open new conversation");
+    try {
+      await c.cmd("Page.navigate", { url: chatgpt.homeUrl });
+      await sleep(9000); // 等新对话加载 + composer 就绪
+    } catch (e) { console.log("[chatgpt-ui] navigate failed:", e.message); }
+    text = await chatgptSendOnce(c, prompt, onDelta);
+  }
+  if (text === null || !text.trim()) {
+    const e = new Error("ChatGPT 无回复(可能被限频/风控,请检查页面 UI 状态)");
+    e.code = "empty_reply";
+    throw e;
+  }
+  const self = { done: true, text };
+  return self;
+}
+
+// chatgptSendOnce:在已就绪的 page 连接上注入 prompt + 轮询读回复。
+// 返回文本(成功)或 null(消息已发出但服务端静默无回复 → 交给外层自愈)。
+async function chatgptSendOnce(c, prompt, onDelta) {
+  // 0) 页面带前台(失焦时 Input 事件不进编辑器,gemini 同坑)
+  await c.cmd("Page.bringToFront").catch(() => {});
+
+  // 1) 等 composer 可用并拿到坐标(回答生成期间不可用,轮询等待)
+  let pos = null;
+  for (let i = 0; i < 90; i++) {
+    try {
+      const r = await c.cmd("Runtime.evaluate", {
+        expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); if (!el) return 'NONE'; var b = el.getBoundingClientRect(); if (b.width === 0 || b.height === 0) return 'NONE'; return JSON.stringify({ x: b.x + b.width / 2, y: b.y + b.height / 2 }); })()",
+        returnByValue: true,
+      });
+      const v = r.result && r.result.result && r.result.result.value;
+      if (v && v !== "NONE") { pos = JSON.parse(v); break; }
+    } catch {}
+    await sleep(1000);
+  }
+  if (!pos) {
+    const e = new Error("ChatGPT composer 不可用(请检查页面登录状态)");
+    e.code = "upstream_error";
+    throw e;
+  }
+
+  // 2) 清空残留 → 点击聚焦 → CDP insertText(真实输入,React 必响应)
+  await c.cmd("Runtime.evaluate", {
+    expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); if (!el) return 'NO'; el.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); return 'ok'; })()",
+    returnByValue: true,
+  });
+  await sleep(400);
+  await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+  await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+  await sleep(400);
+  await c.cmd("Input.insertText", { text: prompt });
+  await sleep(500);
+
+  // 3) 验证输入生效(React 状态未同步则 composer 仍为空)
+  const chk = await c.cmd("Runtime.evaluate", {
+    expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); return (el && (el.innerText || el.value)) || ''; })()",
+    returnByValue: true,
+  });
+  const got = (chk.result && chk.result.result && chk.result.result.value) || "";
+  if (!got.trim()) {
+    const e = new Error("ChatGPT 输入未生效(composer 为空)");
+    e.code = "upstream_error";
+    throw e;
+  }
+
+  // 4) 发送:优先点击发送按钮(实测 Enter 在新版 ChatGPT 不触发发送 —— 文本已入
+  //    React 状态、send-button 已出现,但 keydown Enter 被当作换行);按钮缺失时
+  //    fallback CDP 真实 Enter(isTrusted=true;keyDown 必须带 text:'\r')
+  let clicked = false;
+  for (let i = 0; i < 10; i++) {
+    const br = await c.cmd("Runtime.evaluate", {
+      expression: "(function(){ var b = document.querySelector('button[data-testid=\"send-button\"]'); if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return 'NONE'; var r = b.getBoundingClientRect(); if (r.width === 0) return 'NONE'; return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 }); })()",
+      returnByValue: true,
+    });
+    const bv = br.result && br.result.result && br.result.result.value;
+    if (bv && bv !== "NONE") {
+      const p = JSON.parse(bv);
+      await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: p.x, y: p.y, button: "left", clickCount: 1 });
+      await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: p.x, y: p.y, button: "left", clickCount: 1 });
+      clicked = true;
+      console.log("[chatgpt-ui] send-button clicked at", Math.round(p.x), Math.round(p.y));
+      break;
+    }
+    await sleep(500);
+  }
+  if (!clicked) {
+    await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
+    await sleep(100);
+    await c.cmd("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    console.log("[chatgpt-ui] send-button not found, Enter fallback");
+  }
+
+  // 5) 轮询 DOM 读本次回复。注意:ChatGPT 的消息 DOM 会**复用/替换节点**而非追加
+  //    (实测 count 恒定但 last 节点内容已换成新消息),所以不能按消息数区分新旧。
+  //    判定逻辑(经 2026-09-02 实测修正):发送前快照的 lastA 常为 ""(新回复前占位节点被
+  //    清空),用 "cur !== 快照" 永远成立 → stable 永不增长 → 轮询跑满 150s。故改为:
+  //    cur 比已知 text 更长则更新;cur 与 text 相等(不再增长)且已有内容 → 稳定即完成。
+  const snap = await c.cmd("Runtime.evaluate", {
+    expression: "(function(){ var u = document.querySelectorAll('[data-message-author-role=\"user\"]'); return JSON.stringify({ lastU: u.length ? (u[u.length - 1].innerText || '') : '' }); })()",
+    returnByValue: true,
+  });
+  const promptHead = prompt.slice(0, 30);
+
+  let text = "";
+  let stable = 0;
+  let started = false;
+  let silentSecs = 0; // 消息已发出但 assistant 持续为空 → 静默失败计时
+  for (let i = 0; i < 150; i++) { // 最长 150s
+    await sleep(1000);
+    const r = await c.cmd("Runtime.evaluate", {
+      expression: "(function(){" +
+        "var a = document.querySelectorAll('" + CHATGPT_ASSISTANT_SEL + "');" +
+        "var u = document.querySelectorAll('[data-message-author-role=\"user\"]');" +
+        "var lastU = u.length ? (u[u.length - 1].innerText || '') : '';" +
+        "var lastA = a.length ? (a[a.length - 1].innerText || '') : '';" +
+        "return JSON.stringify({ lastU: lastU, lastA: lastA });" +
+        "})()",
+      returnByValue: true,
+    });
+    const v = r && r.result && r.result.result && r.result.result.value;
+    if (!v) continue;
+    let j;
+    try { j = JSON.parse(v); } catch { continue; }
+    if (i === 0) console.log("[chatgpt-ui] polling started, promptHead=" + JSON.stringify(promptHead));
+    if (i > 0 && i % 30 === 0 && !text) console.log("[chatgpt-ui] still waiting, sec=" + i, "silent=" + silentSecs);
+    // 新一轮已开始:最后一条 user 消息是本次 prompt
+    if (!started && j.lastU && j.lastU.indexOf(promptHead) !== -1) started = true;
+    if (!started) continue;
+    const cur = j.lastA || "";
+    if (cur && cur.length > text.length) {
+      // 文本在增长(流式累积)→ 更新并下发增量
+      if (onDelta) onDelta(cur.slice(text.length));
+      text = cur;
+      stable = 0;
+      silentSecs = 0;
+    } else if (text && cur === text) {
+      // 文本已稳定(不再增长)且非空 → 视为完成(ChatGPT 回复后页面常残留 Think spinner,
+      // 不能依赖 spin===false,否则会硬等到 150s 上限)
+      stable++;
+      if (stable >= 2) break;
+    } else if (!text) {
+      // 消息已发出但 assistant 始终为空:累计静默秒数。阈值给足冷启动/新会话首条
+      // 的握手延迟(实测 gpt-5-6-mini 新会话首条可能 30s+ 才出字),设为 70s。
+      // 真·静默失败(旧对话损坏)时由外层自愈开新对话重试。
+      silentSecs++;
+      if (silentSecs >= 70) { console.log("[chatgpt-ui] silent no-reply detected, aborting this attempt"); return null; }
+    }
+  }
+  if (!text || !text.trim()) return null;
+  return text;
 }
 
 // ─── Gemini UI 注入模式(2026-08-21)───────────────────────────────
@@ -1071,8 +1301,12 @@ async function handleChat(res, body) {
     sendJSON(res, 400, { error: { message: "unknown model: " + model, type: "invalid_request_error" } });
     return;
   }
-  // Gemini UI 模式:页面自维护会话,只发最后一条用户消息(不能拍平历史,否则与页面上下文重复)
-  const prompt = adapter.name === "gemini"
+  // ChatGPT 浏览器通道:记录本次请求的模型(gpt-5-6 / gpt-5-6-mini),executeChatgpt 用它覆盖模板 model
+  if (adapter.name === "chatgpt") adapter.setModel(model);
+  // 回显给调用方的 model 名要去掉桥内部用的 -chat 后缀(aurora 侧加的标识)
+  const outModel = adapter.name === "chatgpt" ? model.replace(/-chat$/, "") : model;
+  // Gemini / ChatGPT UI 模式:页面自维护会话,只发最后一条用户消息(不能拍平历史,否则与页面上下文重复)
+  const prompt = (adapter.name === "gemini" || adapter.name === "chatgpt")
     ? (() => {
         const last = [...(body.messages || [])].reverse().find((m) => m.role === "user");
         const c = last && last.content;
@@ -1091,7 +1325,7 @@ async function handleChat(res, body) {
     try {
       const parser = await enqueue(() => execute(adapter, prompt, null));
       sendJSON(res, 200, {
-        id, object: "chat.completion", created, model,
+        id, object: "chat.completion", created, model: outModel,
         choices: [{ index: 0, message: { role: "assistant", content: parser.text }, finish_reason: parser.done ? "stop" : "length" }],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
@@ -1114,12 +1348,12 @@ async function handleChat(res, body) {
     await enqueue(() =>
       execute(adapter, prompt, (delta) => {
         sse({
-          id, object: "chat.completion.chunk", created, model,
+          id, object: "chat.completion.chunk", created, model: outModel,
           choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
         });
       })
     );
-    sse({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+    sse({ id, object: "chat.completion.chunk", created, model: outModel, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
     res.write("data: [DONE]\n\n");
   } catch (e) {
     sse({ error: { message: e.message, type: e.code || "upstream_error" } });
@@ -1149,6 +1383,11 @@ const server = http.createServer(async (req, res) => {
       tokens: { orgId: !!claudeState.orgId, template: !!claudeState.template, updatedAt: claudeState.updatedAt },
       limits: claudeState.limits,
       connected: !!conns.get("claude"),
+    };
+    providers.chatgpt = {
+      mode: "ui-driven (DOM poll)",
+      model: chatgpt._model || null,
+      connected: !!conns.get("chatgpt"),
     };
     sendJSON(res, 200, { ok: true, providers });
     return;
@@ -1188,6 +1427,7 @@ server.listen(PORT, HOST, async () => {
   console.log("[bridge] tokens:", hasTokens ? "loaded" : "MISSING (run capture-streamgenerate.mjs once)");
   console.log("[bridge] claude:", hasClaude ? "loaded" : "MISSING (run capture-claude.mjs once)");
   console.log("[bridge] hunyuan:", hasHunyuan ? "loaded" : "MISSING (run capture-yuanbao.mjs once)");
+  console.log("[bridge] chatgpt: ui-driven mode (needs logged-in chatgpt.com tab; no template needed)");
   console.log("[bridge] idle auto-stop:", IDLE_TIMEOUT_MS > 0 ? Math.round(IDLE_TIMEOUT_MS / 60000) + "min" : "disabled");
   console.log("[bridge] rate limit:", MIN_INTERVAL_MS > 0 ? (MIN_INTERVAL_MS + "ms + jitter 0-" + JITTER_MS + "ms") : "disabled (chat free; coding limited by aurora)");
   const e1 = await ensureConn(gemini).catch(() => null);

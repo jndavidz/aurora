@@ -98,7 +98,7 @@ cd aurora
 docker-compose up -d
 ```
 
-> NAS 部署：使用仓库内 `docker-compose.nas.yml`（宿主机端口 `65432` → 容器 `8080`），配合一键脚本 `scripts/deploy_nas.sh`（打包源码 → SSH → 本地构建镜像 → 探活）。
+> NAS 部署：使用仓库内 `docker-compose.nas.yml`（宿主机端口 `65432` → 容器 `8080`），配合一键脚本 `scripts/deploy_nas.sh`（**WSL 本地 `docker build` 镜像 → `docker save` 推送 NAS `load` → NAS `compose up` 复用镜像**）。详见 `docs/NAS_DEPLOYMENT.md`。
 
 ## 配置
 

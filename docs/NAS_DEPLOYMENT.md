@@ -16,7 +16,7 @@
 | 内存 | ✅ 8G 充裕(实测 PC 上单个服务 RSS 约 40–80MB;docker 容器层约 200MB) |
 | 存储 | ✅ 无数据库;token 文件只读即可,账号池纯内存(JSONStore 未接线,已核实) |
 | 网络 | ✅ 出网走家庭 AX6000 homeproxy 透明代理;构建走 goproxy.cn,与 PC 同一条路 |
-| 推荐方式 | **NAS 本地构建 local-toolfix 镜像(Docker Compose)为主**(保留全部工具调用修复);自编译二进制为备选 |
+| 推荐方式 | **WSL(PC)本地构建 local-toolfix 镜像 → `docker save` 推送 NAS `load`,NAS 只 `compose up` 复用镜像**(保留全部工具调用修复,且不占 NAS 弱 CPU);自编译二进制为备选 |
 
 ---
 
@@ -51,9 +51,11 @@
 
 ---
 
-## 三、部署方式 A:NAS 本地构建 local-toolfix 镜像(推荐)
+## 三、部署方式 A:WSL(PC)本地构建 local-toolfix 镜像 → 推 NAS(推荐)
 
-> 在 NAS 上用 local-toolfix 分支源码 `docker build` 出镜像,既保留全部工具调用修复,又享容器便利(自启/隔离/日志)。参考 kugou-api 的 `nas-build-guide.md` 同一套路。
+> **[2026-09-02 勘误]** 原文档写"NAS 本地构建",实测改为 **WSL 侧 `docker build` 出镜像,再 `docker save | ssh docker load` 推到 NAS,NAS 侧只 `docker compose up -d`(不带 `--build`)复用已 load 的 `aurora:local-toolfix`**。理由:NAS 为 Celeron N3060 双核,构建慢且 BuildKit 偶发卡顿;WSL 侧(4 核/8G)构建缓存命中秒级,且本机 docker 29.7.2 + go 1.27 工具链齐备(`~/go-sdk/go`,`DOCKER_CONFIG` 指向用户可写目录规避 `~/.docker` 权限坑)。镜像同架构 amd64,save/load 无损。
+>
+> 在 WSL 用 local-toolfix 分支源码 `docker build` 出镜像,既保留全部工具调用修复,又享容器便利(自启/隔离/日志)。参考 kugou-api 的 `nas-build-guide.md` 同一套路。
 >
 > **为何不用官方镜像**:`ghcr.io/aurora-develop/aurora:latest` 是 main 分支构建,**不含 local-toolfix 的工具调用修复**,且 main 无 `tokenFilePath` 函数、不认 `.runtime/tokens/` 目录约定。本地构建 local-toolfix 一次解决这两点。
 
@@ -144,20 +146,21 @@ services:
 
 ### 3.6 构建与更新流程
 
-PC 端一键部署(参考 kugou `deploy.sh`,脚本见仓库 `scripts/deploy_nas.sh`):
+PC(WSL)端一键部署(脚本见仓库 `scripts/deploy_nas.sh`):
 
 ```bash
 cd /d/repos/aurora && ./scripts/deploy_nas.sh
 ```
 
-deploy_nas.sh 内部四步:
-1. tar 打包源码(排除 `.git/.zcode/.env/*.log/.runtime/bin/dist`);
-2. ssh 到 NAS → `rm -rf` 清空 `/volume2/docker/aurora/`(保留 tokens/logs)→ 解压;
-3. `cd /volume2/docker/aurora && docker compose up -d --build`(BuildKit 缓存命中则秒级);
-4. `curl /v1/models` 探活(带 Authorization),确认账号池非空、token 命中。
+deploy_nas.sh 内部五步:
+1. **WSL 本地 `docker build`** 出 `aurora:local-toolfix` 镜像(BuildKit 缓存命中则秒级;用独立 `DOCKER_CONFIG` 规避 `~/.docker` 权限坑);
+2. `docker save aurora:local-toolfix | ssh NAS docker load` 推送镜像到 NAS;
+3. tar 仅传 `docker-compose.nas.yml` 到 NAS,清空旧部署目录(保留 tokens/logs/tokens-state)并放好 compose;
+4. NAS 侧 `docker compose up -d`(**不带 `--build`**,直接复用已 load 的本地镜像);
+5. `curl /v1/models` 探活(带 Authorization),确认账号池非空、token 命中。
 
-> 正常更新:go.sum 不变 → 缓存命中秒级;依赖变更 → 2-3 分钟(goproxy.cn)。
-> 手动(无脚本):`rsync` 或 File Station 把源码传到 `/volume2/docker/aurora/`,再 `docker compose up -d --build`。
+> 正常更新:go.sum 不变 → WSL 构建缓存命中秒级,推镜像+重启约 10–20s;依赖变更 → 2-3 分钟(goproxy.cn)。
+> 手动(无脚本):WSL `docker build -t aurora:local-toolfix .` → `docker save aurora:local-toolfix | ssh NAS docker load` → NAS `docker compose up -d`。
 
 ### 3.7 验证
 
@@ -170,7 +173,7 @@ curl -s -H "Authorization: Bearer david" http://10.10.10.2:8080/v1/models
 
 1. **compose 缺 `build:` 段**(最隐蔽):`--build` 不报错、容器照常 Running,但镜像从不重建。改动后验证 `docker image inspect aurora:local-toolfix` 的 `Created` 时间已刷新。
 2. **BuildKit 未启用**:`--mount=type=cache` 报错;`export DOCKER_BUILDKIT=1` 或用 `docker buildx build`。
-3. **distroless 基础镜像拉不下**(gcr.io 需代理):NAS 走 AX6000 homeproxy 透明代理;兜底——PC `docker pull gcr.io/distroless/static-debian12:nonroot && docker save | ssh ... docker load`。
+3. **运行基础镜像拉不下**(早期文档写 gcr.io/distroless,需代理):**当前 `docker-compose.nas.yml` 运行基已改为 `alpine:3.20`**(见 Dockerfile `RUNTIME_BASE`),alpine 在 NAS/PC 均可直拉,无 distroless 代理坑。若日后切回 distroless,兜底——PC `docker pull gcr.io/distroless/static-debian12:nonroot && docker save | ssh ... docker load`。
 4. **token ACL 被 Drive 重置**:若误把同步区 token 直接挂载,Drive 同步可能把 ACL 改成 000,容器内 nonroot(uid 65532)读不到 → 账号池空。本方案用独立副本 `/volume2/docker/aurora/tokens/` 规避;若仍复现,`chmod -R 644 /volume2/docker/aurora/tokens/ && docker restart aurora`。
 5. **distroless 无 shell**:无法 `docker exec` 进容器;排查靠 `docker logs aurora` 与宿主 curl。
 6. **工具调用提示词平台语境**:local-toolfix 提示词含"bash 是 Git Bash 不是 PowerShell"等 Windows 专属规则,NAS(Linux)上无害但不适用;长期 NAS 化可参数化(低优先)。
