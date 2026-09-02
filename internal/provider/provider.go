@@ -64,7 +64,8 @@ func NewRegistry() *Registry {
 	return &Registry{}
 }
 
-// Register 追加一个 Provider。后注册的优先级更高(先匹配先返回)。
+// Register 追加一个 Provider。先注册的优先级更高(Resolve 正序遍历,
+// 先匹配先返回)—— router.go 的注册顺序即匹配优先级,勿随意调换。
 func (r *Registry) Register(p Provider) {
 	r.providers = append(r.providers, p)
 }
