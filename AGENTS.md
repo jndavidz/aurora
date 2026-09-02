@@ -25,7 +25,8 @@ Aurora 是「网页端 → OpenAI 兼容 API」网关(Go):对外暴露 `/v1/chat
 - **动某家上游协议** — 读对应 `docs/<X>.md`(DEEPSEEK/GLM/GROK/GEMINI/KIMI/DOUBAO/QIANWEN/MINIMAX/MIMO/MEDIA…;`docs/CLAUDE.md` 是 claude.ai 协议文档,非 agent 指令)。
 - **逆向新站或更新失效协议** — 走下方 CDP 抓取。
 - **凭证失效 / 保活 / 重抓** — `docs/CREDENTIALS.md`(各家有效期与保活分级总表)。
-- **部署 / 发版** — `docs/NAS_DEPLOYMENT.md`(本地构建 local-toolfix 镜像,NAS 映射 65432→8080)。
+- **部署 / 发版** — `docs/NAS_DEPLOYMENT.md`(WSL 侧 `docker build` → `save/load` 推 NAS,NAS 只 `compose up`;NAS 映射 65432→8080)
+- **coding 封存**(2026-09-02) — 全部 `-coding` 变体冻结不删除,总开关 `CODING_ENABLED`(默认 false);aurora 仅作对话用途,结论与恢复方法见 `docs/CHATGPT_TOOL_BRIDGE.md`。
 
 ## 凭证红线
 

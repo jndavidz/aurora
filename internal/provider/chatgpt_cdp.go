@@ -48,7 +48,12 @@ func NewChatgptCDP(cfg *config.Config) *ChatgptCDP {
 	if urlList == "" {
 		urlList = cfg.GeminiCDPURL
 	}
-	base := newCdpBase(cfg, urlList, defaultChatgptCDPModels, "gpt-", "openai",
+	models := defaultChatgptCDPModels
+	if !cfg.CodingEnabled {
+		// coding 封存(2026-09-02):gpt-coding 不注册,/v1/models 不暴露
+		models = []string{"gpt-5-6-chat", "gpt-5-6-mini-chat"}
+	}
+	base := newCdpBase(cfg, urlList, models, "gpt-", "openai",
 		NewCodingLimiter(2*time.Second, 2*time.Second)) // ChatGPT 免费账号周限额,基础 2s
 	return &ChatgptCDP{base}
 }

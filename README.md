@@ -4,6 +4,8 @@
 
 Aurora 将 ChatGPT Web 后端能力转换为类 OpenAI API，支持聊天、Responses、文件问答、图片生成、图片变体、语音转文字、文字转语音、模型列表，以及通过 `refresh_token` / `session_token` 获取可用的 ChatGPT `access_token`。
 
+> **⚠️ coding 变体封存（2026-09-02）**：全部 `-coding` 变体（含 `gpt-coding`）已默认封存（`CODING_ENABLED=false`），aurora 仅作为对话网关使用；本仓库实际的 Web 网页端 agent 循环（多轮工具调用）延迟 130-180s/轮且存在概率性拒绝，不满足编程可用性。恢复方法见 `docs/CHATGPT_TOOL_BRIDGE.md`。
+
 > **Fork 扩展**：本仓库在上游基础上扩展为**多 Provider 网关**——DeepSeek、智谱 GLM、Kimi、Grok、Gemini、Claude、腾讯混元、MiniMax、Mimo、豆包、千问等网页端均经同一套 OpenAI 兼容表面接入，详见下方「多 Provider 网关」一节。
 
 ## 接口文档

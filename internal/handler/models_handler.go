@@ -1,17 +1,24 @@
 package handler
 
 import (
+	"strings"
 	"aurora/internal/provider"
 
 	"github.com/gin-gonic/gin"
 )
 
 type ModelsHandler struct {
-	registry *provider.Registry
+	registry     *provider.Registry
+	codingEnabled bool
 }
 
-func NewModelsHandler(registry *provider.Registry) *ModelsHandler {
-	return &ModelsHandler{registry: registry}
+func NewModelsHandler(registry *provider.Registry, codingEnabled bool) *ModelsHandler {
+	return &ModelsHandler{registry: registry, codingEnabled: codingEnabled}
+}
+
+// isCodingModelName 判定 coding 模型名(各家 -coding 变体 + gpt-coding 别名)。
+func isCodingModelName(model string) bool {
+	return strings.HasSuffix(model, "-coding") || model == "gpt-coding"
 }
 
 // normalizeCodingModel 检测 ChatGPT 的 -coding 变体:
@@ -73,6 +80,8 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 	}
 
 	// 追加 -coding 别名(gpt-coding → gpt-5-6 透传上游,强制工具调用)。
+	// coding 封存(2026-09-02):开关关闭时不暴露(见 config.CodingEnabled)。
+	if h.codingEnabled {
 	if _, coding := normalizeCodingModel(codingAlias); coding {
 		resModelList = append(resModelList, ResData{
 			ID:           codingAlias,
@@ -82,10 +91,14 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 			Capabilities: []string{string(provider.CapFunctionCall)},
 		})
 	}
+	}
 
 	// 聚合 provider 模型(DeepSeek 等),并附能力标注。
 	if h.registry != nil {
 		for _, m := range h.registry.Models() {
+			if !h.codingEnabled && isCodingModelName(m.ID) {
+				continue // coding 封存:不暴露 -coding 变体
+			}
 			var caps []string
 			for _, cap := range m.Caps {
 				caps = append(caps, string(cap))

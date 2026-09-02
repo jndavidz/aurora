@@ -86,6 +86,11 @@ type Config struct {
 	// ChatGPT(chatgpt.com)CDP 桥通道。背景:ChatGPT 已改为浏览器会话绑定鉴权,
 	// 服务端无法复用 token,aurora 直连 backend-api 的 token 文件会被 403。
 	// 故 ChatGPT 对话改走真实浏览器页内 fetch(bridge.mjs 的 chatgpt adapter),
+	// coding 封存总开关(2026-09-02):false 时全部 -coding 变体不注册/不暴露/
+	// 请求返回 400。背景:ChatGPT 网页通道的 agent 循环每轮 130-180s 且存在
+	// 概率性拒绝/空响应,体验远差于 API,aurora 收敛为纯对话网关(冻结不删除,
+	// 恢复置 true 即可,见 docs/CHATGPT_TOOL_BRIDGE.md)。
+	CodingEnabled bool
 	// 与 Gemini/Claude 同机制。桥地址默认复用 GEMINI_CDP_URL;CHATGPT_CDP_URL
 	// 可单独指定。仅当 URL 非空时注册(用 ChatgptCDP)。
 	ChatgptCDPURL string
@@ -172,6 +177,8 @@ func Load() Config {
 		HunyuanCDPURL: os.Getenv("HUNYUAN_CDP_URL"),
 		HunyuanCDPKey: os.Getenv("HUNYUAN_CDP_KEY"),
 		HunyuanModels: splitCSV(os.Getenv("HUNYUAN_MODELS")),
+
+		CodingEnabled: os.Getenv("CODING_ENABLED") == "true" || os.Getenv("CODING_ENABLED") == "1",
 
 		ChatgptCDPURL: os.Getenv("CHATGPT_CDP_URL"),
 		ChatgptCDPKey: os.Getenv("CHATGPT_CDP_KEY"),

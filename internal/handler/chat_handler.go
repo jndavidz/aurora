@@ -67,6 +67,18 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		return
 	}
 
+	// coding 封存(2026-09-02):开关关闭时显式 400(不静默转 chat,避免误导;
+	// 见 docs/CHATGPT_TOOL_BRIDGE.md —— agent 循环延迟/稳定性不达标,冻结不删除)
+	if !h.cfg.CodingEnabled && isCodingModelName(original_request.Model) {
+		c.JSON(400, gin.H{"error": gin.H{
+			"message": "coding 模型已封存(2026-09-02,aurora 收敛为对话网关)。如需恢复,设置环境变量 CODING_ENABLED=true 并重启",
+			"type":    "invalid_request_error",
+			"param":   nil,
+			"code":    "coding_disabled",
+		}})
+		return
+	}
+
 	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider,
 	// 不经过 ChatGPT 账号池 / resolveAccount。
 	if h.providers != nil {
@@ -301,6 +313,17 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 			"type":    "invalid_request_error",
 			"param":   nil,
 			"code":    err.Error(),
+		}})
+		return
+	}
+
+	// coding 封存(同 Nightmare 入口)
+	if !h.cfg.CodingEnabled && isCodingModelName(responsesRequest.Model) {
+		c.JSON(400, gin.H{"error": gin.H{
+			"message": "coding 模型已封存(2026-09-02,aurora 收敛为对话网关)。如需恢复,设置环境变量 CODING_ENABLED=true 并重启",
+			"type":    "invalid_request_error",
+			"param":   nil,
+			"code":    "coding_disabled",
 		}})
 		return
 	}
