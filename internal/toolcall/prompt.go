@@ -254,10 +254,11 @@ func pickReadPathParam(paramsJSON json.RawMessage) string {
 	return "path"
 }
 
-// FinalNudge 是给模型末尾追加的"先做这个,别分析 sandbox"系统指令。
+// FinalNudge 是给模型末尾追加的"调用协议提醒"系统指令。
 // 用 lastRole 决定上下文:
 //   - tool   : 提醒把 tool 输出当 ground truth,继续调用或总结
-//   - user   : 强制模型立刻发 <tool_call>(不思考、不描述环境)
+//   - user   : 区分 coding 任务与非 coding 任务(CODER 指令仅对疑似 coding 任务注入,
+//              否则只给温和的协议提示,避免把普通对话/算术任务逼成空回复)
 //   - 其他   : 返回空
 func FinalNudge(tools []official.Tool, messages []official.APIMessage) string {
 	if len(tools) == 0 || len(messages) == 0 {
@@ -279,6 +280,11 @@ func FinalNudge(tools []official.Tool, messages []official.APIMessage) string {
 		sb.WriteString(" A file LISTING (tree) is NOT the file content — if the task requires reading file contents, you are NOT done until you have read each relevant file with the read tool; summarizing from a file tree without reading the files is guessing and is WRONG. NEVER ask the user to provide, paste, upload or explain file contents — asking the user for files you can read yourself is a FAILURE and stalls the task. Do NOT reply with a progress report, a reading plan, or a promise like 'I will continue later' — that is NOT a valid reply and NOT a final answer; if the task is not finished, emit the next <tool_call> in THIS reply, there is no later turn unless you call a tool now. Continue the task based strictly on the tool output: call another tool using the exact <tool_call>{...}</tool_call> format if you need more information, or give your final answer. NEVER claim a directory or file does not exist, or that you are in a different/isolated environment, when it appears in the output above.]")
 		return sb.String()
 	case "user":
+		// 仅当任务疑似 coding / 文件操作类时才注入激进的 coding-agent 指令;
+		// 否则给一个温和提示:需要调用工具就用 <tool_call> 格式,否则正常回答。
+		if !looksLikeCodingTask(tools, messages) {
+			return "\n[SYSTEM INSTRUCTION: If you need to call a tool, do so using the exact <tool_call>{...}</tool_call> format shown above. Otherwise just answer the user normally in plain text.]"
+		}
 		wd := ExtractWorkingDir(messages)
 		example := FirstToolCallExample(tools, wd)
 		wdPart := ""
@@ -301,4 +307,40 @@ func FinalNudge(tools []official.Tool, messages []official.APIMessage) string {
 		return sb.String()
 	}
 	return ""
+}
+
+// CodingToolNames 是明显的 coding / 文件系统 / shell 类工具名。
+var CodingToolNames = []string{
+	"bash", "shell", "sh", "powershell", "cmd", "terminal",
+	"git", "gh", "svn",
+	"read", "read_file", "write", "write_file", "edit", "create_file",
+	"glob", "grep", "find", "search_files", "file_search", "ls", "list", "cat", "open", "view",
+	"run_command", "execute", "exec",
+}
+
+// looksLikeCodingTask 判断这次请求是否疑似 coding / 文件操作类任务。
+// 触发条件(任一即可):
+//   - 工具列表里包含明显的 coding 类工具名
+//   - 用户最近一条消息含路径 / 代码 / 沙箱等信号
+func looksLikeCodingTask(tools []official.Tool, messages []official.APIMessage) bool {
+	for _, t := range tools {
+		name := strings.ToLower(t.Function.Name)
+		for _, c := range CodingToolNames {
+			if name == c {
+				return true
+			}
+		}
+	}
+	for _, m := range messages {
+		if m.Role != "user" {
+			continue
+		}
+		low := strings.ToLower(m.Content.Text())
+		for _, sig := range []string{"working directory", "workspace", "file path", "repository", "repo", "src/", "/home/", "c:\\", "compile", "run the code", "execute the script", "sandbox"} {
+			if strings.Contains(low, sig) {
+				return true
+			}
+		}
+	}
+	return false
 }
