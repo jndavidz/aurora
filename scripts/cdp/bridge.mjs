@@ -1096,7 +1096,9 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
     // 还在生成(stopBtn=true)→ 等,不读(避免抓到上一条残影/过渡态)
     if (j.stopBtn) { silentSecs = 0; continue; }
     // 生成结束(stopBtn=false)→ 本轮回复已稳定,读取一次完整文本
-    const finalRaw = doClean ? (await cleanChatgptText(c)) : (j.lastA || "");
+    // doClean=true:已清洗文本(对话类,卡片噪声剥除);false:DOM→markdown 还原
+    // (coding:``` 围栏还原保证 FenceParser 解析工具调用,其余原样保留)
+    const finalRaw = doClean ? (await cleanChatgptText(c)) : ((await extractChatgptRaw(c)) || "");
     if (finalRaw && finalRaw.trim()) {
       text = finalRaw.trim();
       if (onDelta) onDelta(text);
@@ -1108,6 +1110,55 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
   }
   if (!text || !text.trim()) return null;
   return text;
+}
+
+// extractChatgptRaw:coding 通道专用 —— 把最后一跳 assistant 节点做「DOM → markdown 还原」。
+// 背景:aurora coding 协议是 ```json 围栏(glmBuildInstructions),但 ChatGPT 前端把围栏
+// 渲染成 <pre><code>,innerText 拿不到 ``` 反引号 → aurora 的 FenceParser 失效(实测轮1:
+// 模型明明遵守协议输出了围栏 JSON,返回后却成 "JSON\n{...}" 裸文本)。
+// 还原规则(实测 2026-09-02 DOM 探针):
+//   - 只取最外层 <pre>(ChatGPT 代码块有嵌套 pre,querySelectorAll 会命中多层导致重复);
+//   - pre.innerText 首行若是已知语言名(json/python/...)则作为围栏语言(渲染时语言标签
+//     进了 pre 内部首行),其余行为代码体;
+//   - 其余文本原样保留(coding 原样保留原则:不删链接/按钮/任何内容);
+//   - 块级元素(P/DIV/LI/H1-6/TR/BR)边界补换行,贴近 innerText 语义。
+async function extractChatgptRaw(c) {
+  const EV = "(function(){" +
+    "var a = document.querySelectorAll('" + CHATGPT_ASSISTANT_SEL + "');" +
+    "var root = a.length ? a[a.length - 1] : null;" +
+    "if (!root) return JSON.stringify({ text: '' });" +
+    "var LANGS = {}; 'json python python3 py javascript js typescript ts bash sh shell zsh html css sql go rust java kotlin c cpp csharp cs yaml yml toml ini diff markdown md xml lua perl ruby php swift dart scala r matlab dockerfile makefile powershell ps1 text'.split(' ').forEach(function(x){LANGS[x]=1;});" +
+    "var out = [];" +
+    "function blockNewline(el) { var t = (el.tagName || '').toUpperCase(); return (t==='P'||t==='DIV'||t==='LI'||t==='TR'||t==='BR'||/^H[1-6]$/.test(t)); }" +
+    "function walk(n) {" +
+    "  if (n.nodeType === 3) { out.push(n.nodeValue || ''); return; }" +
+    "  if (n.nodeType !== 1) return;" +
+    "  var tag = (n.tagName || '').toUpperCase();" +
+    "  if (tag === 'PRE') {" +
+    "    if (n.offsetParent === null) return;" + // 隐藏渲染副本(display:none,不进 innerText 但被选择器命中)
+    "    if (n.parentElement && n.parentElement.closest && n.parentElement.closest('pre')) return;" + // 嵌套子 pre 跳过(外层已整体围栏化)
+    "    var txt = n.innerText || n.textContent || '';" +
+    "    var lines = txt.split('\\n');" +
+    "    var lang = '';" +
+    "    if (lines.length > 1 && LANGS[lines[0].trim().toLowerCase()]) { lang = lines[0].trim().toLowerCase(); lines = lines.slice(1); }" +
+    "    out.push('\\n```' + lang + '\\n' + lines.join('\\n') + '\\n```\\n');" +
+    "    return;" + // 不递归 → 嵌套子 pre 跳过
+    "  }" +
+    "  for (var i = 0; i < n.childNodes.length; i++) walk(n.childNodes[i]);" +
+    "  if (blockNewline(n)) out.push('\\n');" +
+    "}" +
+    "walk(root);" +
+    "var txt = out.join('').replace(/\\n{3,}/g, '\\n\\n').trim();" +
+    "return JSON.stringify({ text: txt });" +
+    "})()";
+  try {
+    const r = await c.cmd("Runtime.evaluate", { expression: EV, returnByValue: true });
+    const v = r && r.result && r.result.result && r.result.result.value;
+    const j = v ? JSON.parse(v) : null;
+    return (j && j.text) || "";
+  } catch (e) {
+    return "";
+  }
 }
 
 // cleanChatgptText:把 ChatGPT 最后一跳 assistant 节点的 innerText 清洗成可读文本。
