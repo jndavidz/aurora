@@ -931,12 +931,23 @@ const CHATGPT_COMPOSER_SEL = 'textarea#prompt-textarea, [contenteditable="true"]
 
 // chatgpt 页面 CDP 连接缓存:省去每请求的 /json 枚举 + WebSocket 握手(~100-350ms)。
 // 仍是"专用独立连接"(每请求串行独占使用,非共享 entry.c),不违背事件时序隔离原则;
-// 每次取用前 ping + 校验 URL 仍在 chatgpt.com,失效/被导航走则重建。
+// 每次取用前 ping(3s 超时 —— Chrome 重启后旧 WS 会静默挂起,ping 无超时会堵死
+// 串行 enqueue 队列,实测踩坑)+ 校验 URL 仍在 chatgpt.com,失效/被导航走则重建。
 let chatgptConn = null;
+function withTimeout(p, ms, tag) {
+  let timer;
+  return Promise.race([
+    p,
+    new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(tag + " timeout " + ms + "ms")), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
 async function getChatgptConn() {
   if (chatgptConn) {
     try {
-      const u = await chatgptConn.ws.cmd("Runtime.evaluate", { expression: "location.href", returnByValue: true });
+      const u = await withTimeout(
+        chatgptConn.ws.cmd("Runtime.evaluate", { expression: "location.href", returnByValue: true }),
+        3000, "conn ping"
+      );
       const href = (u && u.result && u.result.result && u.result.result.value) || "";
       if (typeof href === "string" && href.includes("chatgpt.com")) return chatgptConn.ws;
     } catch {}
@@ -950,6 +961,9 @@ async function getChatgptConn() {
     throw e;
   }
   const ws = await cdp(page.webSocketDebuggerUrl);
+  // 焦点仿真:让页面始终认为自身有焦点,规避 Chrome 对后台 tab 的 timer/渲染节流
+  // (实测空闲 20s+ 后首次 Runtime.evaluate 排队数秒,input 阶段被拖到 15s+)。
+  await ws.cmd("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
   chatgptConn = { ws };
   return ws;
 }
@@ -1029,33 +1043,47 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
   const tComposer = Date.now();
   if (tComposer - t0 > 500) console.log("[chatgpt-ui] composer wait", (tComposer - t0) + "ms");
 
-  // 2) 清空残留 → 点击聚焦 → CDP insertText(真实输入,React 必响应)
-  //    sleep 经多轮实测压缩(400/400/500→250/300/350→120/100/轮询化):每步都有
-  //    后续校验兜底(输入验证、按钮探测),过短只多花一轮重试,不影响正确性。
-  await c.cmd("Runtime.evaluate", {
-    expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); if (!el) return 'NO'; el.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); return 'ok'; })()",
-    returnByValue: true,
-  });
-  await sleep(120);
-  await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
-  await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
-  await sleep(100);
-  await c.cmd("Input.insertText", { text: prompt });
-
-  // 3) 验证输入生效:轮询式(通常首查即中 ~10ms,替代原固定 350ms sleep;React 未同步
-  //    时自动重试,比固定等待更稳)
+  // 2) 清空 → 聚焦 → insertText → 验证,**最多 3 轮重插**。实测后台 tab 节流下
+  //    React 调度延迟,单次 insertText 可能完全丢失(composer=0,2026-09-02 pi 实测
+  //    send phase 34s 且首轮输入全空);重插循环是唯一可靠解,每轮都有长度校验兜底。
+  const t0c = Date.now();
+  const norm = (s) => (s || "").replace(/\s+/g, "");
+  const targetLen = norm(prompt).length;
   let got = "";
-  for (let i = 0; i < 6; i++) {
-    await sleep(i === 0 ? 60 : 90);
-    const chk = await c.cmd("Runtime.evaluate", {
-      expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); return (el && (el.innerText || el.value)) || ''; })()",
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await c.cmd("Runtime.evaluate", {
+      expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); if (!el) return 'NO'; el.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); return 'ok'; })()",
       returnByValue: true,
     });
-    got = (chk.result && chk.result.result && chk.result.result.value) || "";
-    if (got.trim()) break;
+    await sleep(120);
+    await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+    await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
+    await sleep(100);
+    await c.cmd("Input.insertText", { text: prompt });
+
+    // 3) 验证输入生效:轮询式(通常首查即中 ~10ms)。比对归一化长度 —— 只查非空
+    //    会让"部分插入/截断"溜过去(实测 pi 大 prompt 时模型收不到完整工具指令而拒绝)。
+    for (let i = 0; i < 6; i++) {
+      await sleep(i === 0 ? 60 : 90);
+      const chk = await c.cmd("Runtime.evaluate", {
+        expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); return (el && (el.innerText || el.value)) || ''; })()",
+        returnByValue: true,
+      });
+      got = (chk.result && chk.result.result && chk.result.result.value) || "";
+      if (norm(got).length >= targetLen) break;
+    }
+    if (norm(got).length >= targetLen) break;
+    console.log("[chatgpt-ui] input attempt " + (attempt + 1) + " insufficient (composer " + got.length + "/" + prompt.length + "), re-inserting");
+    await sleep(400); // 给页面喘息(节流恢复)后重插
   }
-  if (!got.trim()) {
-    const e = new Error("ChatGPT 输入未生效(composer 为空)");
+  console.log("[chatgpt-ui] input check: prompt=" + prompt.length + " chars, composer=" + got.length + " chars, " + (Date.now() - t0c) + "ms");
+  if (!norm(got).length) {
+    const e = new Error("ChatGPT 输入未生效(composer 为空,已重试 3 轮)");
+    e.code = "upstream_error";
+    throw e;
+  }
+  if (norm(got).length < targetLen * 0.98) {
+    const e = new Error("ChatGPT 输入被截断(prompt " + prompt.length + " 字符,composer 仅 " + got.length + ")");
     e.code = "upstream_error";
     throw e;
   }

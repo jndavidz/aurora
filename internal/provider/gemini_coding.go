@@ -24,7 +24,7 @@ func (d *Gemini) codingResponses(c *gin.Context, m *geminiModel, req *official.R
 		c.JSON(502, gin.H{"error": "gemini web client unavailable: missing GEMINI_ACCOUNTS?"})
 		return
 	}
-	prompt := geminiCodingPromptFromResponses(req)
+	prompt := geminiCodingPromptFromResponses(req, "")
 	streamReq := geminweb.CompletionRequest{Prompt: prompt}
 	if req.Stream {
 		d.codingResponsesStream(c, req, client, streamReq)
@@ -33,10 +33,16 @@ func (d *Gemini) codingResponses(c *gin.Context, m *geminiModel, req *official.R
 	d.codingResponsesNonStream(c, req, client, streamReq)
 }
 
-// geminiCodingPromptFromResponses 组装 coding prompt:工具指令 + 对话历史。
-func geminiCodingPromptFromResponses(req *official.ResponsesAPIRequest) string {
+// geminiCodingPromptFromResponses 组装 coding prompt:工具指令 + 环境声明(envPrompt,
+// 可空)+ 对话历史。envPrompt 供 provider 子类注入"环境现实纠正"段(如 ChatGPT 网页
+// 模型会声称"环境不存在该目录"而拒绝调用本地工具,见 docs/CHATGPT_TOOL_BRIDGE.md)。
+func geminiCodingPromptFromResponses(req *official.ResponsesAPIRequest, envPrompt string) string {
 	var sb strings.Builder
-	if len(req.Tools) > 0 {
+	if envPrompt != "" {
+		// 子类(如 ChatGPT)提供强协议完整指令时替换 glm 温和版(含工具渲染)
+		sb.WriteString(envPrompt)
+		sb.WriteString("\n\n")
+	} else if len(req.Tools) > 0 {
 		sb.WriteString(glmBuildInstructions(req.Tools, req.ToolChoice))
 		sb.WriteString("\n\n")
 	}
@@ -163,7 +169,7 @@ func (d *Gemini) codingCompletions(c *gin.Context, m *geminiModel, req *official
 		c.JSON(502, gin.H{"error": "gemini web client unavailable: missing GEMINI_ACCOUNTS?"})
 		return
 	}
-	prompt := geminiCodingPromptFromAPI(req)
+	prompt := geminiCodingPromptFromAPI(req, "")
 	streamReq := geminweb.CompletionRequest{Prompt: prompt}
 	if req.Stream {
 		d.codingCompletionsStream(c, req, client, streamReq)
@@ -172,10 +178,13 @@ func (d *Gemini) codingCompletions(c *gin.Context, m *geminiModel, req *official
 	d.codingCompletionsNonStream(c, req, client, streamReq)
 }
 
-// geminiCodingPromptFromAPI 组装 chat.completions coding prompt。
-func geminiCodingPromptFromAPI(req *official.APIRequest) string {
+// geminiCodingPromptFromAPI 组装 chat.completions coding prompt(参数同 FromResponses)。
+func geminiCodingPromptFromAPI(req *official.APIRequest, envPrompt string) string {
 	var sb strings.Builder
-	if len(req.Tools) > 0 {
+	if envPrompt != "" {
+		sb.WriteString(envPrompt)
+		sb.WriteString("\n\n")
+	} else if len(req.Tools) > 0 {
 		sb.WriteString(glmBuildInstructions(req.Tools, req.ToolChoice))
 		sb.WriteString("\n\n")
 	}

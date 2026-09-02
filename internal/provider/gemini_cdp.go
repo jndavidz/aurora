@@ -557,13 +557,19 @@ func (d *GeminiCDP) responsesNonStream(c *gin.Context, req *official.ResponsesAP
 	c.JSON(200, outResp)
 }
 
+// codingEnvPrompt 非空时**替换**默认的 glmBuildInstructions 工具指令段(否则走
+// glm 温和版)。基类为空(Gemini 保持原行为);子类可覆写注入强协议完整指令
+// —— ChatGPT 网页模型对 glm"尽力而为"版遵守度差(声称"环境不存在该目录/无执行
+// 接口"而拒绝调用,见 docs/CHATGPT_TOOL_BRIDGE.md §八),需要强规则+环境纠正。
+func (d *GeminiCDP) codingEnvPrompt(tools []official.Tool) string { return "" }
+
 // ─── coding 变体(工具调用:aurora 侧注入 + 解析,桥只当纯 chat)────────
 
 // codingResponses 处理 coding 变体(/v1/responses)。
 // prompt 构建与解析复用直连时代 gemini_coding.go 的同一套(围栏 JSON + FenceParser)。
 func (d *GeminiCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
-	prompt := geminiCodingPromptFromResponses(req)
+	prompt := geminiCodingPromptFromResponses(req, d.codingEnvPrompt(req.Tools))
 	if req.Stream {
 		d.codingResponsesStream(c, req, prompt)
 		return
@@ -661,7 +667,7 @@ func (d *GeminiCDP) codingResponsesNonStream(c *gin.Context, req *official.Respo
 // codingCompletions 处理 coding 变体(/v1/chat/completions)。
 func (d *GeminiCDP) codingCompletions(c *gin.Context, req *official.APIRequest) {
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
-	prompt := geminiCodingPromptFromAPI(req)
+	prompt := geminiCodingPromptFromAPI(req, d.codingEnvPrompt(req.Tools))
 	if req.Stream {
 		d.codingCompletionsStream(c, req, prompt)
 		return
