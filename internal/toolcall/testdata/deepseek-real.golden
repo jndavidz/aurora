@@ -1,0 +1,10 @@
+{
+  "text": "根据要求，使用bash工具列出当前目录。用bash命令，比如ls。输出工具调用块。",
+  "calls": [
+    {
+      "name": "bash",
+      "arguments": "{\"command\":\"ls -la\"}",
+      "idPrefix": "call_"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "text": "",
+  "calls": [
+    {
+      "name": "read",
+      "arguments": "{\"path\":\"a.txt\"}",
+      "idPrefix": "call_"
+    }
+  ]
+}

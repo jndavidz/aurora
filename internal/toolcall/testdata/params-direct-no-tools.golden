@@ -1,0 +1,4 @@
+{
+  "text": "\u003ctool_call\u003e{\"path\":\"a.txt\",\"content\":\"hello\"}\u003c/tool_call\u003e",
+  "calls": null
+}

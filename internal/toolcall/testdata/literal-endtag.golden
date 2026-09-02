@@ -1,0 +1,10 @@
+{
+  "text": "done",
+  "calls": [
+    {
+      "name": "write",
+      "arguments": "{\"content\":\"see \u003c/tool_call\u003e below\"}",
+      "idPrefix": "call_"
+    }
+  ]
+}

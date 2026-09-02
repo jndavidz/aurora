@@ -1,0 +1,10 @@
+{
+  "text": "好的，我来读取。",
+  "calls": [
+    {
+      "name": "read",
+      "arguments": "{\"path\":\"config.yaml\"}",
+      "idPrefix": "call_"
+    }
+  ]
+}

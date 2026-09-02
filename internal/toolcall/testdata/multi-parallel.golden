@@ -1,0 +1,20 @@
+{
+  "text": "beforemidafter",
+  "calls": [
+    {
+      "name": "a",
+      "arguments": "{\"x\":1}",
+      "idPrefix": "call_"
+    },
+    {
+      "name": "b",
+      "arguments": "{\"y\":2}",
+      "idPrefix": "call_"
+    },
+    {
+      "name": "c",
+      "arguments": "{\"z\":3}",
+      "idPrefix": "call_"
+    }
+  ]
+}

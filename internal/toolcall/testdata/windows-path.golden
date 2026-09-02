@@ -1,0 +1,10 @@
+{
+  "text": "",
+  "calls": [
+    {
+      "name": "run",
+      "arguments": "{\"cmd\":\"dir G:\\\\src \u0026\u0026 type a.txt\"}",
+      "idPrefix": "call_"
+    }
+  ]
+}
