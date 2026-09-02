@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"aurora/internal/config"
-	"aurora/internal/toolcall"
 	"aurora/typings/official"
 
 	"github.com/gin-gonic/gin"
@@ -74,10 +73,12 @@ func (d *ChatgptCDP) Models() []Model {
 	return out
 }
 
-// codingResponses / codingCompletions 覆写:prompt 在子类层构造。
-// 关键:不能依赖基类入口内部的 d.codingEnvPrompt() —— ChatgptCDP.ChatCompletions
-// 是以 d.GeminiCDP.ChatCompletions 方式进入基类的,基类 receiver 是裸 *GeminiCDP,
-// Go 方法不做动态分派,覆写永远不会被调到(实测踩坑:强指令从未注入,模型持续拒绝)。
+// codingResponses / codingCompletions 的 coding 分支在子类入口**接管**(不委托
+// 基类 coding 方法):基类方法内部调 d.codingEnvPrompt()/d.codingCompletions 时
+// receiver 是裸 *GeminiCDP,Go 无虚方法 —— 任何"子类覆写等基类内部来调"的方案
+// 都不可达(两次实测踩坑:prompt 长度恒定暴露覆写从未生效)。
+// 因此 ChatCompletions/Responses 在入口识别 coding variant 后,直接在子类层
+// 构造 prompt 并调基类 Stream/NonStream(同包私有方法,receiver 正确)。
 func (d *ChatgptCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	d.limiter.Wait()
 	prompt := geminiCodingPromptFromResponses(req, d.codingEnvPrompt(req.Tools))
@@ -98,37 +99,14 @@ func (d *ChatgptCDP) codingCompletions(c *gin.Context, req *official.APIRequest)
 	d.codingCompletionsNonStream(c, req, prompt)
 }
 
-// codingEnvPrompt ChatGPT 网页模型专用的**完整强协议指令**(替换 glm 温和版)。
-// 实测(docs/CHATGPT_TOOL_BRIDGE.md §八)两点:
-//   1. glm"尽力而为"版下模型会声称"环境不存在该目录/无执行接口"而拒绝发工具调用
-//      (它以为要在自己的沙箱里找文件);glm 段的"不需要就正常回答"台阶与强制调用
-//      矛盾,模型听温和的 —— 所以必须整体替换而非追加纠正段;
-//   2. 手工实测中"环境现实纠正 + 强制首调"话术使模型完全遵守协议。
-// 围栏 JSON 形状与 glm 版一致(兼容 FenceParser),仅强化规则与环境认知。
-func (d *ChatgptCDP) codingEnvPrompt(tools []official.Tool) string {
-	var sb strings.Builder
-	sb.WriteString("You are a coding agent working for a client application that runs on the user's REAL machine.\n")
-	sb.WriteString("\n# TOOLS AVAILABLE\n")
-	sb.WriteString("The user exposes the following custom tools. Use the EXACT tool name from the list below — do NOT rename, abbreviate or invent names. Names are case-sensitive.\n\n")
-	sb.WriteString(toolcall.CompactToolsPrompt(tools))
-	sb.WriteString("\n# TOOL CALLING FORMAT (MANDATORY)\n")
-	sb.WriteString("To call a tool, output ONE markdown JSON code block EXACTLY in this shape:\n")
-	sb.WriteString("```json\n")
-	sb.WriteString(`{"type":"tool_calls","tool_calls":{"name":"tool_name","arguments":"{\"param\":\"value\"}"}}`)
-	sb.WriteString("\n```\n")
-	sb.WriteString("The value of `arguments` MUST be a string-encoded JSON object containing ONLY that tool's declared parameters.\n")
-	sb.WriteString("\n# CRITICAL RULES\n")
-	sb.WriteString("0. Use ONLY the EXACT tool names listed above. If the tool is \"read\", calling it \"read_file\" is WRONG and will fail.\n")
-	sb.WriteString("1. Output ONLY the JSON code block — no prose before or after it, no explanations, no progress reports.\n")
-	sb.WriteString("2. Multiple calls: emit multiple JSON code blocks consecutively.\n")
-	sb.WriteString("3. If — and only if — the task clearly needs no tool at all, answer normally in plain text.\n")
-	sb.WriteString("\n# ENVIRONMENT REALITY (CRITICAL)\n")
-	sb.WriteString("In THIS session you have NO filesystem, NO shell, NO terminal, and NO sandbox of your own. There is no environment for you to \"look around\" — attempting it finds nothing and is always WRONG.\n")
-	sb.WriteString("The ONLY way to see or touch the user's files is the tool-call code block above. The tool runs on the user's REAL machine and WILL succeed; its result arrives in the next message as \"Tool result: ...\".\n")
-	sb.WriteString("NEVER say that a path or directory \"does not exist\", that you \"cannot access\" anything, that there is \"no execution interface\" or \"no tool interface\", or ask the user to run commands themselves — every one of those replies is a FAILURE.\n")
-	sb.WriteString("If the task involves reading files, listing directories, running commands or inspecting the repository, your reply MUST be the tool-call code block — begin your reply immediately with the characters \"```json\". Do not describe what you are about to do; just call the tool.\n")
-	return sb.String()
-}
+// codingEnvPrompt 返回空 —— 实测定案(2026-09-02 实验C/D):强协议指令(长篇
+// CRITICAL RULES + ENVIRONMENT REALITY)反而触发模型的诚实拒绝("I can't access
+// the user's machine" / "按要求不能编造结果"),因为它与网页环境事实矛盾("你
+// 没有沙箱"被模型证伪)+ 高压措辞激活诚实 RLHF;而 glm 温和版在完全相同的任务上
+// 成功输出围栏 JSON(实验轮1)。钩子与子类覆写入口保留(方法分派修复仍有价值:
+// 未来需要时可正确注入),但 ChatGPT 不再覆盖 glm 指令。
+// 详见 docs/CHATGPT_TOOL_BRIDGE.md §十。
+func (d *ChatgptCDP) codingEnvPrompt(tools []official.Tool) string { return "" }
 
 // Responses 对 /v1/responses 的 gpt-coding 保持"必须携带 tools"约束(与 ChatCompletions
 // 对称;其余透传基类 —— coding variant 走 codingResponses 整包协议,chat 变体走桥)。
@@ -140,6 +118,11 @@ func (d *ChatgptCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest
 			"param":   "tools",
 			"code":    "missing_tools",
 		}})
+		return
+	}
+	// coding variant 在子类层接管(同 ChatCompletions 注释)
+	if v, ok := d.byID[req.Model]; ok && v == "coding" {
+		d.codingResponses(c, req)
 		return
 	}
 	d.GeminiCDP.Responses(c, req)
@@ -165,6 +148,11 @@ func (d *ChatgptCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 		if _, ok := d.byID[req.Model+"-chat"]; ok {
 			req.Model = req.Model + "-chat"
 		}
+	}
+	// coding variant 在子类层接管(见 codingCompletions 注释:基类内部调用不可达子类覆写)
+	if v, ok := d.byID[req.Model]; ok && v == "coding" {
+		d.codingCompletions(c, req)
+		return
 	}
 	d.GeminiCDP.ChatCompletions(c, req)
 }

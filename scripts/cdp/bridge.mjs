@@ -979,6 +979,15 @@ async function executeChatgptUI(entry, prompt, onDelta) {
   // 编程通道原样保留代码/链接/artifact,不做任何清洗(避免误删代码运行结果里的
   // 复制按钮、引用链接等 UI 元素)。
   const doClean = chatgptShouldClean();
+  if (!doClean) {
+    // coding 通道:每请求导航新对话。页面历史会累积(含此前失败的拒绝样本),
+    // 模型看到历史里"assistant 从不调用工具"的模式会被锚定继续拒绝(实测 pi
+    // 重发同任务即复现);新对话彻底清零。对话通道(gpt-5-6)保留页面上下文不动。
+    try {
+      await c.cmd("Page.navigate", { url: chatgpt.homeUrl });
+      await sleep(9000);
+    } catch (e) { console.log("[chatgpt-ui] coding new-conversation navigate failed:", e.message); }
+  }
   let text = await chatgptSendOnce(c, prompt, onDelta, doClean);
   if (text === null) {
     console.log("[chatgpt-ui] silent failure, self-heal: open new conversation");

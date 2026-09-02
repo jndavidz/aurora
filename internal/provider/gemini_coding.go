@@ -2,6 +2,7 @@ package provider
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 
 	"aurora/internal/geminweb"
@@ -58,6 +59,11 @@ func geminiCodingPromptFromResponses(req *official.ResponsesAPIRequest, envPromp
 			text = "```json\n" + text + "\n```"
 		case "function_call_output":
 			text = "Tool result: " + text
+		default:
+			// message 型:assistant 的拒绝文本剥掉(防锚定,见 isRefusalText)
+			if it.Role == "assistant" && isRefusalText(text) {
+				continue
+			}
 		}
 		if text == "" {
 			continue
@@ -199,6 +205,10 @@ func geminiCodingPromptFromAPI(req *official.APIRequest, envPrompt string) strin
 			sb.WriteString("Tool result: " + msg.Text() + "\n\n")
 			continue
 		}
+		// assistant 的拒绝文本剥掉(防锚定,见 isRefusalText)
+		if msg.Role == "assistant" && isRefusalText(msg.Text()) {
+			continue
+		}
 		if t := msg.Text(); t != "" {
 			sb.WriteString(t + "\n\n")
 		}
@@ -289,4 +299,14 @@ func (d *Gemini) codingCompletionsNonStream(c *gin.Context, req *official.APIReq
 	cleanText := toolcall.StripFencedBlocks(fullText)
 	outResp := official.NewChatCompletionWithToolCalls(cleanText, "", calls, countMessagesChars(req.Messages), util.CountToken(cleanText), req.Model, "", nil)
 	c.JSON(200, outResp)
+}
+
+// isRefusalText 检测历史里 assistant 的"绕开工具"拒绝文本。此类样本会把模型
+// 锚定成继续拒绝(实测 pi 重发同任务,历史里的拒绝文本让它持续拒绝调用);
+// 拼包时剥掉(handleToolCalling 的 sanitizeRefusalHistory 同思路,Responses/
+// CDP coding 路径此前缺失)。特征取自两种实测拒绝话术 + 英文变体,宁可少杀。
+var refusalRe = regexp.MustCompile(`(没有可实际调用|无法获得.{0,8}真实输出|无法访问用户机器|不可实际调用|不会编造|cannot (actually )?(call|access) (the user|these|your)|no (execution|tool) interface|unable to (call|access) .{0,20}tools)`)
+
+func isRefusalText(t string) bool {
+	return t != "" && refusalRe.MatchString(t)
 }
