@@ -124,18 +124,32 @@ func (p *Parser) Feed(chunk string) (textDelta string, toolCalls []official.Tool
 			p.buffer = p.buffer[flushIndex:]
 			break
 		}
-		// inside 模式:在 buffer 中寻找 endTag
-		endIdx := strings.Index(p.buffer, p.tags.EndTag)
-		if endIdx < 0 {
+		// inside 模式:寻找 endTag。解析失败时跳过该闭合、找下一个重试 ——
+		// 参数 JSON 的字符串值里可能含字面量 "</tool_call>"(合法 JSON 无需转义
+		// <>/),真实场景:模型执行"生成 tool_call 文档"类任务。若不跳,整个
+		// 调用会被静默丢弃(对抗测试 TestParamContainsLiteralEndTag 锁定)。
+		searchFrom := 0
+		matched := false
+		for {
+			rel := strings.Index(p.buffer[searchFrom:], p.tags.EndTag)
+			if rel < 0 {
+				break // 没有更多闭合标签:等待更多输入(原行为)
+			}
+			endIdx := searchFrom + rel
+			raw := strings.TrimSpace(p.buffer[:endIdx])
+			if tc := p.buildToolCallFromRaw(raw); tc != nil {
+				toolCalls = append(toolCalls, *tc)
+				p.emittedCount++
+				p.inside = false
+				p.buffer = p.buffer[endIdx+len(p.tags.EndTag):]
+				matched = true
+				break
+			}
+			searchFrom = endIdx + len(p.tags.EndTag) // 解析失败:跳过此闭合,试下一个
+		}
+		if !matched {
 			break
 		}
-		raw := strings.TrimSpace(p.buffer[:endIdx])
-		if tc := p.buildToolCallFromRaw(raw); tc != nil {
-			toolCalls = append(toolCalls, *tc)
-			p.emittedCount++
-		}
-		p.inside = false
-		p.buffer = p.buffer[endIdx+len(p.tags.EndTag):]
 	}
 	return text.String(), toolCalls
 }
@@ -356,15 +370,26 @@ func marshalArguments(v any) string {
 			}
 		}
 		// 字符串不是 JSON,作为 command 类参数包一层
-		b, _ := json.Marshal(map[string]string{"command": s})
-		return string(b)
+		return marshalNoHTMLEscape(map[string]string{"command": s})
 	case map[string]any:
-		b, _ := json.Marshal(t)
-		return string(b)
+		return marshalNoHTMLEscape(t)
 	default:
-		b, _ := json.Marshal(t)
+		return marshalNoHTMLEscape(t)
+	}
+}
+
+// marshalNoHTMLEscape 与 json.Marshal 等价,但禁用 HTML 转义:
+// 默认 Marshal 会把 & < > 变 \u0026 等 —— shell 命令里的 `&&` 是超高频参数,
+// 转义虽可被下游 Unmarshal 还原,但违背"参数保真"且干扰中间层肉眼核对。
+func marshalNoHTMLEscape(v any) string {
+	var sb strings.Builder
+	enc := json.NewEncoder(&sb)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		b, _ := json.Marshal(v)
 		return string(b)
 	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // generateCallID 分配 call_xxx 风格的 ID,与 Python  保持一致
