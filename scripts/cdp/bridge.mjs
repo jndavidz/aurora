@@ -57,7 +57,15 @@ const IDLE_TIMEOUT_MS = (parseInt(process.env.IDLE_TIMEOUT_MIN || "30", 10) || 0
 // Claude 限额预警阈值(5h 窗口利用率):默认 0.8(>=80% 才在回复末尾附加提醒,不打扰日常);
 // 设 0 = 每条回复都附用量小尾巴。
 const CLAUDE_LIMIT_WARN = parseFloat(process.env.CLAUDE_LIMIT_WARN || "0.8");
+// 调试日志开关。默认关闭:自续捕获的解析失败属预期噪音(页面上有大量非目标 RPC),
+// 开着会淹没真正的错误。排查自续问题时用 BRIDGE_DEBUG=1 打开。
+const DEBUG = process.env.BRIDGE_DEBUG === "1";
 let lastActivity = Date.now();
+
+// debugLog 只在 BRIDGE_DEBUG=1 时输出,用于降级"预期内的失败"。
+function debugLog(...args) {
+  if (DEBUG) console.error("[debug]", ...args);
+}
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const STATE_DIR = path.join(ROOT, ".runtime", "bridge");
@@ -141,9 +149,14 @@ function saveState() {
   }
 }
 
-// 从抓到的 StreamGenerate 请求刷新令牌(自续核心:抓自己的 fetch)
+// 从抓到的 StreamGenerate 请求刷新令牌(自续核心:抓自己的 fetch)。
+// ⚠️ 必须做 URL 过滤:页面上除 StreamGenerate 外还有大量 Bard RPC,其中部分
+// 也带 f.req 参数但结构与 StreamGenerate 不同 —— 不过滤就会对每个都抛解析
+// 失败,产生无意义的 error 噪音(遗留待办 #5)。过滤后失败即代表真问题,
+// 值得在 BRIDGE_DEBUG=1 下查看。与 applyClaudeCapture 的 /completion 过滤
+// 保持同一写法。
 function applyCapture(req) {
-  if (!req.postData) return;
+  if (!req.postData || !String(req.url || "").includes("StreamGenerate")) return;
   const params = new URLSearchParams(req.postData);
   const freq = params.get("f.req");
   const at = params.get("at");
@@ -169,7 +182,7 @@ function applyCapture(req) {
     saveState();
     console.log("[state] tokens refreshed from live request");
   } catch (e) {
-    console.error("[state] applyCapture failed:", e.message);
+    debugLog("[state] applyCapture failed:", e.message);
   }
 }
 
@@ -463,7 +476,9 @@ function applyClaudeCapture(req) {
     saveClaudeState();
     console.log("[state][claude] template refreshed from live request");
   } catch (e) {
-    console.error("[state][claude] applyClaudeCapture failed:", e.message);
+    // 与 applyCapture 同策略降级:自续失败不会静默 —— ready() 会因
+    // template/orgId 缺失返回 false,请求阶段会正常报错,无需在此刷屏。
+    debugLog("[state][claude] applyClaudeCapture failed:", e.message);
   }
 }
 
