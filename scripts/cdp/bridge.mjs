@@ -943,27 +943,49 @@ async function executeChatgptUI(entry, prompt, onDelta) {
 
   // 首轮直接在当前对话里发;若静默失败(旧对话上下文污染/限频导致服务端不回复),
   // 自愈:导航开新对话重发一次(实测新对话稳定,旧对话偶发静默失败)。
-  let text = await chatgptSendOnce(c, prompt, onDelta);
+  // 仅对话类模型(gpt-5-6 / gpt-5-6-mini / auto)启用结构化卡片清洗;gpt-coding 等
+  // 编程通道原样保留代码/链接/artifact,不做任何清洗(避免误删代码运行结果里的
+  // 复制按钮、引用链接等 UI 元素)。
+  const doClean = chatgptShouldClean();
+  let text = await chatgptSendOnce(c, prompt, onDelta, doClean);
   if (text === null) {
     console.log("[chatgpt-ui] silent failure, self-heal: open new conversation");
     try {
       await c.cmd("Page.navigate", { url: chatgpt.homeUrl });
       await sleep(9000); // 等新对话加载 + composer 就绪
     } catch (e) { console.log("[chatgpt-ui] navigate failed:", e.message); }
-    text = await chatgptSendOnce(c, prompt, onDelta);
+    text = await chatgptSendOnce(c, prompt, onDelta, doClean);
   }
   if (text === null || !text.trim()) {
     const e = new Error("ChatGPT 无回复(可能被限频/风控,请检查页面 UI 状态)");
     e.code = "empty_reply";
     throw e;
   }
+  if (doClean) {
+    // 最终清洗:剥掉天气/搜索卡片的 UI 噪声(recharts 曲线、+1/Give feedback、域名
+    // 链接、逐日温度表),只留自然语言摘要。仅对对话类模型生效。
+    const cleaned = await cleanChatgptText(c);
+    const finalText = cleaned && cleaned.trim() ? cleaned : text; // 清洗异常时回退原文本
+    const self = { done: true, text: finalText };
+    return self;
+  }
+  // 编程通道:原样返回(含代码/链接/artifact)
   const self = { done: true, text };
   return self;
 }
 
+// chatgptShouldClean:对话类模型(gpt-5-6 / gpt-5-6-mini / auto / auto-*)启用卡片清洗;
+// gpt-coding 等编程通道不清洗(保留代码块/链接/artifact)。model 可能带 -chat 后缀。
+function chatgptShouldClean() {
+  const m = (chatgpt._model || "").toLowerCase();
+  if (/coding/.test(m)) return false; // gpt-coding / gpt-coding-chat → 不清洗
+  return true;                        // gpt-5-6 / gpt-5-6-mini / auto → 清洗
+}
+
 // chatgptSendOnce:在已就绪的 page 连接上注入 prompt + 轮询读回复。
+// doClean=true 时轮询读取已清洗文本(对话类模型);false 时读原始 innerText(编程通道)。
 // 返回文本(成功)或 null(消息已发出但服务端静默无回复 → 交给外层自愈)。
-async function chatgptSendOnce(c, prompt, onDelta) {
+async function chatgptSendOnce(c, prompt, onDelta, doClean) {
   // 0) 页面带前台(失焦时 Input 事件不进编辑器,gemini 同坑)
   await c.cmd("Page.bringToFront").catch(() => {});
 
@@ -1054,6 +1076,9 @@ async function chatgptSendOnce(c, prompt, onDelta) {
   let silentSecs = 0; // 消息已发出但 assistant 持续为空 → 静默失败计时
   for (let i = 0; i < 150; i++) { // 最长 150s
     await sleep(1000);
+    // 兜底:已拿到内容但天气/搜索卡片持续动画导致 cur 一直微小变化、永不"稳定"时,
+    // 等待超 60s 且 text 非空则强制返回(避免硬跑满 150s;限频降级只返卡片时也适用)。
+    if (i >= 60 && text && text.trim()) { console.log("[chatgpt-ui] force-return after 60s, len=" + text.length); break; }
     const r = await c.cmd("Runtime.evaluate", {
       expression: "(function(){" +
         "var a = document.querySelectorAll('" + CHATGPT_ASSISTANT_SEL + "');" +
@@ -1073,16 +1098,18 @@ async function chatgptSendOnce(c, prompt, onDelta) {
     // 新一轮已开始:最后一条 user 消息是本次 prompt
     if (!started && j.lastU && j.lastU.indexOf(promptHead) !== -1) started = true;
     if (!started) continue;
-    const cur = j.lastA || "";
+    // 读回复文本:doClean 时读「已清洗」文本(天气/搜索卡片动态渲染,清洗后只含自然语言
+    // 摘要,稳定即完成);编程通道(doClean=false)读原始 innerText(保留代码/链接/artifact)。
+    const cur = doClean ? ((await cleanChatgptText(c)) || "") : (j.lastA || "");
     if (cur && cur.length > text.length) {
-      // 文本在增长(流式累积)→ 更新并下发增量
-      if (onDelta) onDelta(cur.slice(text.length));
+      // 文本在增长(流式累积,或末尾追加了 UI 噪声)→ 更新
+      if (onDelta && cur.length > text.length) onDelta(cur.slice(text.length));
       text = cur;
       stable = 0;
       silentSecs = 0;
-    } else if (text && cur === text) {
-      // 文本已稳定(不再增长)且非空 → 视为完成(ChatGPT 回复后页面常残留 Think spinner,
-      // 不能依赖 spin===false,否则会硬等到 150s 上限)
+    } else if (text && cur.startsWith(text.slice(0, Math.max(0, text.length)))) {
+      // 前缀稳定(可能末尾又追加了 +1/Give feedback 之类的 UI 噪声,但主体已完整)
+      // → 视为完成。不能等完全相等,否则动态卡片尾部一直变会跑满 150s。
       stable++;
       if (stable >= 2) break;
     } else if (!text) {
@@ -1095,6 +1122,61 @@ async function chatgptSendOnce(c, prompt, onDelta) {
   }
   if (!text || !text.trim()) return null;
   return text;
+}
+
+// cleanChatgptText:把 ChatGPT 最后一跳 assistant 节点的 innerText 清洗成可读文本。
+// 背景:ChatGPT 的天气/搜索等工具返回的是**带交互控件的富卡片**(recharts 温度曲线、
+// `+1`/`Give feedback` 按钮、域名链接、逐日预报数字表),这些被拍平成 innerText 后变成
+// 噪声(实测"问济南天气"会吐出东京天气卡片碎片 + recharts 曲线)。语音/小爱场景(TTS 朗读)
+// 与聊天页都不该出现这些 UI 碎片。
+// 清洗策略(DOM 级,对编程场景零误伤):
+//   - 跳过 class 含 recharts / _Card / _Box / IndicatorWrapper 的容器(天气/搜索 App 卡片);
+//   - 代码块 <pre>/<code> 原样保留(Programming/MCP 场景要靠它);
+//   - 卡片前的自然语言摘要(如"北京今天晴,28℃")位于这些容器之外,自然保留。
+// 仅对 chatgpt 通道生效;gemini/claude 走各自解析器不受影响。
+async function cleanChatgptText(c) {
+  const EV = "(() => {" +
+    "var a = document.querySelectorAll('" + CHATGPT_ASSISTANT_SEL + "');" +
+    "var root = a.length ? a[a.length - 1] : null;" +
+    "if (!root) return JSON.stringify({ text: '' });" +
+    "var SKIP = /recharts|IndicatorWrapper|_Card|_Box|temperature|forecast|weather-widget|weather-app/i;" +
+    "var out = [];" +
+    "function walk(n) {" +
+    "  if (n.nodeType === 3) { var t = n.nodeValue || ''; if (t.trim()) out.push(t); return; }" +
+    "  if (n.nodeType !== 1) return;" +
+    "  var tag = (n.tagName || '').toUpperCase();" +
+    "  if (tag === 'PRE' || tag === 'CODE') { out.push(n.innerText || n.textContent || ''); return; }" +
+    "  if (tag === 'A') return;" +   // 跳过链接(天气/搜索卡片里的媒体域名如 thepaper.cn/bjnews 都是 <a>,语音场景无需朗读)
+    "  if (tag === 'BUTTON' || tag === 'SVG') return;" +  // 跳过按钮/图标(如 +1 / Give feedback / 分享图标)
+    "  var cls = n.getAttribute('class') || '';" +
+    "  if (SKIP.test(cls)) return;" +                         // 跳过天气/搜索卡片容器
+    "  for (var i = 0; i < n.childNodes.length; i++) walk(n.childNodes[i]);" +
+    "}" +
+    "walk(root);" +
+    "var txt = out.join('\\n').replace(/\\n{3,}/g, '\\n\\n').trim();" +
+    "return JSON.stringify({ text: txt });" +
+    "})()";
+  try {
+    const r = await c.cmd("Runtime.evaluate", { expression: EV, returnByValue: true });
+    const v = r && r.result && r.result.result && r.result.result.value;
+    const j = v ? JSON.parse(v) : null;
+    let txt = (j && j.text) || "";
+    if (!txt) return "";
+    // 兜底正则清洗(DOM 排除可能漏掉卡片外的小 UI 元素:域名链接、+1、Give feedback)
+    // 注意:只剥明确的 UI 噪声词,不碰代码/JSON(编程场景靠前面的 DOM 排除已保留 <pre>/<code>)。
+    txt = txt
+      .replace(/\b(japan\.travel|chinanews\.com\.cn|bjnews\.com\.cn|give feedback)\b/gi, " ")
+      // "+1" 在 DOM 里常拆成 "+" 与 "1" 两个文本节点(中间夹换行),用 [\s]* 跨越
+      .replace(/\+\s*1\b/g, " ")
+      .replace(/[A-Za-z0-9._-]+\.(com|cn|net|org|travel)(\/[^\s]*)?/g, (m) =>
+        /(japan\.travel|chinanews|bjnews)/i.test(m) ? " " : m)
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+    return txt;
+  } catch (e) {
+    return "";
+  }
 }
 
 // ─── Gemini UI 注入模式(2026-08-21)───────────────────────────────
