@@ -1013,12 +1013,12 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
     expression: "(function(){ var el = document.querySelector('" + CHATGPT_COMPOSER_SEL + "'); if (!el) return 'NO'; el.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null); return 'ok'; })()",
     returnByValue: true,
   });
-  await sleep(400);
+  await sleep(250);
   await c.cmd("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
   await c.cmd("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", clickCount: 1 });
-  await sleep(400);
+  await sleep(300);
   await c.cmd("Input.insertText", { text: prompt });
-  await sleep(500);
+  await sleep(350);
 
   // 3) 验证输入生效(React 状态未同步则 composer 仍为空)
   const chk = await c.cmd("Runtime.evaluate", {
@@ -1050,7 +1050,7 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
       console.log("[chatgpt-ui] send-button clicked at", Math.round(p.x), Math.round(p.y));
       break;
     }
-    await sleep(500);
+    await sleep(300);
   }
   if (!clicked) {
     await c.cmd("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" });
@@ -1059,33 +1059,28 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
     console.log("[chatgpt-ui] send-button not found, Enter fallback");
   }
 
-  // 5) 轮询 DOM 读本次回复。注意:ChatGPT 的消息 DOM 会**复用/替换节点**而非追加
-  //    (实测 count 恒定但 last 节点内容已换成新消息),所以不能按消息数区分新旧。
-  //    判定逻辑(经 2026-09-02 实测修正):发送前快照的 lastA 常为 ""(新回复前占位节点被
-  //    清空),用 "cur !== 快照" 永远成立 → stable 永不增长 → 轮询跑满 150s。故改为:
-  //    cur 比已知 text 更长则更新;cur 与 text 相等(不再增长)且已有内容 → 稳定即完成。
-  const snap = await c.cmd("Runtime.evaluate", {
-    expression: "(function(){ var u = document.querySelectorAll('[data-message-author-role=\"user\"]'); return JSON.stringify({ lastU: u.length ? (u[u.length - 1].innerText || '') : '' }); })()",
-    returnByValue: true,
-  });
+  // 5) 轮询 DOM 读本次回复。
+  // 关键实测(2026-09-02 探针):ChatGPT 页面在发送新消息时会**折叠/复用消息节点**,
+  // 导致 assistantCount 跳变、最后一条 assistant 节点在过渡期短暂显示上一条的残影。
+  // 若每轮把"最后节点 innerText"累加,会把上一条残影拼进本条 → 串台/截断(实测发
+  // "天气"拿到上一条"你好"的残影)。
+  // 修复:用「停止按钮」作为生成结束信号(stopBtn=true=生成中,false=本轮结束),
+  // **只在生成结束后读取一次完整 lastA**;过渡态(stopBtn=true)不读,彻底避开串台。
+  // 同时每轮不再调用 cleanChatgptText(仅在结束时读一次),降低开销、缩短延迟。
   const promptHead = prompt.slice(0, 30);
-
   let text = "";
-  let stable = 0;
   let started = false;
   let silentSecs = 0; // 消息已发出但 assistant 持续为空 → 静默失败计时
   for (let i = 0; i < 150; i++) { // 最长 150s
     await sleep(1000);
-    // 兜底:已拿到内容但天气/搜索卡片持续动画导致 cur 一直微小变化、永不"稳定"时,
-    // 等待超 60s 且 text 非空则强制返回(避免硬跑满 150s;限频降级只返卡片时也适用)。
-    if (i >= 60 && text && text.trim()) { console.log("[chatgpt-ui] force-return after 60s, len=" + text.length); break; }
     const r = await c.cmd("Runtime.evaluate", {
       expression: "(function(){" +
         "var a = document.querySelectorAll('" + CHATGPT_ASSISTANT_SEL + "');" +
         "var u = document.querySelectorAll('[data-message-author-role=\"user\"]');" +
         "var lastU = u.length ? (u[u.length - 1].innerText || '') : '';" +
         "var lastA = a.length ? (a[a.length - 1].innerText || '') : '';" +
-        "return JSON.stringify({ lastU: lastU, lastA: lastA });" +
+        "var stopBtn = !!document.querySelector('button[aria-label*=\"Stop\"]');" +
+        "return JSON.stringify({ lastU: lastU, lastA: lastA, stopBtn: stopBtn });" +
         "})()",
       returnByValue: true,
     });
@@ -1094,31 +1089,22 @@ async function chatgptSendOnce(c, prompt, onDelta, doClean) {
     let j;
     try { j = JSON.parse(v); } catch { continue; }
     if (i === 0) console.log("[chatgpt-ui] polling started, promptHead=" + JSON.stringify(promptHead));
-    if (i > 0 && i % 30 === 0 && !text) console.log("[chatgpt-ui] still waiting, sec=" + i, "silent=" + silentSecs);
-    // 新一轮已开始:最后一条 user 消息是本次 prompt
+    if (i > 0 && i % 30 === 0 && !text && !started) console.log("[chatgpt-ui] still waiting, sec=" + i, "silent=" + silentSecs);
+    // 新一轮已开始:最后一条 user 消息是本次 prompt(确保读到的是本轮回复)
     if (!started && j.lastU && j.lastU.indexOf(promptHead) !== -1) started = true;
     if (!started) continue;
-    // 读回复文本:doClean 时读「已清洗」文本(天气/搜索卡片动态渲染,清洗后只含自然语言
-    // 摘要,稳定即完成);编程通道(doClean=false)读原始 innerText(保留代码/链接/artifact)。
-    const cur = doClean ? ((await cleanChatgptText(c)) || "") : (j.lastA || "");
-    if (cur && cur.length > text.length) {
-      // 文本在增长(流式累积,或末尾追加了 UI 噪声)→ 更新
-      if (onDelta && cur.length > text.length) onDelta(cur.slice(text.length));
-      text = cur;
-      stable = 0;
-      silentSecs = 0;
-    } else if (text && cur.startsWith(text.slice(0, Math.max(0, text.length)))) {
-      // 前缀稳定(可能末尾又追加了 +1/Give feedback 之类的 UI 噪声,但主体已完整)
-      // → 视为完成。不能等完全相等,否则动态卡片尾部一直变会跑满 150s。
-      stable++;
-      if (stable >= 2) break;
-    } else if (!text) {
-      // 消息已发出但 assistant 始终为空:累计静默秒数。阈值给足冷启动/新会话首条
-      // 的握手延迟(实测 gpt-5-6-mini 新会话首条可能 30s+ 才出字),设为 70s。
-      // 真·静默失败(旧对话损坏)时由外层自愈开新对话重试。
-      silentSecs++;
-      if (silentSecs >= 70) { console.log("[chatgpt-ui] silent no-reply detected, aborting this attempt"); return null; }
+    // 还在生成(stopBtn=true)→ 等,不读(避免抓到上一条残影/过渡态)
+    if (j.stopBtn) { silentSecs = 0; continue; }
+    // 生成结束(stopBtn=false)→ 本轮回复已稳定,读取一次完整文本
+    const finalRaw = doClean ? (await cleanChatgptText(c)) : (j.lastA || "");
+    if (finalRaw && finalRaw.trim()) {
+      text = finalRaw.trim();
+      if (onDelta) onDelta(text);
+      break;
     }
+    // stopBtn 已消失但文本仍空:可能渲染滞后,再等几轮(累计静默)
+    silentSecs++;
+    if (silentSecs >= 70) { console.log("[chatgpt-ui] silent no-reply detected, aborting this attempt"); return null; }
   }
   if (!text || !text.trim()) return null;
   return text;
