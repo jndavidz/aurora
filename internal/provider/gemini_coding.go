@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
@@ -197,7 +198,12 @@ func geminiCodingPromptFromAPI(req *official.APIRequest, envPrompt string) strin
 	for _, msg := range req.Messages {
 		if len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
-				sb.WriteString("```json\n" + tc.Function.Arguments + "\n```\n\n")
+				// 历史呈现复刻完整 glm 形状(含 name),否则模型下轮失忆(见 isRefusalText 注释)
+				inner, _ := json.Marshal(map[string]any{
+					"type":       "tool_calls",
+					"tool_calls": map[string]any{"name": tc.Function.Name, "arguments": tc.Function.Arguments},
+				})
+				sb.WriteString("```json\n" + string(inner) + "\n```\n\n")
 			}
 			continue
 		}

@@ -62,7 +62,14 @@ func responsesInputItems(raw json.RawMessage) []responsesInputItem {
 func parseInputItem(it rawInputItem) responsesInputItem {
 	switch it.Type {
 	case "function_call":
-		return responsesInputItem{Type: "function_call", Role: "assistant", Text: it.Arguments}
+		// 历史呈现必须复刻模型自己输出的完整 glm 围栏形状(含 name)—— 只给裸
+		// arguments 会让模型在下一轮"失忆"(不知道自己调过什么工具/什么协议,
+		// 实测 2026-09-02 pi 多轮:轮2 声称"未提供 run_cmd"而胡乱拒答)。
+		inner, _ := json.Marshal(map[string]any{
+			"type": "tool_calls",
+			"tool_calls": map[string]any{"name": it.Name, "arguments": it.Arguments},
+		})
+		return responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner)}
 	case "function_call_output":
 		return responsesInputItem{Type: "function_call_output", Role: "tool", Text: rawResponsesText(it.Output)}
 	default:
@@ -84,7 +91,12 @@ func apiMessagesToItems(messages []official.APIMessage) []responsesInputItem {
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
 				for _, tc := range msg.ToolCalls {
-					out = append(out, responsesInputItem{Type: "function_call", Role: "assistant", Text: tc.Function.Arguments})
+					// 历史呈现复刻完整 glm 围栏形状(含 name),否则模型下轮失忆
+					inner, _ := json.Marshal(map[string]any{
+						"type":       "tool_calls",
+						"tool_calls": map[string]any{"name": tc.Function.Name, "arguments": tc.Function.Arguments},
+					})
+					out = append(out, responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner)})
 				}
 				continue
 			}
