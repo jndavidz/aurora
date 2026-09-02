@@ -26,8 +26,8 @@ import (
 var updateGolden = flag.Bool("update", false, "重写 testdata/*.golden 快照")
 
 type goldenSnapshot struct {
-	Text string          `json:"text"`
-	Calls []goldenCall   `json:"calls"`
+	Text  string       `json:"text"`
+	Calls []goldenCall `json:"calls"`
 }
 
 type goldenCall struct {
