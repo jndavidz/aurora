@@ -68,6 +68,9 @@ func parseConversationEvent(line string, state *sseparser.PatchState, model stri
 	}
 
 	if response, ok := sseparser.ResponseFromValue(raw["v"]); ok {
+		if state.Response.Message.ID != "" && response.Message.ID != "" && response.Message.ID != state.Response.Message.ID {
+			sseparser.ResetMessage(state)
+		}
 		state.Response = response
 		if channel := sseparser.ChannelFromValue(raw["v"]); channel != "" {
 			state.Channel = channel
@@ -87,7 +90,9 @@ func parseConversationEvent(line string, state *sseparser.PatchState, model stri
 		sseparser.EnsurePatchDefaults(state)
 		for _, item := range batch {
 			op, ok := item.(map[string]interface{})
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			subPath, _ := op["p"].(string)
 			subOp, _ := op["o"].(string)
 			if sseparser.ApplyPatch(state, subPath, subOp, op["v"]) {
@@ -188,6 +193,8 @@ func HandlerDetailedWithOptions(c *gin.Context, response *http.Response, client 
 	}
 	var finish_reason string
 	var previous_text typings.StringStruct
+	var visibleText strings.Builder
+	var usedChunkEvents bool
 	var original_response chatgpt_types.ChatGPTResponse
 	var isRole = true
 	var waitSource = false
@@ -263,7 +270,27 @@ func HandlerDetailedWithOptions(c *gin.Context, response *http.Response, client 
 	finalizeArtifacts := func() {
 		emitSentinels(materializeArtifactEvents(client, account, convId, artifactState.Finalize(), artifactConfig))
 	}
-	finalText := func() string { return sseparser.ReplaceCiteMarkers(previous_text.Text, patchState.CiteAlts) }
+	finalText := func() string {
+		if usedChunkEvents {
+			return visibleText.String()
+		}
+		return sseparser.ReplaceCiteMarkers(previous_text.Text, patchState.CiteAlts)
+	}
+	flushCites := func() {
+		flushed := citePipeline.Flush(patchState.CiteAlts)
+		if flushed == "" {
+			return
+		}
+		if stream {
+			flushChunk := official_types.NewChatCompletionChunk(flushed, model)
+			flushChunk.ConversationID = convId
+			c.Writer.WriteString("data: " + flushChunk.String() + "\n\n")
+			c.Writer.Flush()
+		}
+		if usedChunkEvents {
+			visibleText.WriteString(flushed)
+		}
+	}
 readLoop:
 	for {
 		line, err := reader.ReadString('\n')
@@ -291,15 +318,7 @@ readLoop:
 						continue readLoop
 					}
 				}
-				if flushed := citePipeline.Flush(patchState.CiteAlts); flushed != "" {
-					if stream {
-						flushChunk := official_types.NewChatCompletionChunk(flushed, model)
-						flushChunk.ConversationID = convId
-						c.Writer.WriteString("data: " + flushChunk.String() + "\n\n")
-						c.Writer.Flush()
-					}
-					previous_text.Text += flushed
-				}
+				flushCites()
 				finalizeArtifacts()
 				break readLoop
 			}
@@ -330,6 +349,7 @@ readLoop:
 				continue
 			}
 			if streamEvent.chunk != nil {
+				usedChunkEvents = true
 				if streamEvent.conversationID != "" {
 					convId = streamEvent.conversationID
 				}
@@ -393,6 +413,7 @@ readLoop:
 					currentEvent = ""
 					continue
 				}
+				var terminalChunk *official_types.ChatCompletionChunk
 				if stream {
 					outChunk := *streamEvent.chunk
 					if len(outChunk.Choices) > 0 {
@@ -401,13 +422,23 @@ readLoop:
 							outChunk.Choices[0].Delta.Role = ""
 						}
 					}
-					if streamEvent.isStop && outChunk.ConversationID == "" {
-						outChunk.ConversationID = convId
+					if streamEvent.isStop {
+						terminal := outChunk
+						terminal.Choices = append([]official_types.Choices(nil), outChunk.Choices...)
+						if terminal.ConversationID == "" {
+							terminal.ConversationID = convId
+						}
+						if len(terminal.Choices) > 0 {
+							terminal.Choices[0].Delta = official_types.Delta{}
+						}
+						terminalChunk = &terminal
+						if len(outChunk.Choices) > 0 {
+							outChunk.Choices[0].FinishReason = nil
+						}
 					}
 					shouldWrite := deltaText != "" ||
 						(streamEvent.role != "" && isRole) ||
-						streamEvent.chunk.Sentinel != nil ||
-						streamEvent.isStop
+						streamEvent.chunk.Sentinel != nil
 					if shouldWrite {
 						c.Writer.WriteString("data: " + outChunk.String() + "\n\n")
 						c.Writer.Flush()
@@ -418,8 +449,14 @@ readLoop:
 				}
 				if deltaText != "" {
 					previous_text.Text += deltaText
+					visibleText.WriteString(deltaText)
 				}
 				if streamEvent.isStop {
+					flushCites()
+					if terminalChunk != nil {
+						c.Writer.WriteString("data: " + terminalChunk.String() + "\n\n")
+						c.Writer.Flush()
+					}
 					if max_tokens && convId != "" && assistantMessageID != "" {
 						finalizeArtifacts()
 						return HandlerResult{
@@ -599,6 +636,7 @@ readLoop:
 				finish_reason = original_response.Message.Metadata.FinishDetails.Type
 			}
 			if isEnd {
+				flushCites()
 				if stream {
 					final_line := official_types.StopChunkWithConversation(finish_reason, model, convId)
 					c.Writer.WriteString("data: " + final_line.String() + "\n\n")
@@ -624,6 +662,7 @@ readLoop:
 			break
 		}
 	}
+	flushCites()
 	if !max_tokens {
 		finalizeArtifacts()
 		return HandlerResult{

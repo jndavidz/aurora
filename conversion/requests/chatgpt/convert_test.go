@@ -172,13 +172,15 @@ func TestConvertAPIRequestHandlesToolResult(t *testing.T) {
 		},
 	}
 	out := testConvert(t, req)
-	// 工具结果现以 user 角色回传(AddToolMessage,commit 43951e7);
-	// 按 "Tool (Resultado da ferramenta …)" 前缀定位该消息。
 	var toolMsg string
 	for _, m := range out.Messages {
+		if m.Author.Role != "user" || len(m.Content.Parts) == 0 {
+			continue
+		}
 		text, _ := m.Content.Parts[0].(string)
 		if strings.Contains(text, "Resultado da ferramenta") {
 			toolMsg = text
+			break
 		}
 	}
 	if !strings.Contains(toolMsg, "Resultado da ferramenta bash") {
