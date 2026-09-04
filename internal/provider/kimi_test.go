@@ -15,9 +15,9 @@ func TestParseKimiModel(t *testing.T) {
 		variant string
 		wantNil bool
 	}{
-		{"kimi-chat", kimiVariantChat, false},
+		{"kimi", kimiVariantChat, false},
 		{"kimi-coding", kimiVariantCoding, false},
-		{"kimi", "", true},       // 无变体后缀 → nil
+		{"kimi-pro-chat", "", true}, // 非 kimi 家族(改名后无后缀=chat 的旧用例已无意义)
 		{"gpt-5-chat", "", true}, // 非 kimi 命名 → nil
 		{"kimi-coding-x", "", true},
 	}
@@ -45,7 +45,7 @@ func TestNewKimiDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultKimiModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultKimiModels))
 	}
-	if !d.Handles("kimi-chat") || !d.Handles("kimi-coding") {
+	if !d.Handles("kimi") || !d.Handles("kimi-coding") {
 		t.Fatal("default models not handled")
 	}
 	if d.Handles("kimi-9-chat") {
@@ -53,7 +53,7 @@ func TestNewKimiDefaultModels(t *testing.T) {
 	}
 
 	// 自定义模型目录
-	d2 := NewKimi(&config.Config{KimiWebTokens: "t", KimiModels: []string{"kimi-chat", "bogus"}})
+	d2 := NewKimi(&config.Config{KimiWebTokens: "t", KimiModels: []string{"kimi", "bogus"}})
 	if len(d2.Models()) != 1 {
 		t.Fatalf("custom Models() = %d, want 1 (bogus skipped)", len(d2.Models()))
 	}
@@ -62,7 +62,7 @@ func TestNewKimiDefaultModels(t *testing.T) {
 // chat 变体硬规则:即使客户端带 tools,kimi 拍平文本也绝不能含工具信息。
 func TestKimiFlattenResponsesNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "kimi-chat",
+		Model: "kimi",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"列出文件"}]}
 		]`),
@@ -86,7 +86,7 @@ func TestKimiFlattenResponsesNoToolInjection(t *testing.T) {
 // chat 变体:function_call/function_call_output item 跳过。
 func TestKimiFlattenResponsesSkipsToolItems(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "kimi-chat",
+		Model: "kimi",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":"读一下"},
 			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},

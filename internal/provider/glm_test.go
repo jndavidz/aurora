@@ -16,11 +16,9 @@ func TestParseGlmModel(t *testing.T) {
 		mode    string
 		wantNil bool
 	}{
-		{"glm-5.2-chat", glmVariantChat, "speed", false},
-		{"glm-5.2-chat-thinking", glmVariantChat, "thinking", false},
+		{"glm-flash", glmVariantChat, "speed", false},
 		{"glm-5.2-coding", glmVariantCoding, "", false},
-		{"glm-5-chat", "", "", true},   // 已下线(用户决定只留 5.2)
-		{"glm-5-coding", "", "", true}, // 已下线
+		// {"glm-5-coding", ...}: 2026-09-04 白名单放宽为 glm- 前缀,coding 变体可解析
 		{"glm-5.2", "", "", true},      // 无变体后缀 → nil
 		{"gpt-5-chat", "", "", true},   // 非 glm 命名 → nil
 		{"glm-5.2-coding-x", "", "", true},
@@ -52,7 +50,7 @@ func TestNewGlmDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultGlmModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultGlmModels))
 	}
-	if !d.Handles("glm-5.2-chat") || !d.Handles("glm-5.2-chat-thinking") || !d.Handles("glm-5.2-coding") {
+	if !d.Handles("glm-flash") || !d.Handles("glm-5.2-coding") {
 		t.Fatal("default models not handled")
 	}
 	if d.Handles("glm-9-chat") {
@@ -60,7 +58,7 @@ func TestNewGlmDefaultModels(t *testing.T) {
 	}
 
 	// 自定义模型目录
-	d2 := NewGlm(&config.Config{GlmWebTokens: "t", GlmModels: []string{"glm-5.2-chat", "bogus"}})
+	d2 := NewGlm(&config.Config{GlmWebTokens: "t", GlmModels: []string{"glm-flash", "bogus"}})
 	if len(d2.Models()) != 1 {
 		t.Fatalf("custom Models() = %d, want 1 (bogus skipped)", len(d2.Models()))
 	}
@@ -69,7 +67,7 @@ func TestNewGlmDefaultModels(t *testing.T) {
 // chat 变体硬规则:即使客户端带 tools,glm messages 也绝不能含工具信息。
 func TestGlmMessagesFromResponsesNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "glm-5.2-chat",
+		Model: "glm-flash",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"列出文件"}]}
 		]`),
@@ -98,7 +96,7 @@ func TestGlmMessagesFromResponsesNoToolInjection(t *testing.T) {
 // chat 变体:function_call/function_call_output item 跳过。
 func TestGlmMessagesFromResponsesSkipsToolItems(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "glm-5.2-chat",
+		Model: "glm-flash",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":"读一下"},
 			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},

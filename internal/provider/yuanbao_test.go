@@ -23,7 +23,7 @@ func TestParseYuanbaoModel(t *testing.T) {
 		{"yb-deepseek-chat", variantChat, yuanbaoweb.ModelDeepSeek, true},
 		{"yb-deepseek-coding", variantCoding, yuanbaoweb.ModelDeepSeek, true},
 		{"gpt-5-chat", "", "", false},    // 无前缀保护,不认
-		{"glm-5.2-chat", "", "", false},  // 不认其它 provider 模型
+		{"glm-flash", "", "", false},  // 不认其它 provider 模型
 		{"deepseek-chat", "", "", false}, // 不认裸 deepseek(现有 DeepSeek provider 的域)
 		{"hy3", "", "", false},           // 无后缀
 		{"yb-deepseek", "", "", false},   // 无后缀

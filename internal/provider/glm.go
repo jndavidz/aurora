@@ -38,8 +38,7 @@ type Glm struct {
 
 // defaultGlmModels 是 GLM_MODELS 未配置时的默认目录。
 var defaultGlmModels = []string{
-	"glm-5.2-chat",          // 快速挡(默认)
-	"glm-5.2-chat-thinking", // 思考挡
+	"glm-flash",             // GLM-5.3-FLASH 快速挡(2026-09-04 用户拍板,5.2 已升级)
 	"glm-5.2-coding",
 }
 
@@ -73,18 +72,14 @@ func NewGlm(cfg *config.Config) *Glm {
 
 func parseGlmModel(id string) *glmModel {
 	id = strings.TrimSpace(id)
-	// 前缀保护:必须 glm- 开头 + 版本白名单。
-	// glm-5 系列已下线(用户 2026-08-14 决定只留 5.2),只接受 glm-5.2- 前缀。
-	if !strings.HasPrefix(id, "glm-5.2-") {
+	// 前缀保护:必须 glm- 开头(2026-09-04: 暴露名 glm-flash 无版本后缀,精确放行)。
+	if id != "glm-flash" && !strings.HasPrefix(id, "glm-") {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat-thinking"):
-		// 思考挡(chat_mode=thinking):深度思考 + 联网搜索 + 识图。
-		return &glmModel{ID: id, Variant: glmVariantChat, Mode: "thinking", Caps: []Capability{CapReasoning, CapWebSearch, CapVision}}
-	case strings.HasSuffix(id, "-chat"):
-		// 快速挡(chat_mode=speed,默认):联网搜索 + 识图,无深度思考。
-		// 用户 2026-08-14 决定默认快速而非 thinking。
+	case id == "glm-flash":
+		// GLM-5.3-FLASH 快速挡(2026-09-04 用户拍板映射;chat_mode=speed)。
+		// 上游入口与 5.2 共用(assistant_id+chat_mode),5.3 有独立入口时抓包更新。
 		return &glmModel{ID: id, Variant: glmVariantChat, Mode: "speed", Caps: []Capability{CapWebSearch, CapVision}}
 	case strings.HasSuffix(id, "-coding"):
 		// 定位:云端沙箱代码执行助手(见 docs/GLM.md §四)。

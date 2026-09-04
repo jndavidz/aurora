@@ -33,6 +33,8 @@ func normalizeCodingModel(model string) (string, bool) {
 
 // ListModels 返回模型列表(原 initialize/handlers.go:engines)。
 // ChatGPT 网页逆向的硬编码列表(owned_by=openai) + provider 聚合的模型(owned_by=deepseek 等)。
+// 兼容性:OpenAI 官方 /v1/models 无显示名字段,friendly 用非标准字段 `friendly_name`
+// 附加返回;id 保持真实值(请求仍用 id),不识别该字段的客户端自动忽略。
 func (h *ModelsHandler) ListModels(c *gin.Context) {
 	type ResData struct {
 		ID           string   `json:"id"`
@@ -40,6 +42,7 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		Created      int      `json:"created"`
 		OwnedBy      string   `json:"owned_by"`
 		Capabilities []string `json:"capabilities,omitempty"`
+		FriendlyName string   `json:"friendly_name,omitempty"`
 	}
 
 	type JSONData struct {

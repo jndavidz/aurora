@@ -40,7 +40,7 @@ type Kimi struct {
 
 // defaultKimiModels 是 KIMI_MODELS 未配置时的默认目录。
 var defaultKimiModels = []string{
-	"kimi-chat",
+	"kimi",
 	"kimi-coding",
 }
 
@@ -64,12 +64,14 @@ func NewKimi(cfg *config.Config) *Kimi {
 
 func parseKimiModel(id string) *kimiModel {
 	id = strings.TrimSpace(id)
-	// 前缀保护:-chat/-coding 后缀太通用(gpt-5-chat 等),必须 kimi- 开头。
-	if !strings.HasPrefix(id, "kimi-") {
+	// 前缀保护:-chat/-coding 后缀太通用(gpt-5-chat 等),必须 kimi- 开头;
+	// 2026-09-04: 暴露 id 改为 "kimi"(无后缀),精确放行。
+	if id != "kimi" && !strings.HasPrefix(id, "kimi-") {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat"):
+	case id == "kimi":
+		// 2026-09-04 去 -chat 后缀;kimi 暴露快速档(用户拍板)
 		return &kimiModel{ID: id, Variant: kimiVariantChat, Caps: []Capability{CapReasoning, CapWebSearch}}
 	case strings.HasSuffix(id, "-coding"):
 		return &kimiModel{ID: id, Variant: kimiVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}

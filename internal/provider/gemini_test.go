@@ -15,9 +15,8 @@ func TestParseGeminiModel(t *testing.T) {
 		variant string
 		wantNil bool
 	}{
-		{"gemini-3-flash-chat", geminiVariantChat, false},
+		{"gemini-3-flash", geminiVariantChat, false},
 		{"gemini-3-flash-coding", geminiVariantCoding, false},
-		{"gemini-3-flash", "", true}, // 无变体后缀 → nil
 		{"gpt-5-chat", "", true},     // 非 gemini 命名 → nil
 		{"gemini-2-pro-coding", geminiVariantCoding, false},
 	}
@@ -45,13 +44,13 @@ func TestNewGeminiDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultGeminiModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultGeminiModels))
 	}
-	if !d.Handles("gemini-3-flash-chat") || !d.Handles("gemini-3-flash-coding") {
+	if !d.Handles("gemini-3-flash") || !d.Handles("gemini-3-flash-coding") {
 		t.Fatal("default models not handled")
 	}
 	if d.Handles("gemini-9-chat") {
 		t.Fatal("unknown model should not be handled")
 	}
-	d2 := NewGemini(&config.Config{GeminiAccounts: "a", GeminiModels: []string{"gemini-3-flash-chat", "bogus"}})
+	d2 := NewGemini(&config.Config{GeminiAccounts: "a", GeminiModels: []string{"gemini-3-flash", "bogus"}})
 	if len(d2.Models()) != 1 {
 		t.Fatalf("custom Models() = %d, want 1", len(d2.Models()))
 	}
@@ -60,7 +59,7 @@ func TestNewGeminiDefaultModels(t *testing.T) {
 // chat 变体硬规则:即使带 tools,prompt 也不含工具信息。
 func TestGeminiChatNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "gemini-3-flash-chat",
+		Model: "gemini-3-flash",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"列出文件"}]}
 		]`),

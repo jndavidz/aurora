@@ -19,7 +19,7 @@ type HunyuanCDP struct {
 }
 
 // defaultHunyuanCDPModels 默认目录(网页实测混元模型 hunyuan_gpt_175B_0404)。
-var defaultHunyuanCDPModels = []string{"hunyuan-hy3-chat"}
+var defaultHunyuanCDPModels = []string{"hunyuan-hy3"}
 
 // NewHunyuanCDP 构造混元 CDP 桥 provider。桥地址默认复用 GEMINI_CDP_URL,
 // 也可用 HUNYUAN_CDP_URL 单独指定。

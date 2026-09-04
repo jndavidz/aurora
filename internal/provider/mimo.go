@@ -36,7 +36,7 @@ type Mimo struct {
 }
 
 // defaultMimoModels 是 MIMO_MODELS 未配置时的默认目录。
-var defaultMimoModels = []string{"mimo-v2.5-pro-chat", "mimo-v2.5-pro-coding", "mimo-v2.5-asr"}
+var defaultMimoModels = []string{"mimo-v2.5-pro", "mimo-v2.5-pro-coding", "mimo-v2.5-asr"}
 
 // NewMimo 构造 Mimo provider。无 token 池时仍可构造(请求时返回 502)。
 func NewMimo(cfg *config.Config) *Mimo {
@@ -62,11 +62,12 @@ func NewMimo(cfg *config.Config) *Mimo {
 
 func parseMimoModel(id string) *mimoModel {
 	id = strings.TrimSpace(id)
-	if !strings.HasPrefix(id, "mimo-") {
+	if id != "mimo-v2.5-pro" && !strings.HasPrefix(id, "mimo-") {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat"):
+	case id == "mimo-v2.5-pro":
+		// 2026-09-04 去 -chat 后缀
 		return &mimoModel{ID: id, Variant: mimoVariantChat, Caps: []Capability{CapWebSearch, CapReasoning}}
 	case strings.HasSuffix(id, "-coding"):
 		return &mimoModel{ID: id, Variant: mimoVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}

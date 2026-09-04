@@ -42,8 +42,8 @@ type DeepSeek struct {
 
 // defaultDeepSeekModels 是 DEEPSEEK_MODELS 未配置时的默认目录。
 var defaultDeepSeekModels = []string{
-	"deepseek-v4-flash-chat",
-	"deepseek-v4-pro-chat",
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
 	"deepseek-v4-flash-coding",
 	"deepseek-v4-pro-coding",
 }
@@ -77,18 +77,14 @@ func NewDeepSeek(cfg *config.Config) *DeepSeek {
 }
 
 // parseDeepSeekModel 从 exposed id 解析变体与能力。无法识别返回 nil。
+// 2026-09-04 改名:暴露 id 去 -chat 后缀(deepseek-v4-flash/pro)。coding 变体保留。
 func parseDeepSeekModel(id string) *deepseekModel {
 	id = strings.TrimSpace(id)
 	switch {
-	case strings.HasSuffix(id, "-chat"):
-		base := strings.TrimSuffix(id, "-chat")
-		mode := modeExpert
-		caps := []Capability{CapReasoning}
-		if strings.Contains(base, "flash") {
-			mode = modeQuick
-			caps = []Capability{CapWebSearch, CapReasoning, CapVision}
-		}
-		return &deepseekModel{ID: id, Variant: variantChat, Mode: mode, Caps: caps}
+	case id == "deepseek-v4-flash":
+		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeQuick, Caps: []Capability{CapWebSearch, CapReasoning, CapVision}}
+	case id == "deepseek-v4-pro":
+		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeExpert, Caps: []Capability{CapReasoning}}
 	case strings.HasSuffix(id, "-coding"):
 		return &deepseekModel{
 			ID:      id,

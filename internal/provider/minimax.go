@@ -35,7 +35,7 @@ type Minimax struct {
 }
 
 // defaultMinimaxModels 是 MINIMAX_MODELS 未配置时的默认目录。
-var defaultMinimaxModels = []string{"minimax-m3-chat", "minimax-m3-coding"}
+var defaultMinimaxModels = []string{"minimax-m3", "minimax-m3-coding"}
 
 // NewMinimax 构造 MiniMax provider。无 token 池时仍可构造(请求时返回 502)。
 func NewMinimax(cfg *config.Config) *Minimax {
@@ -61,11 +61,12 @@ func NewMinimax(cfg *config.Config) *Minimax {
 
 func parseMinimaxModel(id string) *minimaxModel {
 	id = strings.TrimSpace(id)
-	if !strings.HasPrefix(id, "minimax-") {
+	if id != "minimax-m3" && !strings.HasPrefix(id, "minimax-") {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat"):
+	case id == "minimax-m3":
+		// 2026-09-04 去 -chat 后缀
 		return &minimaxModel{ID: id, Variant: minimaxVariantChat, Caps: []Capability{CapWebSearch, CapReasoning}}
 	case strings.HasSuffix(id, "-coding"):
 		return &minimaxModel{ID: id, Variant: minimaxVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}

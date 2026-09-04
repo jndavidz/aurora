@@ -15,9 +15,9 @@ func TestParseGrokModel(t *testing.T) {
 		variant string
 		wantNil bool
 	}{
-		{"grok-3-chat", grokVariantChat, false},
+		{"grok-3", grokVariantChat, false},
 		{"grok-3-coding", grokVariantCoding, false},
-		{"grok-3", "", true},     // 无变体后缀 → nil
+		{"grok-4-chat", "", true}, // 非 grok-3 家族 → nil(改名后无后缀=chat 的旧用例已无意义)
 		{"gpt-5-chat", "", true}, // 非 grok 命名 → nil
 		{"grok-4-coding", grokVariantCoding, false},
 	}
@@ -45,7 +45,7 @@ func TestNewGrokDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultGrokModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultGrokModels))
 	}
-	if !d.Handles("grok-3-chat") || !d.Handles("grok-3-coding") {
+	if !d.Handles("grok-3") || !d.Handles("grok-3-coding") {
 		t.Fatal("default models not handled")
 	}
 	if d.Handles("grok-9-chat") {
@@ -53,7 +53,7 @@ func TestNewGrokDefaultModels(t *testing.T) {
 	}
 
 	// 自定义模型目录
-	d2 := NewGrok(&config.Config{GrokCookies: "c", GrokModels: []string{"grok-3-chat", "bogus"}})
+	d2 := NewGrok(&config.Config{GrokCookies: "c", GrokModels: []string{"grok-3", "bogus"}})
 	if len(d2.Models()) != 1 {
 		t.Fatalf("custom Models() = %d, want 1 (bogus skipped)", len(d2.Models()))
 	}
@@ -86,7 +86,7 @@ func TestGrokCodingPromptFromResponses(t *testing.T) {
 // chat 变体硬规则:即使客户端带 tools,prompt 也不含工具信息。
 func TestGrokChatNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "grok-3-chat",
+		Model: "grok-3",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"列出文件"}]}
 		]`),

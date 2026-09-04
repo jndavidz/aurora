@@ -22,7 +22,7 @@ type DoubaoCDP struct {
 }
 
 // defaultDoubaoCDPModels 默认目录(豆包网页主模型)。
-var defaultDoubaoCDPModels = []string{"doubao-chat"}
+var defaultDoubaoCDPModels = []string{"doubao"}
 
 // NewDoubaoCDP 构造豆包 CDP 桥 provider。桥地址默认复用 GEMINI_CDP_URL,
 // 也可用 DOUBAO_CDP_URL 单独指定。

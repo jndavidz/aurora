@@ -32,7 +32,7 @@ type Gemini struct {
 
 // defaultGeminiModels 是 GEMINI_MODELS 未配置时的默认目录。
 var defaultGeminiModels = []string{
-	"gemini-3-flash-chat",
+	"gemini-3-flash",
 	"gemini-3-flash-coding",
 }
 
@@ -61,8 +61,8 @@ func parseGeminiModel(id string) *geminiModel {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat"):
-		// chat:真人对话。Gemini 模型自动用原生搜索/地图等,能力如实标注。
+	case id == "gemini-3-flash":
+		// chat:真人对话(2026-09-04 去 -chat 后缀)。Gemini 模型自动用原生搜索/地图等。
 		return &geminiModel{ID: id, Variant: geminiVariantChat, Caps: []Capability{CapWebSearch, CapReasoning}}
 	case strings.HasSuffix(id, "-coding"):
 		// coding:云端能力助手(搜索/绘图等原生能力;客户端工具调用不保证)。

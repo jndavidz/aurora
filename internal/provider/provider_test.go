@@ -23,12 +23,12 @@ func TestParseDeepSeekModel(t *testing.T) {
 		mode    string
 		caps    []Capability
 	}{
-		{"deepseek-v4-flash-chat", variantChat, modeQuick, []Capability{CapWebSearch, CapReasoning, CapVision}},
-		{"deepseek-v4-pro-chat", variantChat, modeExpert, []Capability{CapReasoning}},
+		{"deepseek-v4-flash", variantChat, modeQuick, []Capability{CapWebSearch, CapReasoning, CapVision}},
+		{"deepseek-v4-pro", variantChat, modeExpert, []Capability{CapReasoning}},
 		{"deepseek-v4-flash-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
 		{"deepseek-v4-pro-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
 		{"gpt-5", "", "", nil}, // 非 deepseek 命名 → nil
-		{"deepseek-v4-chat", variantChat, modeExpert, []Capability{CapReasoning}}, // 无 flash/pro → 默认 expert
+		{"deepseek-v4-pro", variantChat, modeExpert, []Capability{CapReasoning}}, // 2026-09-04 改名:pro=expert 挡
 	}
 	for _, c := range cases {
 		m := parseDeepSeekModel(c.id)
@@ -59,8 +59,8 @@ func TestRegistryResolve(t *testing.T) {
 	r := NewRegistry()
 	r.Register(d)
 
-	if p := r.Resolve("deepseek-v4-flash-chat"); p == nil {
-		t.Fatal("Resolve(deepseek-v4-flash-chat) = nil, want DeepSeek")
+	if p := r.Resolve("deepseek-v4-flash"); p == nil {
+		t.Fatal("Resolve(deepseek-v4-flash) = nil, want DeepSeek")
 	}
 	if p := r.Resolve("auto"); p != nil {
 		t.Fatalf("Resolve(auto) = %v, want nil (default ChatGPT)", p.Name())
@@ -76,7 +76,7 @@ func TestRegistryResolve(t *testing.T) {
 // chat 变体硬规则:即使客户端带 tools,拍平的 prompt 也绝不能含任何工具信息。
 func TestFlattenChatInputNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "deepseek-v4-flash-chat",
+		Model: "deepseek-v4-flash",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"列出文件"}]}
 		]`),
@@ -100,7 +100,7 @@ func TestFlattenChatInputNoToolInjection(t *testing.T) {
 // chat 变体:function_call/function_call_output item 防御性跳过,不上游注入。
 func TestFlattenChatInputSkipsToolItems(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "deepseek-v4-flash-chat",
+		Model: "deepseek-v4-flash",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":"读一下"},
 			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},

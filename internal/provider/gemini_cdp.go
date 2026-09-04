@@ -55,7 +55,7 @@ type GeminiCDP struct {
 }
 
 // defaultGeminiCDPModels 默认目录(与桥 /v1/models 的 chat + aurora 侧 coding)。
-var defaultGeminiCDPModels = []string{"gemini-3-flash-chat", "gemini-3-flash-coding"}
+var defaultGeminiCDPModels = []string{"gemini-3-flash", "gemini-3-flash-coding"}
 
 // newCdpBase 构造 CDP 桥 provider 的通用部分(桥池/熔断/限频/模型解析)。
 // GeminiCDP 与 ClaudeCDP 共用:二者都只是"把请求转发给真浏览器桥",差异仅模型目录与名字。
@@ -93,7 +93,8 @@ func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, pref
 			continue
 		}
 		switch {
-		case strings.HasSuffix(id, "-chat"):
+		case id == strings.TrimSuffix(id, "-chat") && !strings.HasSuffix(id, "-coding"):
+			// 2026-09-04 改名后 chat 变体无 -chat 后缀:非 -coding 即 chat
 			d.byID[id] = "chat"
 			// 注意:不标 vision —— CDP 桥只传文本,图片会丢弃;识图通道见 docs/MEDIA.md
 			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapWebSearch, CapReasoning}})

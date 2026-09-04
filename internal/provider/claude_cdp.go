@@ -20,7 +20,7 @@ type ClaudeCDP struct {
 }
 
 // defaultClaudeCDPModels 默认目录(网页实测模型 claude-sonnet-5)。
-var defaultClaudeCDPModels = []string{"claude-sonnet-5-chat", "claude-sonnet-5-coding"}
+var defaultClaudeCDPModels = []string{"claude-sonnet-5", "claude-sonnet-5-coding"}
 
 // NewClaudeCDP 构造 Claude CDP 桥 provider。桥地址默认复用 GEMINI_CDP_URL
 // (同一桥服务多 provider),也可用 CLAUDE_CDP_URL 单独指定。

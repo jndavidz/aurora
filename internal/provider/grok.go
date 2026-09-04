@@ -35,7 +35,7 @@ type Grok struct {
 
 // defaultGrokModels 是 GROK_MODELS 未配置时的默认目录。
 var defaultGrokModels = []string{
-	"grok-3-chat",
+	"grok-3",
 	"grok-3-coding",
 }
 
@@ -64,8 +64,8 @@ func parseGrokModel(id string) *grokModel {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat"):
-		// chat:真人对话。Grok 模型自动用原生搜索+沙盒,能力如实标注。
+	case id == "grok-3":
+		// chat:真人对话(2026-09-04 去 -chat 后缀)。Grok 自动用原生搜索+沙盒。
 		return &grokModel{ID: id, Variant: grokVariantChat, Caps: []Capability{CapWebSearch, CapReasoning, CapSandboxCode}}
 	case strings.HasSuffix(id, "-coding"):
 		// coding:云端沙盒代码执行助手(见 docs/GLM.md §四 同款定位)。

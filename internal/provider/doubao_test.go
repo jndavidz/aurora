@@ -15,10 +15,10 @@ func TestParseDoubaoModel(t *testing.T) {
 		variant string
 		wantNil bool
 	}{
-		{"doubao-chat", doubaoVariantChat, false},
+		{"doubao", doubaoVariantChat, false}, // 2026-09-04 改名:无后缀暴露名
 		// coding 变体已注释禁用(豆包只做 chat),下列用例保留作恢复参考:
 		// {"doubao-coding", doubaoVariantCoding, false},
-		{"doubao", "", true},     // 无变体后缀 → nil
+		// {"doubao", ..., true} 改名后 -chat 形态不再支持
 		{"gpt-5-chat", "", true}, // 非 doubao 命名 → nil
 		// {"doubao-pro-coding", doubaoVariantCoding, false},
 	}
@@ -47,11 +47,11 @@ func TestNewDoubaoDefaultModels(t *testing.T) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultDoubaoModels))
 	}
 	// coding 变体已注释禁用,`doubao-coding` 不再注册(保留作恢复参考):
-	// if !d.Handles("doubao-chat") || !d.Handles("doubao-coding") {
-	if !d.Handles("doubao-chat") {
+	// if !d.Handles("doubao") || !d.Handles("doubao-coding") {
+	if !d.Handles("doubao") {
 		t.Fatal("default models not handled")
 	}
-	d2 := NewDoubao(&config.Config{DoubaoAccounts: "a", DoubaoModels: []string{"doubao-chat", "bogus"}})
+	d2 := NewDoubao(&config.Config{DoubaoAccounts: "a", DoubaoModels: []string{"doubao", "bogus"}})
 	if len(d2.Models()) != 1 {
 		t.Fatalf("custom Models() = %d, want 1", len(d2.Models()))
 	}
@@ -60,7 +60,7 @@ func TestNewDoubaoDefaultModels(t *testing.T) {
 // chat 变体:剥离工具。
 func TestDoubaoMessagesNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "doubao-chat",
+		Model: "doubao",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":"读文件"},
 			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},

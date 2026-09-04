@@ -32,7 +32,7 @@ type Doubao struct {
 
 // defaultDoubaoModels 是 DOUBAO_MODELS 未配置时的默认目录。
 var defaultDoubaoModels = []string{
-	"doubao-chat",
+	"doubao",
 	// "doubao-coding", // 已注释禁用(豆包只做 chat)
 }
 
@@ -56,12 +56,13 @@ func NewDoubao(cfg *config.Config) *Doubao {
 
 func parseDoubaoModel(id string) *doubaoModel {
 	id = strings.TrimSpace(id)
-	// 前缀保护
-	if !strings.HasPrefix(id, "doubao-") {
+	// 前缀保护(2026-09-04: 精确放行 "doubao" 无后缀暴露名)
+	if id != "doubao" && !strings.HasPrefix(id, "doubao-") {
 		return nil
 	}
 	switch {
-	case strings.HasSuffix(id, "-chat"):
+	case id == "doubao":
+		// 2026-09-04 去 -chat 后缀
 		return &doubaoModel{ID: id, Variant: doubaoVariantChat, Caps: []Capability{CapReasoning, CapWebSearch}}
 	// case strings.HasSuffix(id, "-coding"):
 	// 	return &doubaoModel{ID: id, Variant: doubaoVariantCoding, Caps: []Capability{CapFunctionCall, CapReasoning}}

@@ -19,7 +19,7 @@ func TestIsQianwenModel(t *testing.T) {
 		{"Qwen3.7", true},
 		{"qwen3.6-Flash", true}, // 大小写不敏感
 		{"gpt-5-chat", false},
-		{"glm-5.2-chat", false},
+		{"glm-flash", false},
 		{"", false},
 		{"Qwen", true},
 	}
