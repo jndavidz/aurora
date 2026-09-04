@@ -1,0 +1,19 @@
+[Unit]
+Description=Doubao fetch hook (capture a_bogus via CDP, push to NAS)
+After=chrome-cdp.service
+Wants=chrome-cdp.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/aurora-bridge/scripts/cdp
+Environment=DBHOOK_OUT=/opt/aurora-bridge/.runtime/bridge/doubao_accounts.json
+ExecStart=/usr/bin/node /opt/aurora-bridge/scripts/cdp/doubao-hook.mjs
+Restart=on-failure
+RestartSec=5
+Nice=+10
+CPUAffinity=1 3
+CPUQuota=20%
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

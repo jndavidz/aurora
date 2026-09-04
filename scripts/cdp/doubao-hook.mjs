@@ -12,7 +12,7 @@ import path from "node:path";
 
 const { cdp } = await import(new URL("./cdp-helper.mjs", import.meta.url).href);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const OUT = "D:/repos/aurora/.runtime/tokens/doubao_accounts.json";
+const OUT = process.env.DBHOOK_OUT || "/tmp/doubao_accounts.json";
 
 const getJSON = (p) => new Promise((res, rej) => {
   http.get({ host: "127.0.0.1", port: 9222, path: p }, (r) => {
@@ -92,7 +92,7 @@ async function saveCapture(c, url, body) {
     let pushed = false;
     try {
       const { execSync } = await import("node:child_process");
-      execSync(`ssh -o BatchMode=yes zxsadmin@10.10.10.2 "cat > /volume2/docker/aurora/tokens/doubao_accounts.json" < "${OUT}"`, { stdio: "ignore", timeout: 20000, shell: "cmd.exe" });
+      execSync(`cat ${OUT} | ssh -o BatchMode=yes zxsadmin@10.10.10.2 "cat > /volume2/docker/aurora/tokens/doubao_accounts.json"`, { stdio: "ignore", timeout: 20000, shell: "/bin/bash" });
       pushed = true;
     } catch (pe) {
       console.log("[doubao-hook] push 失败:", String(pe.message).slice(0, 60));
@@ -120,6 +120,7 @@ async function ensureConnections() {
         await c.cmd("Network.enable").catch(() => {});
         await c.cmd("Page.enable").catch(() => {});
         await c.cmd("Page.addScriptToEvaluateOnNewDocument", { source: HOOK_JS }).catch(() => {});
+        await injectHook(c).catch(() => {}); // 对已加载页面立即注入一次
         conns.push({ url: p.url, c });
         console.log("[doubao-hook] 连接:", p.url.slice(0, 60));
       } catch (e) {}
@@ -138,6 +139,9 @@ while (true) {
         });
         const latest = JSON.parse(r.result && r.result.result && r.result.result.value || "null");
         if (latest && latest.ts > lastCapture && typeof latest.url === "string" && latest.url.startsWith("http")) {
+          // a_bogus 非空校验:空的参数集无价值且会覆盖 NAS 上有效凭据
+          const ab = new URL(latest.url).searchParams.get("a_bogus") || "";
+          if (ab.length < 50) { console.log("[doubao-hook] skip: a_bogus empty(len=" + ab.length + ")"); continue; }
           lastCapture = latest.ts;
           await saveCapture(conn.c, latest.url, latest.body);
         }
