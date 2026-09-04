@@ -84,6 +84,9 @@ func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, pref
 	if len(cfg.ClaudeModels) > 0 && prefix == "claude-" {
 		ids = cfg.ClaudeModels
 	}
+	if len(cfg.DoubaoCDPModels) > 0 && prefix == "doubao-" {
+		ids = cfg.DoubaoCDPModels
+	}
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if !strings.HasPrefix(id, prefix) {

@@ -482,6 +482,62 @@ function applyClaudeCapture(req) {
   }
 }
 
+
+// ─── 豆包适配器(2026-09-04)──────────────────────────────────────
+// 页内 fetch 模式(同 hunyuan/claude):浏览器签名+会话由豆包前端维护,
+// 桥只构造 body 并在页面上下文内发请求。会话策略:
+//   - capture 钩子持续抓页面真实 completion 请求,同步最新会话状态
+//     (conversation_id/section_id/last_message_index)——用户 VNC 聊天
+//     推进会话时,桥的状态自动跟进(这是回声 bug 的解法:索引必须与
+//     上游一致,否则上游判为重放,返回旧应答或静默忽略)
+//   - 请求构造:续接当前会话(need_create=false)+全新 UUID 消息
+//   - SSE 解析:patch_op 里 text_block.text 的 delta;事件流 2002=ACK/2003=REPLY_END
+const DOUBAO_STATE_FILE = path.join(STATE_DIR, "doubao_session.json");
+let doubaoState = {
+  provider: "doubao",
+  template: null,   // completion 请求体模板(来自页面真实请求)
+  query: null,      // URL 查询参数串(aid/device_id/fp 等,含 msToken)
+  convId: null,
+  sectionId: null,
+  lastMsgIdx: null,
+  updatedAt: null,
+};
+function loadDoubaoState() {
+  try {
+    if (fs.existsSync(DOUBAO_STATE_FILE)) {
+      doubaoState = { ...doubaoState, ...JSON.parse(fs.readFileSync(DOUBAO_STATE_FILE, "utf8")) };
+      console.log("[state][doubao] loaded from", DOUBAO_STATE_FILE);
+      return true;
+    }
+  } catch (e) { console.error("[state][doubao] load failed:", e.message); }
+  return false;
+}
+function saveDoubaoState() {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const tmp = DOUBAO_STATE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(doubaoState, null, 2));
+    fs.renameSync(tmp, DOUBAO_STATE_FILE);
+  } catch (e) { console.error("[state][doubao] save failed:", e.message); }
+}
+function applyDoubaoCapture(req) {
+  if (!req.postData || !req.url.includes("/chat/completion")) return;
+  try {
+    const u = new URL(req.url);
+    // a_bogus/msToken 每请求都变,不缓存;只固化稳定参数与模板
+    const tmpl = JSON.parse(req.postData);
+    doubaoState.template = req.postData;
+    doubaoState.query = u.searchParams.toString();
+    doubaoState.convId = tmpl.client_meta?.conversation_id || doubaoState.convId;
+    doubaoState.sectionId = tmpl.client_meta?.last_section_id || doubaoState.sectionId;
+    doubaoState.lastMsgIdx = typeof tmpl.client_meta?.last_message_index === "number" ? tmpl.client_meta.last_message_index : doubaoState.lastMsgIdx;
+    doubaoState.updatedAt = new Date().toISOString();
+    saveDoubaoState();
+    console.log("[state][doubao] template refreshed (idx=" + doubaoState.lastMsgIdx + ")");
+  } catch (e) { debugLog("[state][doubao] applyDoubaoCapture failed:", e.message); }
+}
+loadDoubaoState();
+
 const claude = {
   name: "claude",
   prefix: "claude-",
@@ -789,7 +845,94 @@ const chatgpt = {
 };
 
 // 适配器注册表:model 前缀 → 适配器(加新模型只需在这里登记)
-const adapters = [gemini, claude, hunyuan, chatgpt];
+
+const doubao = {
+  name: "doubao",
+  prefix: "doubao-",
+  pageMatch: "doubao.com",
+  homeUrl: "https://www.doubao.com/chat/",
+  capture: (req) => applyDoubaoCapture(req),
+  ready: () => !!(doubaoState.template && doubaoState.query),
+  models: [
+    { id: "doubao-chat", object: "model", owned_by: "bytedance", capabilities: ["reasoning", "vision"] },
+  ],
+
+  flatten(messages) {
+    const parts = [];
+    for (const m of messages || []) {
+      let content = m.content;
+      if (Array.isArray(content)) content = content.map(c => (c && c.text ? c.text : "")).filter(Boolean).join(" ");
+      if (typeof content !== "string" || !content.trim()) continue;
+      if (m.role === "assistant") parts.push("豆包：" + content);
+      else if (m.role === "system") parts.push("背景：" + content);
+      else parts.push("用户：" + content);
+    }
+    return parts.join("\\n");
+  },
+
+  buildRequest(prompt) {
+    const body = JSON.parse(doubaoState.template);
+    // 续接当前会话(索引与上游一致是关键——错位即重放)
+    body.client_meta.conversation_id = doubaoState.convId || "";
+    body.client_meta.last_section_id = doubaoState.sectionId || "";
+    body.client_meta.last_message_index = typeof doubaoState.lastMsgIdx === "number" ? doubaoState.lastMsgIdx : 0;
+    body.option.need_create_conversation = false;
+    body.option.click_clear_context = false;
+    body.option.create_time_ms = Date.now();
+    body.option.unique_key = crypto.randomUUID();
+    // 全新消息(新 UUID+新文本)
+    body.messages = [{
+      local_message_id: crypto.randomUUID(),
+      content_block: [{ block_type: 10000, content: { text_block: { text: prompt, icon_url: "", icon_url_dark: "", summary: "" }, pc_event_block: "" }, block_id: crypto.randomUUID(), parent_id: "", meta_info: [], append_fields: [] }],
+      message_status: 0,
+    }];
+    const q = new URLSearchParams(doubaoState.query);
+    q.set("a_bogus", ""); // 页面 fetch hook 会实时注入真值
+    const url = "https://www.doubao.com/chat/completion?" + q.toString();
+    return { url, headers: { "content-type": "application/json", "agw-js-conv": "str" }, body: JSON.stringify(body) };
+  },
+
+  // SSE: 豆包流是 patch_op 形态,text_block.text 的 append delta;事件流前缀 "event: N"
+  createParser(onDelta) {
+    let buf = "";
+    const self = { done: false, text: "" };
+    self.feed = function(chunk) {
+      buf += chunk;
+      // 豆包 SSE 用空行分帧,data: 行携带 JSON
+      let idx;
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        const t = line.trim();
+        if (t.startsWith("data: ")) {
+          const payload = t.slice(6).trim();
+          if (payload === "{}" || !payload) continue;
+          try {
+            const j = JSON.parse(payload);
+            // 响应文本在 patch_op 里: patch_value.ext=提示, 响应文本在 messages 或 content
+            if (j.patch_op) for (const p of j.patch_op) {
+              const pv = p.patch_value || {};
+              if (pv.text_block && typeof pv.text_block.text === "string") {
+                self.text += pv.text_block.text;
+                if (onDelta) onDelta(pv.text_block.text);
+              }
+            }
+            if (j.messages) for (const msg of j.messages) {
+              for (const cb of msg.content_block || []) {
+                const tb = cb.content && cb.content.text_block;
+                if (tb && typeof tb.text === "string") { self.text += tb.text; if (onDelta) onDelta(tb.text); }
+              }
+            }
+          } catch {}
+        }
+      }
+    };
+    self.flush = function() {};
+    return self;
+  },
+};
+
+const adapters = [gemini, claude, hunyuan, chatgpt, doubao];
 
 function resolveAdapter(model) {
   return adapters.find((a) => model.startsWith(a.prefix)) || null;

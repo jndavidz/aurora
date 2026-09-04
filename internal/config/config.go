@@ -90,6 +90,12 @@ type Config struct {
 	HunyuanCDPKey string
 	HunyuanModels []string
 
+	// 豆包(字节)CDP 桥通道。网页版直连已被风控封死(回声/空响应/滑块),
+	// 走 NUC Chrome 页内 fetch(自动签名);桥地址默认复用 GEMINI_CDP_URL。
+	DoubaoCDPURL string
+	DoubaoCDPKey string
+	DoubaoCDPModels []string
+
 	// ChatGPT(chatgpt.com)CDP 桥通道。背景:ChatGPT 已改为浏览器会话绑定鉴权,
 	// 服务端无法复用 token,aurora 直连 backend-api 的 token 文件会被 403。
 	// 故 ChatGPT 对话改走真实浏览器页内 fetch(bridge.mjs 的 chatgpt adapter),
@@ -186,6 +192,10 @@ func Load() Config {
 		HunyuanCDPURL: os.Getenv("HUNYUAN_CDP_URL"),
 		HunyuanCDPKey: os.Getenv("HUNYUAN_CDP_KEY"),
 		HunyuanModels: splitCSV(os.Getenv("HUNYUAN_MODELS")),
+
+		DoubaoCDPURL: os.Getenv("DOUBAO_CDP_URL"),
+		DoubaoCDPKey: os.Getenv("DOUBAO_CDP_KEY"),
+		DoubaoCDPModels: splitCSV(os.Getenv("DOUBAO_CDP_MODELS")),
 
 		CodingEnabled: os.Getenv("CODING_ENABLED") == "true" || os.Getenv("CODING_ENABLED") == "1",
 

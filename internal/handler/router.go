@@ -44,6 +44,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.HunyuanCDPURL != "" {
 		registry.Register(provider.NewHunyuanCDP(cfg))
 	}
+	if cfg.DoubaoCDPURL != "" {
+		registry.Register(provider.NewDoubaoCDP(cfg))
+	}
 	if cfg.MinimaxWebTokens != "" {
 		registry.Register(provider.NewMinimax(cfg))
 	}
