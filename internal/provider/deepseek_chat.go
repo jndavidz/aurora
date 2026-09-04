@@ -18,6 +18,18 @@ import (
 // 硬规则:上游只发「真人对话」形态的请求 —— 剥离客户端 tools/tool_choice,
 // 不注入任何工具调用信息;仅携带网页模式开关(快速/专家、智能搜索、深度思考、识图)。
 // 识图(快速模式)与联网搜索互斥(DeepSeek 网页行为)。
+
+// searchEnabled 返回 quick 档请求是否带联网搜索。
+// 默认关闭(DEEPSEEK_WEB_SEARCH=1 才开启):网页搜索使首字延迟 +1~2s,
+// 且带图时上游忽略搜索开关,故有图时恒为 false。
+// API 客户端需要联网的场景应由客户端侧自行调 search 工具,而非网页代查。
+func (d *DeepSeek) searchEnabled(m *deepseekModel, hasImages bool) bool {
+	if hasImages {
+		return false // 识图与搜索互斥
+	}
+	return m.Mode == modeQuick && d.cfg.DeepSeekWebSearch
+}
+
 func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil {
@@ -55,7 +67,7 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 		Prompt:          prompt,
 		ModelType:       modelType,
 		ThinkingEnabled: thinkingEnabled(m, req),
-		SearchEnabled:   m.Mode == modeQuick,
+		SearchEnabled:   d.searchEnabled(m, len(refFileIDs) > 0),
 		RefFileIDs:      refFileIDs,
 	}
 	// 续轮:需 parent_message_id —— 简化首版不续轮,每次新会话(可接受)。
@@ -232,7 +244,7 @@ func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *offici
 		Prompt:          prompt,
 		ModelType:       modelType,
 		ThinkingEnabled: thinkingEnabledAPI(m, req),
-		SearchEnabled:   m.Mode == modeQuick,
+		SearchEnabled:   d.searchEnabled(m, len(refFileIDs) > 0),
 		RefFileIDs:      refFileIDs,
 	}
 	if req.Stream {

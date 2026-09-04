@@ -89,7 +89,7 @@ func TestGeminiCodingPromptFromResponses(t *testing.T) {
 		]`),
 		Tools: []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "read"}}},
 	}
-	prompt := geminiCodingPromptFromResponses(req)
+	prompt := geminiCodingPromptFromResponses(req, "")
 	if !strings.Contains(prompt, "TOOLS AVAILABLE") {
 		t.Errorf("prompt should contain tool instructions: %q", prompt)
 	}

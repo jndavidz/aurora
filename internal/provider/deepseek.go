@@ -60,6 +60,16 @@ func NewDeepSeek(cfg *config.Config) *DeepSeek {
 		if m == nil {
 			continue
 		}
+		// 搜索关闭时如实标注:quick 档不再宣称 CapWebSearch(能力注记与实际行为一致)。
+		if !cfg.DeepSeekWebSearch {
+			caps := make([]Capability, 0, len(m.Caps))
+			for _, cap := range m.Caps {
+				if cap != CapWebSearch {
+					caps = append(caps, cap)
+				}
+			}
+			m.Caps = caps
+		}
 		d.byID[id] = m
 		d.models = append(d.models, Model{ID: id, OwnedBy: "deepseek", Caps: m.Caps})
 	}
