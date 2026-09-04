@@ -84,6 +84,28 @@ func TestHandlerStreamsPatchEvents(t *testing.T) {
 	}
 }
 
+func TestHandlerDetailedSuppressesStreamOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"hello"}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"conversation_id":"conv-xxx"}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	response := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	result := HandlerDetailedWithOptions(c, response, nil, nil, "request-id", chatGPTRequestForTest(), true, "auto", HandlerDetailedOptions{SuppressOutput: true})
+
+	if result.Text != "hello" {
+		t.Fatalf("text = %q, want hello", result.Text)
+	}
+	if writer.Body.Len() != 0 {
+		t.Fatalf("suppressed stream wrote downstream output: %s", writer.Body.String())
+	}
+}
+
 func TestHandlerStreamsOpenAIChunksAndSentinel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

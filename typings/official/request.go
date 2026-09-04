@@ -79,41 +79,40 @@ type Tool struct {
 	Function ToolFunction `json:"function"`
 }
 
-// UnmarshalJSON 兼容两种工具格式:
-//   - chat.completions:{"type":"function","function":{"name":...,"description":...,"parameters":...}}
-//   - Responses API:  {"type":"function","name":...,"description":...,"parameters":...}(顶层)
-//
-// pi / ZCode 等 Responses 客户端发顶层格式,缺此兼容会导致 name/description 全空,
-// 渲染出的 TOOLS AVAILABLE 变成 "- :" 占位,模型只能瞎猜工具名(实测踩坑)。
-func (t *Tool) UnmarshalJSON(data []byte) error {
-	type alias Tool
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	*t = Tool(a)
-	// Responses 风格:function 嵌套为空时,从顶层 name/description/parameters 补齐。
-	if t.Function.Name == "" {
-		var flat struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			Parameters  json.RawMessage `json:"parameters"`
-		}
-		if err := json.Unmarshal(data, &flat); err == nil && flat.Name != "" {
-			t.Function.Name = flat.Name
-			t.Function.Description = flat.Description
-			t.Function.Parameters = flat.Parameters
-		}
-	}
-	return nil
-}
-
 // ToolFunction 描述一个函数工具的 name / description / JSON schema 参数。
 type ToolFunction struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	// Strict / Cache 暂不实现 —— OpenAI 协议可选字段,ChatGPT Web 不消费
+	Strict      *bool           `json:"strict,omitempty"`
+	// Cache 暂不实现 —— OpenAI 协议可选字段,ChatGPT Web 不消费
+}
+
+// UnmarshalJSON 同时接受 Chat Completions 的嵌套形态和 Responses API 的扁平形态。
+func (t *Tool) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type        string          `json:"type"`
+		Function    *ToolFunction   `json:"function"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+		Strict      *bool           `json:"strict"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	t.Type = raw.Type
+	if raw.Function != nil {
+		t.Function = *raw.Function
+		return nil
+	}
+	t.Function = ToolFunction{
+		Name:        raw.Name,
+		Description: raw.Description,
+		Parameters:  raw.Parameters,
+		Strict:      raw.Strict,
+	}
+	return nil
 }
 
 // ToolChoice 取值:
@@ -140,12 +139,19 @@ func (t *ToolChoice) UnmarshalJSON(data []byte) error {
 		t.Function = nil
 		return nil
 	}
-	type alias ToolChoice
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
+	var raw struct {
+		Type     string              `json:"type"`
+		Name     string              `json:"name"`
+		Function *ToolChoiceFunction `json:"function"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	*t = ToolChoice(a)
+	t.Type = raw.Type
+	t.Function = raw.Function
+	if t.Type == "function" && t.Function == nil && raw.Name != "" {
+		t.Function = &ToolChoiceFunction{Name: raw.Name}
+	}
 	return nil
 }
 
@@ -442,12 +448,45 @@ type ReasoningConfig struct {
 // 旧客户端可能不带 type,按 message 处理。
 type responseInputItem struct {
 	Type      string          `json:"type"`
+	ID        string          `json:"id,omitempty"`
 	Role      string          `json:"role,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	CallID    string          `json:"call_id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Arguments string          `json:"arguments,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
+}
+
+// ApplyFunctionCallNames 用 previous_response_id 对应的历史 call_id→name 映射，
+// 补齐本次 input 里未标名的 function_call_output(OpenAI 客户端回传工具结果时
+// 通常只带 call_id)。
+func (r *ResponsesAPIRequest) ApplyFunctionCallNames(callNames map[string]string) {
+	if len(callNames) == 0 || len(r.Input) == 0 {
+		return
+	}
+	var items []map[string]interface{}
+	if err := json.Unmarshal(r.Input, &items); err != nil {
+		return
+	}
+	changed := false
+	for _, item := range items {
+		if item["type"] != "function_call_output" {
+			continue
+		}
+		if name, _ := item["name"].(string); name != "" {
+			continue
+		}
+		callID, _ := item["call_id"].(string)
+		if name := callNames[callID]; name != "" {
+			item["name"] = name
+			changed = true
+		}
+	}
+	if changed {
+		if data, err := json.Marshal(items); err == nil {
+			r.Input = data
+		}
+	}
 }
 
 type responseInputContent struct {
@@ -457,8 +496,11 @@ type responseInputContent struct {
 
 func (r ResponsesAPIRequest) ToAPIRequest() (APIRequest, error) {
 	apiRequest := APIRequest{
-		Model:  r.Model,
-		Stream: r.Stream,
+		Model:             r.Model,
+		Stream:            r.Stream,
+		Tools:             r.Tools,
+		ToolChoice:        r.ToolChoice,
+		ParallelToolCalls: r.ParallelToolCalls,
 	}
 
 	// 透传 Responses 参数到 APIRequest
@@ -530,6 +572,20 @@ func responsesInputToMessages(raw json.RawMessage) ([]APIMessage, error) {
 		return nil, fmt.Errorf("invalid input")
 	}
 
+	// function_call_output 常常不带 name;用同一 input 里 function_call 的
+	// call_id → name 映射补齐,否则工具结果消息无法标名。
+	callNames := make(map[string]string)
+	for _, item := range items {
+		if item.Type == "function_call" && item.CallID != "" && item.Name != "" {
+			callNames[item.CallID] = item.Name
+		}
+	}
+	for i := range items {
+		if items[i].Type == "function_call_output" && items[i].Name == "" {
+			items[i].Name = callNames[items[i].CallID]
+		}
+	}
+
 	result := make([]APIMessage, 0, len(items))
 	for _, item := range items {
 		if msg, ok := responseInputItemToMessage(item); ok {
@@ -544,12 +600,13 @@ func responsesInputToMessages(raw json.RawMessage) ([]APIMessage, error) {
 func responseInputItemToMessage(item responseInputItem) (APIMessage, bool) {
 	switch item.Type {
 	case "function_call":
-		if item.CallID == "" && item.Name == "" {
+		callID := firstNonEmpty(item.CallID, item.ID)
+		if callID == "" && item.Name == "" {
 			return APIMessage{}, false
 		}
 		var ref ToolCallRef
 		ref.Index = 0
-		ref.ID = item.CallID
+		ref.ID = callID
 		ref.Type = "function"
 		ref.Function.Name = item.Name
 		ref.Function.Arguments = item.Arguments
@@ -562,6 +619,7 @@ func responseInputItemToMessage(item responseInputItem) (APIMessage, bool) {
 		return APIMessage{
 			Role:       "tool",
 			ToolCallID: item.CallID,
+			Name:       item.Name,
 			Content:    MessageContent{TextValue: rawText(item.Output)},
 		}, true
 
@@ -602,6 +660,30 @@ func responseContentToMessageContent(raw json.RawMessage) (MessageContent, error
 		})
 	}
 	return MessageContent{Parts: messageParts}, nil
+}
+
+func responseFunctionOutputText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		texts := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if part.Text != "" {
+				texts = append(texts, part.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func responsesContentToText(raw json.RawMessage) string {

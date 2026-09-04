@@ -156,6 +156,7 @@ type HandlerDetailedOptions struct {
 	ArtifactDelivery string
 	ProxyURL         string
 	Tools            []official_types.Tool
+	SuppressOutput   bool
 }
 
 // HandlerDetailedWithOptions 处理对话响应流（最完整版）。
@@ -183,7 +184,8 @@ func HandlerDetailedWithOptions(c *gin.Context, response *http.Response, client 
 		}
 	}
 
-	if stream {
+	streamOutput := stream && !options.SuppressOutput
+	if streamOutput {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
@@ -218,7 +220,7 @@ func HandlerDetailedWithOptions(c *gin.Context, response *http.Response, client 
 			return
 		}
 		sentinel = append(sentinel, items...)
-		if !stream {
+		if !streamOutput {
 			return
 		}
 		for _, item := range items {
@@ -258,7 +260,7 @@ func HandlerDetailedWithOptions(c *gin.Context, response *http.Response, client 
 			"kind":  "analysis",
 			"delta": delta,
 		}})
-		if stream {
+		if streamOutput {
 			reasoningChunk := official_types.NewReasoningChunk(delta, model)
 			if convId != "" {
 				reasoningChunk.ConversationID = convId
@@ -281,7 +283,7 @@ func HandlerDetailedWithOptions(c *gin.Context, response *http.Response, client 
 		if flushed == "" {
 			return
 		}
-		if stream {
+		if streamOutput {
 			flushChunk := official_types.NewChatCompletionChunk(flushed, model)
 			flushChunk.ConversationID = convId
 			c.Writer.WriteString("data: " + flushChunk.String() + "\n\n")
@@ -372,7 +374,7 @@ readLoop:
 				if activeChannel == "analysis" {
 					emitThinking(streamEvent.text)
 					if streamEvent.isStop {
-						if stream {
+						if streamOutput {
 							finalLine := official_types.StopChunkWithConversation(finish_reason, model, convId)
 							c.Writer.WriteString("data: " + finalLine.String() + "\n\n")
 							c.Writer.Flush()
@@ -414,7 +416,7 @@ readLoop:
 					continue
 				}
 				var terminalChunk *official_types.ChatCompletionChunk
-				if stream {
+				if streamOutput {
 					outChunk := *streamEvent.chunk
 					if len(outChunk.Choices) > 0 {
 						outChunk.Choices[0].Delta.Content = deltaText
@@ -598,7 +600,7 @@ readLoop:
 			}
 			if response_string == "" {
 				response_string = chatgpt.ConvertToString(&original_response, &previous_text, isRole, model)
-				if stream && response_string != "" && strings.HasPrefix(response_string, "data: ") {
+				if streamOutput && response_string != "" && strings.HasPrefix(response_string, "data: ") {
 					var chunk official_types.ChatCompletionChunk
 					if err := json.Unmarshal([]byte(strings.TrimPrefix(response_string, "data: ")), &chunk); err == nil {
 						delta := chunk.Choices[0].Delta.Content
@@ -621,7 +623,7 @@ readLoop:
 			}
 		endProcess:
 			isRole = false
-			if stream {
+			if streamOutput {
 				_, err = c.Writer.WriteString(response_string)
 				if err != nil {
 					return HandlerResult{}
@@ -641,7 +643,7 @@ readLoop:
 					finish_reason = "stop"
 				}
 				flushCites()
-				if stream {
+				if streamOutput {
 					final_line := official_types.StopChunkWithConversation(finish_reason, model, convId)
 					c.Writer.WriteString("data: " + final_line.String() + "\n\n")
 					c.Writer.Flush()

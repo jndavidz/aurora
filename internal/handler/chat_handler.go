@@ -227,12 +227,26 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		}
 	}
 
+	// previous_response_id:复用上一次响应的 ChatGPT 会话状态(conversation/parent),
+	// 并用历史 call_id→name 映射补齐本次 input 里未标名的工具结果消息。
+	var previousClientState *chatgpt.ChatClientState
+	if responsesRequest.PreviousResponseID != "" {
+		var callNames map[string]string
+		previousClientState, callNames = h.sessions.GetResponse(responsesRequest.PreviousResponseID)
+		if previousClientState == nil {
+			apierrors.JSONError(c, 400, "invalid_request_error",
+				"Unknown previous_response_id: "+responsesRequest.PreviousResponseID,
+				apierrors.Param("previous_response_id"), "invalid_previous_response_id")
+			return
+		}
+		responsesRequest.ApplyFunctionCallNames(callNames)
+	}
+
 	original_request, err := responsesRequest.ToAPIRequest()
 	if err != nil {
 		apierrors.JSONError(c, 400, "invalid_request_error", err.Error(), apierrors.Param("input"), "invalid_request_error")
 		return
 	}
-
 	// ChatGPT -coding 变体:改写为基础模型(透传上游用真实 slug),强制工具调用。
 	// 响应仍回显客户端请求的 -coding id(reqModel 用 requestedModel)。
 	requestedModel := original_request.Model
@@ -255,6 +269,11 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	account, proxyUrl, client := pre.account, pre.proxyUrl, pre.client
 	translated_request := pre.translated
 	clientState := pre.clientState
+	if previousClientState != nil {
+		clientState = previousClientState
+		translated_request.ConversationID = clientState.ConversationID
+		translated_request.ParentMessageID = clientState.ParentMessageID
+	}
 	reqModel, uid := pre.reqModel, pre.uid
 	input_tokens := 0
 	for _, message := range original_request.Messages {
@@ -311,6 +330,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		output_tokens := util.CountToken(turnRes.text)
 		reasoning_tokens := util.CountToken(turnRes.thinking)
 		responsesResponse := officialtypes.NewResponsesResponse(turnRes.text, turnRes.thinking, input_tokens, output_tokens, reasoning_tokens, cachedTokens, cacheWriteTokens, reqModel)
+		h.sessions.RegisterResponse(responsesResponse.ID, clientState, nil)
 		c.JSON(200, responsesResponse)
 		return
 	}
@@ -346,6 +366,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	if turnRes.ttftSet {
 		responsesResponse.MsTTFT = turnRes.ttftMs
 	}
+	h.sessions.RegisterResponse(responsesResponse.ID, clientState, nil)
 	e.Complete(responsesResponse, turnRes.text, turnRes.thinking)
 	e.Done()
 }

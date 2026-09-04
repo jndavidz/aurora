@@ -185,6 +185,8 @@ curl --location 'http://你的服务器ip:8080/v1/chat/completions' \
 
 ## Responses API
 
+`/v1/responses` 支持与 Chat Completions 相同的工具调用模拟，并使用 Responses API 的扁平 `tools` 结构、`function_call` 输出项和 `function_call_output` 回传项。Codex CLI 可通过 `previous_response_id` 继续工具调用链。
+
 ```bash
 curl --location 'http://你的服务器ip:8080/v1/responses' \
 --header 'Content-Type: application/json' \
@@ -196,6 +198,45 @@ curl --location 'http://你的服务器ip:8080/v1/responses' \
   "stream": false
 }'
 ```
+
+### Responses 工具调用
+
+```json
+{
+  "model": "gpt-5",
+  "input": "读取 README.md",
+  "tools": [{
+    "type": "function",
+    "name": "read_file",
+    "description": "读取文件",
+    "parameters": {
+      "type": "object",
+      "properties": {"path": {"type": "string"}},
+      "required": ["path"]
+    },
+    "strict": true
+  }],
+  "stream": true
+}
+```
+
+工具调用以 `output[].type = "function_call"` 返回。执行工具后，把结果作为下一次请求的 `input`，并携带上一响应的 `id`：
+
+```json
+{
+  "model": "gpt-5",
+  "previous_response_id": "resp_...",
+  "input": [{
+    "type": "function_call_output",
+    "call_id": "call_...",
+    "output": "文件内容"
+  }],
+  "tools": [{"type": "function", "name": "read_file", "parameters": {"type": "object"}}],
+  "stream": true
+}
+```
+
+流式工具调用事件顺序为 `response.created` → `response.output_item.added` → `response.function_call_arguments.delta` → `response.function_call_arguments.done` → `response.output_item.done` → `response.completed`。
 
 ### Responses 流式事件序列
 
