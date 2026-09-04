@@ -89,6 +89,8 @@ type Account struct {
 	// 状态
 	Status    AccountStatus
 	ExpiresAt time.Time
+	// E1 冷却:RateLimited/Banned 时设置,Acquire 跳过冷却中的账号。进程重启即清零。
+	cooldownUntil time.Time
 
 	// 统计
 	TotalCalls  int64

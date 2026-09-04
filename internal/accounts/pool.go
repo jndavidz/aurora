@@ -97,10 +97,20 @@ func (p *Pool) Acquire(acctType AccountType) (*Account, error) {
 	entries := *slice
 	for i := 0; i < len(entries); i++ {
 		cur := (p.cursors[idx] + i) % len(entries)
-		if entries[cur].Status == StatusActive {
+		a := entries[cur]
+		// E1:冷却到期自动回池(仅对因冷却而停用的账号;Banned 长冷却到期也回池,
+		// 因为 11128 类拦截实测 12 秒自愈,长冷却是保守值而非定论)。
+		if a.cooldownUntil.IsZero() == false && time.Now().After(a.cooldownUntil) &&
+			(a.Status == StatusRateLimited || a.Status == StatusBanned) {
+			a.Status = StatusActive
+			a.cooldownUntil = time.Time{}
+			log.Printf("[pool] account %s cooldown expired, back to active", a.ID[:8])
+		}
+		// E1:冷却中的账号(RateLimited/Banned)跳过。
+		if a.Status == StatusActive && !a.inCooldown() {
 			p.cursors[idx] = (cur + 1) % len(entries)
-			entries[cur].TotalCalls++
-			return entries[cur], nil
+			a.TotalCalls++
+			return a, nil
 		}
 	}
 

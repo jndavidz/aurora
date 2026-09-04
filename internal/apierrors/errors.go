@@ -29,8 +29,8 @@ func InvalidRequest(c *gin.Context, message string, code interface{}) {
 }
 
 // MissingParam 返回缺少必填参数的 400 错误。
+// (E2 修复:原实现先 InvalidRequest 再 JSONError,双重写入产生两个拼接 JSON。)
 func MissingParam(c *gin.Context, param, code string) {
-	InvalidRequest(c, "Missing required parameter: "+param, code)
 	p := param
 	JSONError(c, http.StatusBadRequest, "invalid_request_error",
 		"Missing required parameter: "+param, &p, code)
