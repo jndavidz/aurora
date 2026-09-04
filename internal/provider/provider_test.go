@@ -298,3 +298,35 @@ func TestResolveCanonicalFriendlyName(t *testing.T) {
 		t.Errorf("nonexistent 应为 nil")
 	}
 }
+
+// 空格/连字符混用变体(面板实测: "glm flash")
+func TestResolveCanonicalLooseVariants(t *testing.T) {
+	cfg := &config.Config{}
+	r := NewRegistry()
+	r.Register(NewGlm(cfg))
+	SetFriendlyModelLookup(func(name string) string {
+		flat := func(x string) string {
+			x = strings.ToLower(x)
+			x = strings.ReplaceAll(x, "-", "")
+			x = strings.ReplaceAll(x, " ", "")
+			return x
+		}
+		t2 := flat(name)
+		if t2 == "" {
+			return ""
+		}
+		for id := range map[string]string{"glm-flash": "GLM-5.3 Flash"} {
+			if flat(id) == t2 {
+				return id
+			}
+		}
+		return ""
+	})
+	defer SetFriendlyModelLookup(func(string) string { return "" })
+
+	for _, variant := range []string{"glm flash", "glm-flash", "GLM FLASH"} {
+		if _, id := r.ResolveCanonical(variant); id != "glm-flash" {
+			t.Errorf("%q → want glm-flash, got %q", variant, id)
+		}
+	}
+}

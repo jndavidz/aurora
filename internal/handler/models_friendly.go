@@ -10,20 +10,20 @@ import (
 // 下拉/面板显示不带 -chat 后缀的简洁名;请求仍用真实 id)。
 // 未映射的模型返回 ""(调用方不输出 friendly_name 字段)。
 var friendlyModelNames = map[string]string{
-	"auto":                   "Auto",
-	"gpt-5-6":                "GPT-5.6",
-	"gpt-5-6-mini":           "GPT-5.6 Mini",
+	"auto":              "Auto",
+	"gpt-5-6":           "GPT-5.6",
+	"gpt-5-6-mini":      "GPT-5.6 Mini",
 	"deepseek-v4-flash": "DeepSeek V4 Flash",
 	"deepseek-v4-pro":   "DeepSeek V4 Pro",
-	"glm-flash":           "GLM-5.3 Flash",
+	"glm-flash":         "GLM-5.3 Flash",
 	"kimi":              "Kimi",
-	"Qwen3.8-Max":            "Qwen3.8 Max",
+	"Qwen3.8-Max":       "Qwen3.8 Max",
 	"doubao":            "豆包",
 	"gemini-3-flash":    "Gemini 3 Flash",
 	"claude-sonnet-5":   "Claude Sonnet 5",
 	"minimax-m3":        "MiniMax M3",
 	"mimo-v2.5-pro":     "MiMo V2.5 Pro",
-	"mimo-v2.5-asr":          "MiMo V2.5 ASR",
+	"mimo-v2.5-asr":     "MiMo V2.5 ASR",
 	"grok-3":            "Grok 3",
 }
 
@@ -41,9 +41,23 @@ func initFriendlyModelLookup() {
 		rev[strings.ToLower(name)] = id
 	}
 	provider.SetFriendlyModelLookup(func(name string) string {
-		if v, ok := rev[name]; ok {
-			return v
+		// 直接遍历 id 表做宽松比对: 小写+去连字符+去空格 双向归一
+		flat := func(x string) string {
+			x = strings.ToLower(x)
+			x = strings.ReplaceAll(x, "-", "")
+			x = strings.ReplaceAll(x, " ", "")
+			x = strings.ReplaceAll(x, "_", "")
+			return x
 		}
-		return rev[strings.ToLower(name)]
+		target := flat(name)
+		if target == "" {
+			return ""
+		}
+		for id, name2 := range friendlyModelNames {
+			if flat(id) == target || flat(name2) == target {
+				return id
+			}
+		}
+		return ""
 	})
 }
