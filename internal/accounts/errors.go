@@ -53,7 +53,9 @@ func ClassifyFailure(statusCode int, errBody string) FailureKind {
 		return false
 	}
 
-	// 腾讯系业务错误码(错误体 JSON 的 "code" 字段)
+	// 腾讯混元(workbuddy 后端)业务错误码 —— 注:这些码出现于 workbuddy 通道(converter.log 实证);
+	// aurora 自有的 deepseek/glm/kimi 网页通道错误形态是 "completion http N"(client.go:248 等)与
+	// deepseek 40300 MISSING_HEADER / WAF 202。保留此段以备 aurora 直连腾讯系后端时复用。
 	switch {
 	case has("11128", "unapproved channel"):
 		return KindBanned // 渠道风控
