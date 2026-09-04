@@ -2,7 +2,6 @@ package accounts
 
 import (
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -40,31 +39,9 @@ var cooldownByKind = map[FailureKind]time.Duration{
 	KindBanned:      30 * time.Minute,
 }
 
-// ClassifyFailure 从 HTTP 状态码与响应体片段归类失败。
-// errBody 可为空;关键词命中优先于状态码(腾讯的 400 也可能是风控)。
+// ClassifyFailure 从 HTTP 状态码归类失败。
+// (E1:腾讯混元码段已移除——aurora 自有通道按状态码分类即足够。)
 func ClassifyFailure(statusCode int, errBody string) FailureKind {
-	body := strings.ToLower(errBody)
-	has := func(ss ...string) bool {
-		for _, s := range ss {
-			if strings.Contains(body, s) {
-				return true
-			}
-		}
-		return false
-	}
-
-	// 腾讯系业务错误码(错误体 JSON 的 "code" 字段)。注:aurora 自有网页通道不产生这些码,
-	switch {
-	case has("11128", "unapproved channel"):
-		return KindBanned // 渠道风控
-	case has("11115", "input length too long"):
-		return KindInput
-	case has("11134", "temporarily unavailable"):
-		return KindOverload
-	case has(`"code":6000`, "超出频率限制", "频率限制"):
-		return KindRateLimited
-	}
-
 	switch statusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return KindAuth

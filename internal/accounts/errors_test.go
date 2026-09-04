@@ -15,10 +15,6 @@ func TestClassifyFailureByCode(t *testing.T) {
 		body   string
 		want   FailureKind
 	}{
-		{"渠道风控 11128", 400, `{"code":11128,"msg":"Illegal API invocation"}`, KindBanned},
-		{"输入超长 11115", 400, `{"code":11115,"msg":"input length too long"}`, KindInput},
-		{"上游过载 11134", 500, `{"code":11134,"msg":"temporarily unavailable"}`, KindOverload},
-		{"额度 6000", 429, `{"code":6000,"msg":"超出频率限制"}`, KindRateLimited},
 		{"401 无 body", 401, "", KindAuth},
 		{"403 无 body", 403, "", KindAuth},
 		{"429 无 body", 429, "", KindRateLimited},
@@ -83,17 +79,8 @@ func TestReportResultRateLimitedCooldown(t *testing.T) {
 	}
 }
 
-func TestReportResultBannedLongCooldown(t *testing.T) {
-	p := newTestPool()
-	a := p.free[0]
-	p.ReportResult(a, 400, `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`)
-	if a.Status != StatusBanned {
-		t.Errorf("11128 应标 StatusBanned, got %s", a.Status)
-	}
-	if a.cooldownUntil.Before(time.Now().Add(29 * time.Minute)) {
-		t.Errorf("11128 冷却应约 30 分钟, got %v", a.cooldownUntil)
-	}
-}
+// TestReportResultBannedLongCooldown 暂缓:Banned 触发路径依赖错误体关键词分类,
+// 腾讯混元码段移除后暂无 aurora 侧触发源。保留 KindBanned 常量与冷却机制备用。
 
 func TestReportResultOverloadNotMarked(t *testing.T) {
 	p := newTestPool()
