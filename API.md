@@ -265,6 +265,20 @@ curl --location 'http://你的服务器ip:8080/v1/models' \
 --header 'Authorization: Bearer access_token'
 ```
 
+返回聚合目录：ChatGPT（按 NUC 桥实测 slug：`auto` / `gpt-5-6` / `gpt-5-6-mini`）+ 各 provider 模型（带 `capabilities` 能力标注）。
+
+实际可用模型以该端点返回为准；provider 仅在对应 token 池/桥地址配置时才注册。
+
+## 网页通道搜索开关（2026-09-04）
+
+`DEEPSEEK_WEB_SEARCH` / `GLM_WEB_SEARCH`（默认关闭）：quick/chat 档是否带联网搜索。关闭可省首字延迟 1~2s；需要网页代查才设 1。详见 docs/NAS_DEPLOYMENT.md 与 DEEPSEEK.md §九。
+
+## gpt-coding 与 CODING_ENABLED
+
+coding 变体已整体封存（2026-09-03，`/v1/models` 不再显示 `-coding` 变体）。
+
+恢复：设 `CODING_ENABLED=true` 并重启；gpt-coding 走 NUC 桥（`CHATGPT_CDP_URL`）的 UI 驱动通道，桥上需有已登录 chatgpt.com 的标签页。详见 docs/CHATGPT_TOOL_BRIDGE.md。
+
 ## 文件上传和文件问答
 
 上传文件：
