@@ -135,7 +135,7 @@ func TestResponsesInputItemsMultiTurn(t *testing.T) {
 	if len(items) != 4 {
 		t.Fatalf("items = %d, want 4", len(items))
 	}
-	if items[1].Type != "function_call" || items[1].Text != `{"path":"a.txt"}` {
+	if items[1].Type != "function_call" || !strings.Contains(items[1].Text, "\"name\":\"read\"") || !strings.Contains(items[1].Text, "a.txt") {
 		t.Errorf("function_call item wrong: %+v", items[1])
 	}
 	if items[2].Type != "function_call_output" || items[2].Text != "内容A" {

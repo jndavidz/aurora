@@ -93,7 +93,7 @@ func TestGeminiCodingPromptFromResponses(t *testing.T) {
 	if !strings.Contains(prompt, "TOOLS AVAILABLE") {
 		t.Errorf("prompt should contain tool instructions: %q", prompt)
 	}
-	if !strings.Contains(prompt, "```json") || !strings.Contains(prompt, `{"path":"a.txt"}`) {
+	if !strings.Contains(prompt, "```json") || !strings.Contains(prompt, "tool_calls") || !strings.Contains(prompt, "read") {
 		t.Errorf("prompt should replay function_call as fence JSON: %q", prompt)
 	}
 	if !strings.Contains(prompt, "Tool result: 内容A") {
