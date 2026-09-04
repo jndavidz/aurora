@@ -33,7 +33,7 @@ func (d *Glm) chatResponses(c *gin.Context, m *glmModel, req *official.Responses
 	streamReq := glmweb.CompletionRequest{
 		Messages:     messages,
 		ChatMode:     m.Mode, // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
-		IsNetworking: true,
+		IsNetworking: d.cfg.GlmWebSearch, // N4(2026-09-04):默认关闭(提速);GLM_WEB_SEARCH=1 开启
 	}
 	if req.Stream {
 		d.chatResponsesStream(c, req, client, streamReq)
@@ -179,7 +179,7 @@ func (d *Glm) chatCompletions(c *gin.Context, m *glmModel, req *official.APIRequ
 	streamReq := glmweb.CompletionRequest{
 		Messages:     messages,
 		ChatMode:     m.Mode, // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
-		IsNetworking: true,
+		IsNetworking: d.cfg.GlmWebSearch, // N4(2026-09-04):默认关闭(提速);GLM_WEB_SEARCH=1 开启
 	}
 	if req.Stream {
 		d.chatCompletionsStream(c, req, client, streamReq)

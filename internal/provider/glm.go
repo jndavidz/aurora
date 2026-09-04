@@ -55,6 +55,16 @@ func NewGlm(cfg *config.Config) *Glm {
 		if m == nil {
 			continue
 		}
+		// 搜索关闭时如实标注:chat 档不再宣称 CapWebSearch(与 deepseek 同做法)。
+		if !cfg.GlmWebSearch {
+			caps := make([]Capability, 0, len(m.Caps))
+			for _, cap := range m.Caps {
+				if cap != CapWebSearch {
+					caps = append(caps, cap)
+				}
+			}
+			m.Caps = caps
+		}
 		d.byID[id] = m
 		d.models = append(d.models, Model{ID: id, OwnedBy: "zhipu", Caps: m.Caps})
 	}

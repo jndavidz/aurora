@@ -43,6 +43,9 @@ type Config struct {
 	GlmWebTokens string   // 网页 token 注入池文件路径(每行一个 chatglm_refresh_token)
 	GlmModels    []string // 暴露的模型目录
 	GlmProxy     string   // 网页通道出口代理
+	// GlmWebSearch 控制 chat 档(speed/thinking)是否带联网搜索。
+	// 默认关闭(与 deepseek 同做法):网页搜索使首字延迟 +1~2s;GLM_WEB_SEARCH=1 开启。
+	GlmWebSearch bool // 默认 false
 
 	// Kimi(www.kimi.com)网页逆向通道配置。
 	KimiWebBase   string   // 网页端 base,默认 https://www.kimi.com
@@ -152,6 +155,7 @@ func Load() Config {
 		GlmWebTokens: os.Getenv("GLM_WEB_TOKENS"),
 		GlmModels:    splitCSV(os.Getenv("GLM_MODELS")),
 		GlmProxy:     os.Getenv("GLM_PROXY"),
+		GlmWebSearch: getBoolEnv("GLM_WEB_SEARCH", false),
 
 		KimiWebBase:   getEnv("KIMI_WEB_BASE", "https://www.kimi.com"),
 		KimiWebTokens: os.Getenv("KIMI_WEB_TOKENS"),
