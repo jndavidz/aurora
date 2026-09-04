@@ -42,9 +42,9 @@ func NewClient(baseURL, tokenFile, proxyURL string) (*Client, error) {
 	c := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client: factory.NewWebClient(factory.Profile{
-			Mode:       factory.ModeGoNative,
-			Upgradable: true,
-			ProxyURL:   proxyURL, // 代理语义由工厂内化(clone DefaultTransport + 注入)
+			Mode:       factory.ModeTLSFaked, // C1 灰度(2026-09-04):Go JA3 + Chrome UA 是最刺眼的非真人特征
+			Upgradable: true,                // 保留:AURORA_LEGACY_IDENTITY=1 可回退 Go 原生
+			ProxyURL:   proxyURL,            // 代理语义由工厂内化(clone DefaultTransport + 注入)
 		}),
 	}
 	if tokenFile != "" {
