@@ -82,7 +82,7 @@ type Client struct {
 // NewClient 构造客户端。accounts 至少一个。
 func NewClient(accounts []*Account) *Client {
 	return &Client{
-		client:   factory.NewWebClient(factory.Profile{Mode: factory.ModeGoNative, Upgradable: true, Timeout: 120 * time.Second}),
+		client:   factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked, Upgradable: true, Timeout: 120 * time.Second}), // C1 灰度(2026-09-04):第 4/4 家
 		lastUsed: make([]time.Time, len(accounts)),
 		accounts: accounts,
 	}

@@ -52,7 +52,7 @@ func NewClient(baseURL, tokenFile, refreshToken, accessToken, deviceID string) *
 	}
 	c := &Client{
 		baseURL:      strings.TrimRight(baseURL, "/"),
-		httpClient:   factory.NewWebClient(factory.Profile{Mode: factory.ModeGoNative, Upgradable: true}),
+		httpClient:   factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked, Upgradable: true}), // C1 灰度(2026-09-04):第 2/4 家
 		refreshToken: refreshToken,
 		accessToken:  accessToken,
 		deviceID:     deviceID,

@@ -66,7 +66,7 @@ func NewClient(baseURL, tokenFile string) *Client {
 	c := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		authURL:    authBase,
-		httpClient: factory.NewWebClient(factory.Profile{Mode: factory.ModeGoNative, Upgradable: true}),
+		httpClient: factory.NewWebClient(factory.Profile{Mode: factory.ModeTLSFaked, Upgradable: true}), // C1 灰度(2026-09-04):第 3/4 家
 		tokenFile:  tokenFile,
 	}
 	if tokenFile != "" {

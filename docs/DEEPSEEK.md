@@ -133,3 +133,7 @@ curl -N -X POST http://10.10.10.2:65432/v1/responses \
 # 4. /v1/models 应包含 deepseek-* 且带 capabilities
 curl -s -H "Authorization: Bearer david" http://10.10.10.2:65432/v1/models
 ```
+
+## 九、性能专项
+
+- `docs/DEEPSEEK_PERF_2026-09-02.md` —— DeepSeek 通道提速闭环（实测对照 → 差距拆解 → 搜索开关 `DEEPSEEK_WEB_SEARCH` 实施 → 复测验收；含面板测速口径修正）。调延迟/对比官方 API 时先读它。
