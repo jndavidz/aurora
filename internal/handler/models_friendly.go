@@ -15,7 +15,7 @@ var friendlyModelNames = map[string]string{
 	"gpt-5-6-mini":           "GPT-5.6 Mini",
 	"deepseek-v4-flash": "DeepSeek V4 Flash",
 	"deepseek-v4-pro":   "DeepSeek V4 Pro",
-	"glm-flash":           "GLM-5.2",
+	"glm-flash":           "GLM-5.3 Flash",
 	"kimi":              "Kimi",
 	"Qwen3.8-Max":            "Qwen3.8 Max",
 	"doubao":            "豆包",
