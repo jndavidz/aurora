@@ -57,11 +57,13 @@ type Provider interface {
 // Registry 持有所有已注册的 Provider,按模型 id 路由。
 type Registry struct {
 	providers []Provider
+	// E1/G2:provider 级熔断——连续失败达阈值则 Resolve 跳过,冷却到期半开恢复
+	breaker *ProviderBreaker
 }
 
 // NewRegistry 构造一个空注册表。
 func NewRegistry() *Registry {
-	return &Registry{}
+	return &Registry{breaker: NewProviderBreaker()}
 }
 
 // Register 追加一个 Provider。先注册的优先级更高(Resolve 正序遍历,
@@ -74,11 +76,17 @@ func (r *Registry) Register(p Provider) {
 func (r *Registry) Resolve(model string) Provider {
 	for _, p := range r.providers {
 		if p.Handles(model) {
+			if r.breaker.Tripped(p.Name()) {
+				continue // 熔断中的 provider 跳过(Resolve 找不到别的就走 ChatGPT 兜底)
+			}
 			return p
 		}
 	}
 	return nil
 }
+
+// Breaker 暴露熔断器(供 handler 记录成败与观测)。
+func (r *Registry) Breaker() *ProviderBreaker { return r.breaker }
 
 // Models 聚合所有 Provider 的模型列表。
 func (r *Registry) Models() []Model {

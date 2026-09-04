@@ -138,7 +138,6 @@ curl -s -H "Authorization: Bearer david" http://10.10.10.2:65432/v1/models
 
 > 起因：AI 对话后端面板测速显示 aurora 反代 deepseek 明显慢于官方 API（总耗时 10428ms vs 1526ms）。
 > 此处记录完整的「实测对照 → 差距拆解 → 优化实施 → 复测验收」闭环。
-> 关联：跨仓库整合分析见 workbuddy-proxy `docs/integration-aurora-2026-09-01.md`；hy3 通道验证见 workbuddy-proxy `docs/hy3-validation-2026-09-02.md`。
 
 ### 9.1 实测对照（NAS 同机、同 prompt「只回复两个字：好了」、非流式）
 
@@ -181,10 +180,10 @@ aurora 每次对话串行走 5 步（`deepseek_chat.go:36-44` + `client.go:200-2
 
 **搜索关闭后 ~2.4s 稳态已接近网页逆向通道的理论下限（~2s 上游 + ~0.3s 链路），deepseek 通道提速专项到此为止。**
 
-- **需更快**的场景：走 workbuddy 官方 v2 API 的 deepseek-v4-flash（460ms 级）——原生 API 无逆向链路开销
+- **需更快**的场景：官方 API 直连（460ms 级）——原生 API 无逆向链路开销
 - **需联网搜索**的场景：设 `DEEPSEEK_WEB_SEARCH=1`（NAS compose env，+1~2s）
 - **长回复场景**：~2.3s 固定开销被摊薄，按 tok/s 归一与官方差距仅 ~30%，体感差距收窄
-- 通道定位：**免费补充 + 备胎**，与 workbuddy-proxy 整合分析中「workbuddy 定位」互补
+- 通道定位：**免费补充 + 备胎**（网页逆向通道的固有定位）
 
 ### 9.6 面板测速口径修正（供 AI 对话后端参考）
 

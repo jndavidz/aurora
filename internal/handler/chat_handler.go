@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -45,6 +46,23 @@ func NewChatHandler(pool *accounts.Pool, cfg *config.Config, providers *provider
 	}
 }
 
+// recordProviderOutcome 在 provider 处理结束后按响应状态码记录熔断成败。
+// 用 defer 挂在分派点:provider 内部无论多少错误出口都覆盖,无侵入。
+//   - HTTP < 500(200/4xx):不计失败 —— 4xx 是请求侧问题,连续 500 才是上游坏了
+//   - HTTP >= 500:计一次连续失败,达 3 次摘除 60s(Resolve 跳过 → 走 ChatGPT 兜底)
+func (h *ChatHandler) recordProviderOutcome(name string, c *gin.Context) {
+	if h.providers == nil {
+		return
+	}
+	if c.Writer.Status() >= 500 {
+		if tripped := h.providers.Breaker().RecordFailure(name, fmt.Sprintf("%d", c.Writer.Status())); tripped {
+			log.Printf("[breaker] provider %s tripped: consecutive failures reached, cooling 60s", name)
+		}
+		return
+	}
+	h.providers.Breaker().RecordSuccess(name)
+}
+
 func (h *ChatHandler) Nightmare(c *gin.Context) {
 	var original_request officialtypes.APIRequest
 	err := c.BindJSON(&original_request)
@@ -83,6 +101,8 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	// 不经过 ChatGPT 账号池 / resolveAccount。
 	if h.providers != nil {
 		if p := h.providers.Resolve(original_request.Model); p != nil {
+			// E1/G2 熔断:按响应状态码记录 provider 成败(>=500 计失败,连续 3 次摘除 60s)
+			defer h.recordProviderOutcome(p.Name(), c)
 			p.ChatCompletions(c, &original_request)
 			return
 		}
@@ -332,6 +352,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	// 不经过 ChatGPT 账号池 / resolveAccount。
 	if h.providers != nil {
 		if p := h.providers.Resolve(responsesRequest.Model); p != nil {
+			defer h.recordProviderOutcome(p.Name(), c)
 			p.Responses(c, &responsesRequest)
 			return
 		}
