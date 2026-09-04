@@ -258,6 +258,7 @@ nohup ./aurora-linux >> .runtime/logs/aurora_run.log 2>&1 &
 - **对外**:pi/zcode/codebuddy 走 `/v1/responses`(pi 的实际路径是 `/v1/models/responses`,已加别名路由),模型选 `deepseek-v4-*-chat`(对话)或 `*-coding`(工具调用)。
 - **双端互斥**:DeepSeek 网页 token 与 ChatGPT 的 session token 一样,同一批 token 不能 NAS/PC 同时运行(互相踢登录态);NAS 启用后 PC 端 aurora 停。
 - **WAF**:`DEEPSEEK_PROXY` 务必非美区,否则 CloudFront 202 拦截。
+- **豆包凭据更新(2026-09-04)**:doubao_accounts.json 已通过 NUC Chrome CDP 捕获更新(capture-doubao-nuc.mjs 监听+drive-doubao-send.mjs 驱动发送,版本 3.35.5/a_bogus 196 字符),通道验收 370ms 200(此前 502 empty response 系 a_bogus 3 周未刷新)。工具:check-doubao-login.mjs 可查登录态
 - **搜索开关(2026-09-02 提速)**:`DEEPSEEK_WEB_SEARCH=1` 时 quick 档(`-chat`)带联网搜索(+1~2s 首字延迟);
   **默认关闭**(API 客户端联网应由自己侧调 search 工具)。未在 NAS `.env` 设置 = 关闭。
   提速专项实测详见 `docs/WORKBUDDY_VALIDATION_2026-09-02.md` §11(官方 460ms vs 反代 3126ms→2400ms)。
