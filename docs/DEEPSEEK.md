@@ -134,6 +134,58 @@ curl -N -X POST http://10.10.10.2:65432/v1/responses \
 curl -s -H "Authorization: Bearer david" http://10.10.10.2:65432/v1/models
 ```
 
-## 九、性能专项
+## 九、性能专项（2026-09-02 实测）
 
-- `docs/DEEPSEEK_PERF_2026-09-02.md` —— DeepSeek 通道提速闭环（实测对照 → 差距拆解 → 搜索开关 `DEEPSEEK_WEB_SEARCH` 实施 → 复测验收；含面板测速口径修正）。调延迟/对比官方 API 时先读它。
+> 起因：AI 对话后端面板测速显示 aurora 反代 deepseek 明显慢于官方 API（总耗时 10428ms vs 1526ms）。
+> 此处记录完整的「实测对照 → 差距拆解 → 优化实施 → 复测验收」闭环。
+> 关联：跨仓库整合分析见 workbuddy-proxy `docs/integration-aurora-2026-09-01.md`；hy3 通道验证见 workbuddy-proxy `docs/hy3-validation-2026-09-02.md`。
+
+### 9.1 实测对照（NAS 同机、同 prompt「只回复两个字：好了」、非流式）
+
+| 通道 | 轮次 | 每轮耗时 | 均值 |
+|---|---|---|---|
+| 官方 API 直连（api.deepseek.com，max_tokens=8） | 5 | 585/457/345/498/426 ms | **~460 ms** |
+| aurora 反代（网页逆向 deepseek-v4-flash-chat，搜索开） | 7 | 3096/2938/3109/2718/3014/4557/2549 ms | **~3126 ms** |
+| aurora 反代（**搜索关**，部署后复测） | 7 | 1822/2003/2714/1898/2000/2976/3273 ms | **~2400 ms** |
+
+网络非因素：NAS→两端点 TLS 建连均 0.15–0.19s（山东联通 → DeepSeek 国内节点，实测）。
+
+### 9.2 差距拆解（官方 1 步 vs aurora 5 步）
+
+aurora 每次对话串行走 5 步（`deepseek_chat.go:36-44` + `client.go:200-253`）：
+
+```
+① POST /chat_session/create        每请求新建会话
+② POST /create_pow_challenge       取 PoW 挑战
+③ 本地求解 DeepSeekHashV1          基准实测 ~126ms（72K nonce × 23 轮 Keccak-f1600）
+④ POST /chat/completion (SSE)      真正对话——剩余 ~2s 在此（上游网页池排队+首字）
+⑤ defer DeleteSession              响应后执行，不影响客户端体感
+```
+
+### 9.3 已实施
+
+| 项 | 内容 | 收益 |
+|---|---|---|
+| **搜索开关**（`6acf0c7`） | `DEEPSEEK_WEB_SEARCH`（默认 false）：quick 档不再强制联网搜索；caps 如实去 `CapWebSearch`；有图恒 false（识图互斥） | **-700ms（-23%）**，已复测验收 |
+| 修 gemini_test.go:92 签名 | 4e0e8c8 遗留的编译破坏 | provider 包测试恢复可运行 |
+
+### 9.4 评估后不做
+
+| 项 | 理由 |
+|---|---|
+| PoW 求解并行化/预热池 | 基准实测单次求解仅 **~126ms**，预热池收益上限 ~200ms，却引入后台状态复杂度——ROI 证伪 |
+| 上下文压缩调参 | `--no-compact` 后压缩事件已消失（见 hy3 验证 §0 重大修正），参数无对象 |
+| 通道固有部分 | 上游网页池排队与首字延迟（~1.5-2s）不可优化；SSE→p/o/v 解析为微秒级 |
+
+### 9.5 提速结论
+
+**搜索关闭后 ~2.4s 稳态已接近网页逆向通道的理论下限（~2s 上游 + ~0.3s 链路），deepseek 通道提速专项到此为止。**
+
+- **需更快**的场景：走 workbuddy 官方 v2 API 的 deepseek-v4-flash（460ms 级）——原生 API 无逆向链路开销
+- **需联网搜索**的场景：设 `DEEPSEEK_WEB_SEARCH=1`（NAS compose env，+1~2s）
+- **长回复场景**：~2.3s 固定开销被摊薄，按 tok/s 归一与官方差距仅 ~30%，体感差距收窄
+- 通道定位：**免费补充 + 备胎**，与 workbuddy-proxy 整合分析中「workbuddy 定位」互补
+
+### 9.6 面板测速口径修正（供 AI 对话后端参考）
+
+上轮面板数据（Aurora 436 tok vs 官方 91 tok）的 4.8 倍生成量差异，源于**网页协议吃不到 max_tokens**（`Complete` body 固定 map 无此字段）。按生成速度归一（41.8 vs 59.6 tok/s）实际差距 ~30%；对比两通道时**必须压低生成上限或按 tok/s 归一**，否则总耗时不可比。
