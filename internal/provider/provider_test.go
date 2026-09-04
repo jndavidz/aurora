@@ -259,3 +259,42 @@ func TestResponsesStyleToolUnmarshal(t *testing.T) {
 		t.Fatalf("嵌套格式 Function.Name = %q", tools2[0].Function.Name)
 	}
 }
+
+// 2026-09-04: ResolveCanonical 规范化匹配(容错友好名当 id 传)
+func TestResolveCanonicalFriendlyName(t *testing.T) {
+	cfg := &config.Config{}
+	r := NewRegistry()
+	r.Register(NewDeepSeek(cfg))
+	r.Register(NewGlm(cfg))
+	// 挂载 friendly 反查(生产由 handler.NewModelsHandler 调用)
+	SetFriendlyModelLookup(func(name string) string {
+		rev := map[string]string{"GLM-5.3 Flash": "glm-flash", "DeepSeek V4 Flash": "deepseek-v4-flash"}
+		return rev[name]
+	})
+	t.Cleanup(func() { SetFriendlyModelLookup(func(string) string { return "" }) })
+
+	// 友好名 → glm-flash
+	p, id := r.ResolveCanonical("GLM-5.3 Flash")
+	if p == nil {
+		t.Fatal("GLM-5.3 Flash 应命中 zhipu provider")
+	}
+	if p.Name() != "zhipu" || id != "glm-flash" {
+		t.Errorf("GLM-5.3 Flash → want zhipu/glm-flash, got %v/%v", p.Name(), id)
+	}
+	// 大小写容错 → glm-flash
+	if _, id := r.ResolveCanonical("GLM-FLASH"); id != "glm-flash" {
+		t.Errorf("GLM-FLASH → want glm-flash, got %v", id)
+	}
+	// 精确 id 原样返回
+	if _, id := r.ResolveCanonical("glm-flash"); id != "glm-flash" {
+		t.Errorf("glm-flash → want 原样, got %v", id)
+	}
+	// deepseek 同样容错
+	if _, id := r.ResolveCanonical("DeepSeek V4 Flash"); id != "deepseek-v4-flash" {
+		t.Errorf("DeepSeek V4 Flash → want deepseek-v4-flash, got %v", id)
+	}
+	// 未注册模型 → nil
+	if p := r.Resolve("nonexistent-model"); p != nil {
+		t.Errorf("nonexistent 应为 nil")
+	}
+}

@@ -13,6 +13,7 @@ type ModelsHandler struct {
 }
 
 func NewModelsHandler(registry *provider.Registry, codingEnabled bool) *ModelsHandler {
+	initFriendlyModelLookup() // 挂载友好名反查(面板显示名容错)
 	return &ModelsHandler{registry: registry, codingEnabled: codingEnabled}
 }
 

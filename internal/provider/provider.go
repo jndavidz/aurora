@@ -73,6 +73,10 @@ func (r *Registry) Register(p Provider) {
 }
 
 // Resolve 返回接管给定模型的 Provider;无匹配返回 nil(走默认 ChatGPT)。
+// 匹配分两层:先精确 Handles;失败后按规范化 id(小写、去空白)再匹配——
+// 容错客户端把友好名当 id 传的情况(实测面板:GLM-5.3 Flash / Qwen3.8 MAX)。
+// 命中规范化层的,会把 provider 的真实模型 id 回填到 req(handler 侧见
+// chat_handler 的 normalizedModel 逻辑),保证 provider 内部 byID 路由可用。
 func (r *Registry) Resolve(model string) Provider {
 	for _, p := range r.providers {
 		if p.Handles(model) {
@@ -82,7 +86,83 @@ func (r *Registry) Resolve(model string) Provider {
 			return p
 		}
 	}
+	// 第二层:规范化匹配(大小写/空白容错)
+	norm := normalizeModelID(model)
+	if norm != "" {
+		for _, p := range r.providers {
+			for _, m := range p.Models() {
+				if normalizeModelID(m.ID) == norm {
+					return p
+				}
+			}
+		}
+	}
+	// 第三层:friendly_name 反查(面板把显示名当 id 传:GLM-5.3 Flash → glm-flash)
+	if real := friendlyModelLookup(model); real != "" {
+		for _, p := range r.providers {
+			for _, m := range p.Models() {
+				if m.ID == real {
+					return p
+				}
+			}
+		}
+	}
 	return nil
+}
+
+// friendlyModelLookup 由 handler 侧注入(friendlyModelNames 表反查),
+// 避免 provider 包反向依赖 handler 包。默认无操作。
+var friendlyModelLookup = func(string) string { return "" }
+
+// SetFriendlyModelLookup 注册友好名反查函数(仅 handler 启动时调用一次)。
+func SetFriendlyModelLookup(fn func(string) string) { friendlyModelLookup = fn }
+
+// ResolveCanonical 返回 (provider, 真实模型 id)。规范化层命中时 id 与传入
+// 原文不同(如 "GLM-5.3 Flash" → "glm-flash"),handler 应改用返回的 id。
+func (r *Registry) ResolveCanonical(model string) (Provider, string) {
+	if p := r.Resolve(model); p != nil {
+		// 精确路径:原文即真实 id
+		for _, m := range p.Models() {
+			if m.ID == model {
+				return p, model
+			}
+		}
+		// 规范化路径:找该 provider 下规范化匹配的真实 id
+		norm := normalizeModelID(model)
+		for _, m := range p.Models() {
+			if normalizeModelID(m.ID) == norm {
+				return p, m.ID
+			}
+		}
+		// friendly 反查路径:显示名 → 真实 id
+		if real := friendlyModelLookup(model); real != "" {
+			for _, m := range p.Models() {
+				if m.ID == real {
+					return p, m.ID
+				}
+			}
+			return p, real
+		}
+		return p, model
+	}
+	return nil, model
+}
+
+// normalizeModelID 规范化模型 id:小写、去空白。保守策略:保留点号/连字符
+// 差异(glm-5.2 ≠ glm52)。
+func normalizeModelID(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '_' {
+			continue
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b = append(b, c)
+	}
+	return string(b)
 }
 
 // Breaker 暴露熔断器(供 handler 记录成败与观测)。

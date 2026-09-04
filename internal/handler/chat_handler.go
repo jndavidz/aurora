@@ -100,7 +100,12 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider,
 	// 不经过 ChatGPT 账号池 / resolveAccount。
 	if h.providers != nil {
-		if p := h.providers.Resolve(original_request.Model); p != nil {
+		if p, canonical := h.providers.ResolveCanonical(original_request.Model); p != nil {
+			// 规范化命中(如面板把友好名 GLM-5.3 Flash 当 id):回填真实 id,
+			// 否则 provider 内部 byID 精确表查不到
+			if canonical != original_request.Model {
+				original_request.Model = canonical
+			}
 			// E1/G2 熔断:按响应状态码记录 provider 成败(>=500 计失败,连续 3 次摘除 60s)
 			defer h.recordProviderOutcome(p.Name(), c)
 			p.ChatCompletions(c, &original_request)
@@ -351,7 +356,10 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider 处理,
 	// 不经过 ChatGPT 账号池 / resolveAccount。
 	if h.providers != nil {
-		if p := h.providers.Resolve(responsesRequest.Model); p != nil {
+		if p, canonical := h.providers.ResolveCanonical(responsesRequest.Model); p != nil {
+			if canonical != responsesRequest.Model {
+				responsesRequest.Model = canonical
+			}
 			defer h.recordProviderOutcome(p.Name(), c)
 			p.Responses(c, &responsesRequest)
 			return

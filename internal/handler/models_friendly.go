@@ -1,5 +1,7 @@
 package handler
 
+import "aurora/internal/provider"
+
 // friendlyModelName 返回模型的友好显示名(2026-09-04,用户拍板与测试页对齐:
 // 下拉/面板显示不带 -chat 后缀的简洁名;请求仍用真实 id)。
 // 未映射的模型返回 ""(调用方不输出 friendly_name 字段)。
@@ -23,4 +25,15 @@ var friendlyModelNames = map[string]string{
 
 func friendlyModelName(id string) string {
 	return friendlyModelNames[id]
+}
+
+// initFriendlyModelLookup 把友好名反查表挂到 provider.Registry
+// (面板把显示名当 id 传时,Resolve 走第三层反查)。
+func initFriendlyModelLookup() {
+	// 反查表: friendly 名 → 真实 id
+	rev := make(map[string]string, len(friendlyModelNames))
+	for id, name := range friendlyModelNames {
+		rev[name] = id
+	}
+	provider.SetFriendlyModelLookup(func(name string) string { return rev[name] })
 }
