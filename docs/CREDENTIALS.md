@@ -37,10 +37,9 @@
 - ChatGPT 池内:10 分钟健康检查自动换发(session/refresh → access)
 - GLM / Kimi:refresh_token 自动换发 access_token 并轮换 refresh
 - Gemini / Claude(CDP 桥):请求自捕获刷新 + 唤醒/休眠闭环 + 限额监控(Claude)
-- MiniMax / Mimo / Grok / 千问:**NUC token-harvester 每日提取**(2026-09-05 起)
+- MiniMax / Mimo / Grok / 千问 / DeepSeek:**NUC token-harvester 每日提取**(2026-09-05 起)
 
 **半自动(人工一次性操作后长期有效)**:
-- DeepSeek:失效后重抓一次(登录态在 NUC Chrome 为游客票,重抓需真实登录;有效票人工管理)
 - MiniMax:登录态死亡(≥60 天)需在 NUC Chrome 重新登录,之后 harvester 自动接管
 - Mimo:cookie 固定 30 天不滚动,到期前预警,每月在 NUC Chrome 人工登录一次
 
@@ -53,11 +52,12 @@
 
 - **位置**:NUC(10.10.10.3)`/opt/credential-keeper/token-harvester.mjs`;权威副本
   `scripts/nuc/token-harvester.mjs` + systemd service/timer(改配置先改仓库再同步)。
-- **调度**:每日 07:00 + rand 30min(`token-harvester.timer`,Persistent=true 补跑)。
-- **站点**:minimax(localStorage _token+JWT exp 校验)/ mimo(cookie 串)/
+- **调度**:每日 **08:15** + rand 30min(`token-harvester.timer`,对齐 NUC 开机窗口
+  08:00–00:30;Persistent=true 错点开机补跑)。
+- **站点(5)**:deepseek(localStorage userToken,**JSON 解包**兼容改版)/
+  minimax(localStorage _token+JWT exp 校验)/ mimo(cookie 串)/
   qianwen(tongyi_sso_ticket+x5sec)/ grok(uid|cookie 串)。
-  排除:豆包(冻结)/ GLM·Kimi(tokens-state 自愈)/ Gemini·Claude·ChatGPT(桥/池体系)/
-  DeepSeek(游客票无效)。
+  排除:豆包(冻结)/ GLM·Kimi(tokens-state 自愈)/ Gemini·Claude·ChatGPT(桥/池体系)。
 - **幂等**:提取值与 NAS 部署区 md5 对比,变化才推;`cdp.cmd` 20s 超时防挂起。
 - **凭证红线**:日志只记 OK/FAIL + 长度,绝不打印凭证内容。
 - **手动触发**:`ssh root@10.10.10.3 'node /opt/credential-keeper/token-harvester.mjs'`
