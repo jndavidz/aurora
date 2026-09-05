@@ -88,6 +88,9 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | P1-7 修复 | qianwenweb 差值输出校验 HasPrefix（同 P1-6 glmweb 模式），上游重排引用时整体替换而非重复输出 |
 | P1-35 修复 | doubaoweb/geminweb `nextAccount` unlock→sleep→relock 竞态：改为锁内预标记 `lastUsed=now+wait`（wait>0）或 now（wait≤0），并发 goroutine 无法再绕过限频 |
 | E3 凭证热加载 | deepseekweb `NextToken` 每次先 stat token 文件，mtime 变化即整池重读（keep-last-good：读失败/空文件沿用旧池）；顺带修掉 cursor 无锁竞态（`sync.Mutex`）。minimax/mimo 同日补齐：provider 层 `webClient` 记录 tokenMod，mtime 变更置空重建。keeper scp 重推文件后进程内即时生效，无需重启。测试：deepseekweb `hotreload_test.go`（含 -race）+ provider `hotreload_test.go` |
+| F2 收窄版 | `chatRequestState` struct 替代 toolCalling 系列 6 指针输出参数（`fba5b63`）。澄清语义：仅 clientState 是 in-out，其余纯输入。零业务逻辑变更，S1 核心路径后续改动的复利点。G4 的"拆 handler"以此为起点自然推进 |
+| G1 publish 最小版 | `scripts/keeper/publish-tokens.sh`（`7080e2d`）：同步区 → 部署区 token 同步（幂等/原子覆盖/空文件保留/JSON 防呆），配合 E3 实现"PC 补票 → 容器内即时生效"闭环。GLM/Kimi 排除（tokens-state 进程自愈）。NAS 实测通过。act（CDP 自动重抓）维持留空：现有 probe+alert+人工响应已构成实际闭环 |
+| G3 前置 golden | so/turnstile VM 零测试 → `golden_test.go` ×2（09-05）：微型字节码锁定核心 opcode 语义（赋值/拷贝/加法拼接/xor/base64/JSON/删元素/子队列）+ 端到端 success 字节级快照 + P0-4 无限循环终止哨兵。首轮失败即澄清关键语义：**操作类 opcode 参数均为寄存器引用，字面值须先 op2 入寄存器**。真实 dx 样本待 live 抓取后可叠加全流程快照 |
 
 ---
 
@@ -100,8 +103,8 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | ~~P2~~ | ~~C3 device id 账号级固化~~ | — | **已完成**（09-05 下午，`NewChatClientStateForAccount`） |
 | ~~P2~~ | ~~N3 硬编码指纹外置~~ | — | **已完成**（09-05 下午，`SENTINEL_SDK_VERSION`/`OAI_BUILD_NUMBER`） |
 | ~~P3~~ | ~~E3 凭证热加载~~ | — | **已完成**(09-05 下午,deepseekweb mtime 重读;minimax/mimo 同类问题见 §3.3 注记) |
-| P4 | G3 VM 合并 | 1–3 周 | so(1107)+turnstile(1640) 仅 7 同名函数；**暂缓**（上游改版时抽象层先碎） |
-| P4 | G4 拆 handler / F1 webclient / F2 context | 各 1–3 周 | 大重构，按路线图节奏 |
+| ~~P4~~ | ~~G3 VM 合并~~ | **前置已备** | so/turnstile golden 测试已就位（09-05）——合并的测试保护网完成；合并本身仍**暂缓**（上游改版时抽象层先碎，等稳定期+真实 dx 样本再评估） |
+| ~~P4~~ | ~~G4 拆 handler / F1 webclient / F2 context~~ | — | **F2 收窄版已完成**（chatRequestState，09-05）；G4 随其渐进推进；F1 降级"暂不做"（收益已被工厂化蚕食，有具体重复痛点再抽） |
 
 **明确不做**：G2 chat 限频/Pool 信号量（与「速度快」及拟真人拍板冲突）；workbuddy 融合；双活多副本；turnstile/so 抽象层；启用元宝。
 （补充自 ARCHITECTURE_AUDIT §9）：不把 ChatGPT 塞进 Provider 接口；不写 turnstile/so 优雅抽象层；不引依赖注入框架；typings 不换官方 SDK；不一次性重写 handler；不强求 10 家客户端 100% 统一（Gemini RPC/Grok WS/Mimo ASR/Doubao 模板是结构性异类）；暂不做指标/追踪体系；测试覆盖率分层设定（toolcall 85%、客户端靠 live 测试）。
@@ -199,3 +202,4 @@ NAS(10.10.10.2) aurora 容器 :65432 ──┬── NUC(10.10.10.3) Chrome CDP:
 | 09-04 | workbuddy 融合取消（定位收敛纯对话反代）；拟真人仅限测试；C1 四家 TLS 部署；E1/E2/G2 落地；豆包走桥（路线1） |
 | 09-05 | 模型 id 全量小写 `-` 化部署；豆包滑块→登出→限频，**冷冻** |
 | 09-05（下午） | E2 收口 + 遗留缺陷清零（P0-13/P1-4/P1-7/P1-35）+ C2/C3/N3 反检测加固；指纹参数外置为 `SENTINEL_SDK_VERSION`/`OAI_BUILD_NUMBER` |
+| 09-05（晚） | F2 收窄版（chatRequestState）；G1 publish 最小版；G3 前置 golden（so/turnstile VM 语义快照）——四项大重构中可安全推进部分全部落地，F1 降级暂不做 |
