@@ -3,6 +3,8 @@ package turnstile
 import (
 	"encoding/json"
 	"testing"
+
+	"aurora/internal/sentinelvm"
 )
 
 // golden 测试(2026-09-05,G3 前置):与 so 包同构的 VM 语义快照。
@@ -17,32 +19,32 @@ import (
 func runGoldenQueue(t *testing.T, queue []any, key string) *turnstileSolver {
 	t.Helper()
 	s := &turnstileSolver{
-		regs:     map[string]any{},
+		Base:     sentinelvm.Base{Regs: map[string]any{}},
 		maxSteps: 50000,
 	}
 	s.window = s.buildWindow()
 	s.done = false
 	s.initRuntime()
 	// 对齐 solve():注册 success/error 终止回调(success 收值经 latin1Base64)
-	s.setReg(turnstileSuccessReg, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(turnstileSuccessReg, vmFunc(func(args ...any) (any, error) {
 		if !s.done {
 			s.done = true
 			var value any
 			if len(args) > 0 {
 				value = args[0]
 			}
-			s.resolved = latin1Base64Encode(s.jsToString(value))
+			s.resolved = sentinelvm.Latin1Base64Encode(s.jsToString(value))
 		}
 		return nil, nil
 	}))
-	s.setReg(turnstileErrorReg, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(turnstileErrorReg, vmFunc(func(args ...any) (any, error) {
 		if !s.done {
 			s.done = true
 		}
 		return nil, nil
 	}))
-	s.setReg(turnstileKeyReg, key)
-	s.setReg(turnstileQueueReg, queue)
+	s.SetReg(turnstileKeyReg, key)
+	s.SetReg(turnstileQueueReg, queue)
 	if err := s.runQueue(); err != nil {
 		t.Fatalf("runQueue: %v", err)
 	}
@@ -96,7 +98,7 @@ func TestTurnstileOpcodeGolden(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := runGoldenQueue(t, tc.queue, "golden-key")
-			got := s.getReg(tc.reg)
+			got := s.GetReg(tc.reg)
 			gotJSON, _ := json.Marshal(got)
 			wantJSON, _ := json.Marshal(tc.want)
 			if string(gotJSON) != string(wantJSON) {

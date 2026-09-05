@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"aurora/internal/browserfp"
+	"aurora/internal/sentinelvm"
 	"aurora/util"
 )
 
@@ -30,15 +31,15 @@ const (
 	prototypeMeta        = "__prototype__"
 )
 
-type vmFunc func(args ...any) (any, error)
+type vmFunc = sentinelvm.VmFunc // G3: 统一类型身份(CallFn 断言依赖;原为独立定义类型)
 
 type regMapRef struct {
 	solver *turnstileSolver
 }
 
 type turnstileSolver struct {
-	profile   turnstileRequirementsProfile
-	regs      map[string]any
+	profile turnstileRequirementsProfile
+	sentinelvm.Base
 	window    map[string]any
 	done      bool
 	resolved  string
@@ -80,6 +81,7 @@ func SolveDX(requirementsToken, dx string) (string, error) {
 		return "", err
 	}
 	solver := &turnstileSolver{
+		Base:     sentinelvm.Base{Regs: map[string]any{}},
 		profile:  profile,
 		maxSteps: 50000,
 	}
@@ -176,7 +178,7 @@ func parseTurnstileRequirementsProfile(requirementsToken string) (turnstileRequi
 }
 
 func (s *turnstileSolver) solve(requirementsToken, dx string) (string, error) {
-	s.regs = map[string]any{}
+	s.Regs = map[string]any{}
 	s.window = s.buildWindow()
 	s.done = false
 	s.resolved = ""
@@ -184,29 +186,29 @@ func (s *turnstileSolver) solve(requirementsToken, dx string) (string, error) {
 	s.stepCount = 0
 	s.initRuntime()
 
-	s.setReg(turnstileSuccessReg, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(turnstileSuccessReg, vmFunc(func(args ...any) (any, error) {
 		if !s.done {
 			s.done = true
 			var value any
 			if len(args) > 0 {
 				value = args[0]
 			}
-			s.resolved = latin1Base64Encode(s.jsToString(value))
+			s.resolved = sentinelvm.Latin1Base64Encode(s.jsToString(value))
 		}
 		return nil, nil
 	}))
-	s.setReg(turnstileErrorReg, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(turnstileErrorReg, vmFunc(func(args ...any) (any, error) {
 		if !s.done {
 			s.done = true
 			var value any
 			if len(args) > 0 {
 				value = args[0]
 			}
-			s.rejected = latin1Base64Encode(s.jsToString(value))
+			s.rejected = sentinelvm.Latin1Base64Encode(s.jsToString(value))
 		}
 		return nil, nil
 	}))
-	s.setReg(turnstileCallbackReg, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(turnstileCallbackReg, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
@@ -223,42 +225,42 @@ func (s *turnstileSolver) solve(requirementsToken, dx string) (string, error) {
 				innerQueue = queueValue
 			}
 		}
-		s.setReg(targetReg, vmFunc(func(callArgs ...any) (any, error) {
+		s.SetReg(targetReg, vmFunc(func(callArgs ...any) (any, error) {
 			if s.done {
 				return nil, nil
 			}
-			previousQueue := s.copyQueue()
+			previousQueue := s.CopyQueue(turnstileQueueReg)
 			for i, regID := range mappedArgRegs {
 				if i < len(callArgs) {
-					s.setReg(regID, callArgs[i])
+					s.SetReg(regID, callArgs[i])
 				} else {
-					s.setReg(regID, nil)
+					s.SetReg(regID, nil)
 				}
 			}
-			s.setReg(turnstileQueueReg, copyAnySlice(innerQueue))
+			s.SetReg(turnstileQueueReg, sentinelvm.CopyAnySlice(innerQueue))
 			err := s.runQueue()
-			s.setReg(turnstileQueueReg, previousQueue)
+			s.SetReg(turnstileQueueReg, previousQueue)
 			if err != nil {
 				return err.Error(), nil
 			}
-			return s.getReg(returnReg), nil
+			return s.GetReg(returnReg), nil
 		}))
 		return nil, nil
 	}))
-	s.setReg(turnstileKeyReg, requirementsToken)
+	s.SetReg(turnstileKeyReg, requirementsToken)
 
-	decoded, err := latin1Base64Decode(dx)
+	decoded, err := sentinelvm.Latin1Base64Decode(dx)
 	if err != nil {
 		return "", err
 	}
-	plain := xorString(decoded, requirementsToken)
+	plain := sentinelvm.XORString(decoded, requirementsToken)
 	var queue []any
 	if err := json.Unmarshal([]byte(plain), &queue); err != nil {
 		return "", err
 	}
-	s.setReg(turnstileQueueReg, queue)
+	s.SetReg(turnstileQueueReg, queue)
 	if err := s.runQueue(); err != nil && !s.done {
-		if success, ok := s.getReg(turnstileSuccessReg).(vmFunc); ok {
+		if success, ok := s.GetReg(turnstileSuccessReg).(vmFunc); ok {
 			_, _ = success(fmt.Sprintf("%d: %v", s.stepCount, err))
 		}
 	}
@@ -272,79 +274,79 @@ func (s *turnstileSolver) solve(requirementsToken, dx string) (string, error) {
 }
 
 func (s *turnstileSolver) initRuntime() {
-	s.setReg(0, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(0, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		value, err := SolveDX(s.jsToString(s.getReg(turnstileKeyReg)), s.jsToString(args[0]))
+		value, err := SolveDX(s.jsToString(s.GetReg(turnstileKeyReg)), s.jsToString(args[0]))
 		if err != nil {
 			return nil, err
 		}
 		return value, nil
 	}))
-	s.setReg(1, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(1, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
 		target, keyReg := args[0], args[1]
-		s.setReg(target, xorString(s.jsToString(s.getReg(target)), s.jsToString(s.getReg(keyReg))))
+		s.SetReg(target, sentinelvm.XORString(s.jsToString(s.GetReg(target)), s.jsToString(s.GetReg(keyReg))))
 		return nil, nil
 	}))
-	s.setReg(2, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(2, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		s.setReg(args[0], args[1])
+		s.SetReg(args[0], args[1])
 		return nil, nil
 	}))
-	s.setReg(5, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(5, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		left := s.getReg(args[0])
-		right := s.getReg(args[1])
+		left := s.GetReg(args[0])
+		right := s.GetReg(args[1])
 		if arr, ok := left.([]any); ok {
-			s.setReg(args[0], append(arr, right))
+			s.SetReg(args[0], append(arr, right))
 			return nil, nil
 		}
 		if lNum, ok := s.asNumber(left); ok {
 			if rNum, ok := s.asNumber(right); ok {
-				s.setReg(args[0], lNum+rNum)
+				s.SetReg(args[0], lNum+rNum)
 				return nil, nil
 			}
 		}
-		s.setReg(args[0], s.jsToString(left)+s.jsToString(right))
+		s.SetReg(args[0], s.jsToString(left)+s.jsToString(right))
 		return nil, nil
 	}))
-	s.setReg(6, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(6, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		s.setReg(args[0], s.jsGetProp(s.getReg(args[1]), s.getReg(args[2])))
+		s.SetReg(args[0], s.jsGetProp(s.GetReg(args[1]), s.GetReg(args[2])))
 		return nil, nil
 	}))
-	s.setReg(7, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(7, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		_, err := s.callFn(s.getReg(args[0]), s.derefArgs(args[1:])...)
+		_, err := s.CallFn(s.GetReg(args[0]), s.DerefArgs(args[1:])...)
 		return nil, err
 	}))
-	s.setReg(8, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(8, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		s.setReg(args[0], s.getReg(args[1]))
+		s.SetReg(args[0], s.GetReg(args[1]))
 		return nil, nil
 	}))
-	s.setReg(11, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(11, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		pattern := s.jsToString(s.getReg(args[1]))
+		pattern := s.jsToString(s.GetReg(args[1]))
 		rx, err := regexp.Compile(pattern)
 		if err != nil {
-			s.setReg(args[0], nil)
+			s.SetReg(args[0], nil)
 			return nil, nil
 		}
 		scripts, _ := s.jsGetProp(s.jsGetProp(s.window, "document"), "scripts").([]any)
@@ -354,152 +356,152 @@ func (s *turnstileSolver) initRuntime() {
 				continue
 			}
 			if hit := rx.FindString(src); hit != "" {
-				s.setReg(args[0], hit)
+				s.SetReg(args[0], hit)
 				return nil, nil
 			}
 		}
-		s.setReg(args[0], nil)
+		s.SetReg(args[0], nil)
 		return nil, nil
 	}))
-	s.setReg(12, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(12, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		s.setReg(args[0], regMapRef{solver: s})
+		s.SetReg(args[0], regMapRef{solver: s})
 		return nil, nil
 	}))
-	s.setReg(13, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(13, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		_, err := s.callFn(s.getReg(args[1]), args[2:]...)
+		_, err := s.CallFn(s.GetReg(args[1]), args[2:]...)
 		if err != nil {
-			s.setReg(args[0], err.Error())
+			s.SetReg(args[0], err.Error())
 		}
 		return nil, nil
 	}))
-	s.setReg(14, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(14, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
 		var out any
-		if err := json.Unmarshal([]byte(s.jsToString(s.getReg(args[1]))), &out); err != nil {
+		if err := json.Unmarshal([]byte(s.jsToString(s.GetReg(args[1]))), &out); err != nil {
 			return nil, err
 		}
-		s.setReg(args[0], out)
+		s.SetReg(args[0], out)
 		return nil, nil
 	}))
-	s.setReg(15, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(15, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		body, err := jsJSONStringify(s.getReg(args[1]))
+		body, err := jsJSONStringify(s.GetReg(args[1]))
 		if err != nil {
 			return nil, err
 		}
-		s.setReg(args[0], body)
+		s.SetReg(args[0], body)
 		return nil, nil
 	}))
-	s.setReg(17, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(17, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		value, err := s.callFn(s.getReg(args[1]), s.derefArgs(args[2:])...)
+		value, err := s.CallFn(s.GetReg(args[1]), s.DerefArgs(args[2:])...)
 		if err != nil {
-			s.setReg(args[0], err.Error())
+			s.SetReg(args[0], err.Error())
 			return nil, nil
 		}
-		s.setReg(args[0], value)
+		s.SetReg(args[0], value)
 		return nil, nil
 	}))
-	s.setReg(18, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(18, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		decoded, err := latin1Base64Decode(s.jsToString(s.getReg(args[0])))
+		decoded, err := sentinelvm.Latin1Base64Decode(s.jsToString(s.GetReg(args[0])))
 		if err != nil {
 			return nil, err
 		}
-		s.setReg(args[0], decoded)
+		s.SetReg(args[0], decoded)
 		return nil, nil
 	}))
-	s.setReg(19, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(19, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		s.setReg(args[0], latin1Base64Encode(s.jsToString(s.getReg(args[0]))))
+		s.SetReg(args[0], sentinelvm.Latin1Base64Encode(s.jsToString(s.GetReg(args[0]))))
 		return nil, nil
 	}))
-	s.setReg(20, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(20, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		if s.valuesEqual(s.getReg(args[0]), s.getReg(args[1])) {
-			_, err := s.callFn(s.getReg(args[2]), args[3:]...)
+		if s.valuesEqual(s.GetReg(args[0]), s.GetReg(args[1])) {
+			_, err := s.CallFn(s.GetReg(args[2]), args[3:]...)
 			return nil, err
 		}
 		return nil, nil
 	}))
-	s.setReg(21, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(21, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 4 {
 			return nil, nil
 		}
-		left, _ := s.asNumber(s.getReg(args[0]))
-		right, _ := s.asNumber(s.getReg(args[1]))
-		threshold, _ := s.asNumber(s.getReg(args[2]))
+		left, _ := s.asNumber(s.GetReg(args[0]))
+		right, _ := s.asNumber(s.GetReg(args[1]))
+		threshold, _ := s.asNumber(s.GetReg(args[2]))
 		if math.Abs(left-right) > threshold {
-			_, err := s.callFn(s.getReg(args[3]), args[4:]...)
+			_, err := s.CallFn(s.GetReg(args[3]), args[4:]...)
 			return nil, err
 		}
 		return nil, nil
 	}))
-	s.setReg(22, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(22, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		previousQueue := s.copyQueue()
+		previousQueue := s.CopyQueue(turnstileQueueReg)
 		if nextQueue, ok := args[1].([]any); ok {
-			s.setReg(turnstileQueueReg, copyAnySlice(nextQueue))
+			s.SetReg(turnstileQueueReg, sentinelvm.CopyAnySlice(nextQueue))
 		} else {
-			s.setReg(turnstileQueueReg, []any{})
+			s.SetReg(turnstileQueueReg, []any{})
 		}
 		err := s.runQueue()
-		s.setReg(turnstileQueueReg, previousQueue)
+		s.SetReg(turnstileQueueReg, previousQueue)
 		if err != nil {
-			s.setReg(args[0], err.Error())
+			s.SetReg(args[0], err.Error())
 		}
 		return nil, nil
 	}))
-	s.setReg(23, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(23, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		if s.getReg(args[0]) == nil {
+		if s.GetReg(args[0]) == nil {
 			return nil, nil
 		}
-		_, err := s.callFn(s.getReg(args[1]), args[2:]...)
+		_, err := s.CallFn(s.GetReg(args[1]), args[2:]...)
 		return nil, err
 	}))
-	s.setReg(24, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(24, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		method := s.jsGetProp(s.getReg(args[1]), s.getReg(args[2]))
+		method := s.jsGetProp(s.GetReg(args[1]), s.GetReg(args[2]))
 		if _, ok := method.(vmFunc); ok {
-			s.setReg(args[0], method)
+			s.SetReg(args[0], method)
 		} else {
-			s.setReg(args[0], nil)
+			s.SetReg(args[0], nil)
 		}
 		return nil, nil
 	}))
-	s.setReg(25, vmFunc(func(args ...any) (any, error) { return nil, nil }))
-	s.setReg(26, vmFunc(func(args ...any) (any, error) { return nil, nil }))
-	s.setReg(27, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(25, vmFunc(func(args ...any) (any, error) { return nil, nil }))
+	s.SetReg(26, vmFunc(func(args ...any) (any, error) { return nil, nil }))
+	s.SetReg(27, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		left := s.getReg(args[0])
-		right := s.getReg(args[1])
+		left := s.GetReg(args[0])
+		right := s.GetReg(args[1])
 		if arr, ok := left.([]any); ok {
 			filtered := arr[:0]
 			for _, item := range arr {
@@ -507,56 +509,56 @@ func (s *turnstileSolver) initRuntime() {
 					filtered = append(filtered, item)
 				}
 			}
-			s.setReg(args[0], append([]any{}, filtered...))
+			s.SetReg(args[0], append([]any{}, filtered...))
 			return nil, nil
 		}
 		lNum, lok := s.asNumber(left)
 		rNum, rok := s.asNumber(right)
 		if lok && rok {
-			s.setReg(args[0], lNum-rNum)
+			s.SetReg(args[0], lNum-rNum)
 		}
 		return nil, nil
 	}))
-	s.setReg(28, vmFunc(func(args ...any) (any, error) { return nil, nil }))
-	s.setReg(29, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(28, vmFunc(func(args ...any) (any, error) { return nil, nil }))
+	s.SetReg(29, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		left, _ := s.asNumber(s.getReg(args[1]))
-		right, _ := s.asNumber(s.getReg(args[2]))
-		s.setReg(args[0], left < right)
+		left, _ := s.asNumber(s.GetReg(args[1]))
+		right, _ := s.asNumber(s.GetReg(args[2]))
+		s.SetReg(args[0], left < right)
 		return nil, nil
 	}))
-	s.setReg(33, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(33, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		left, _ := s.asNumber(s.getReg(args[1]))
-		right, _ := s.asNumber(s.getReg(args[2]))
-		s.setReg(args[0], left*right)
+		left, _ := s.asNumber(s.GetReg(args[1]))
+		right, _ := s.asNumber(s.GetReg(args[2]))
+		s.SetReg(args[0], left*right)
 		return nil, nil
 	}))
-	s.setReg(34, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(34, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		s.setReg(args[0], s.getReg(args[1]))
+		s.SetReg(args[0], s.GetReg(args[1]))
 		return nil, nil
 	}))
-	s.setReg(35, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(35, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		left, _ := s.asNumber(s.getReg(args[1]))
-		right, _ := s.asNumber(s.getReg(args[2]))
+		left, _ := s.asNumber(s.GetReg(args[1]))
+		right, _ := s.asNumber(s.GetReg(args[2]))
 		if right == 0 {
-			s.setReg(args[0], float64(0))
+			s.SetReg(args[0], float64(0))
 		} else {
-			s.setReg(args[0], left/right)
+			s.SetReg(args[0], left/right)
 		}
 		return nil, nil
 	}))
-	s.setReg(turnstileWindowReg, s.window)
+	s.SetReg(turnstileWindowReg, s.window)
 }
 
 func (s *turnstileSolver) buildWindow() map[string]any {
@@ -899,13 +901,13 @@ func (s *turnstileSolver) buildWindow() map[string]any {
 		if len(args) == 0 {
 			return "", nil
 		}
-		return latin1Base64Decode(s.jsToString(args[0]))
+		return sentinelvm.Latin1Base64Decode(s.jsToString(args[0]))
 	})
 	window["btoa"] = vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return "", nil
 		}
-		return latin1Base64Encode(s.jsToString(args[0])), nil
+		return sentinelvm.Latin1Base64Encode(s.jsToString(args[0])), nil
 	})
 	window["localStorage"] = localStorage
 	window["document"] = document
@@ -1075,16 +1077,16 @@ func splitVersionMajor(version string) string {
 
 func (s *turnstileSolver) runQueue() error {
 	for !s.done {
-		queue, ok := s.getReg(turnstileQueueReg).([]any)
+		queue, ok := s.GetReg(turnstileQueueReg).([]any)
 		if !ok || len(queue) == 0 {
 			return nil
 		}
 		ins, ok := queue[0].([]any)
-		s.setReg(turnstileQueueReg, queue[1:])
+		s.SetReg(turnstileQueueReg, queue[1:])
 		if !ok || len(ins) == 0 {
 			continue
 		}
-		fn, ok := s.getReg(ins[0]).(vmFunc)
+		fn, ok := s.GetReg(ins[0]).(vmFunc)
 		if !ok {
 			return fmt.Errorf("vm opcode not callable: %v", ins[0])
 		}
@@ -1097,35 +1099,6 @@ func (s *turnstileSolver) runQueue() error {
 		}
 	}
 	return nil
-}
-
-func (s *turnstileSolver) callFn(value any, args ...any) (any, error) {
-	fn, ok := value.(vmFunc)
-	if !ok {
-		return nil, nil
-	}
-	return fn(args...)
-}
-
-func (s *turnstileSolver) derefArgs(args []any) []any {
-	out := make([]any, 0, len(args))
-	for _, arg := range args {
-		out = append(out, s.getReg(arg))
-	}
-	return out
-}
-
-func (s *turnstileSolver) getReg(key any) any {
-	return s.regs[regKey(key)]
-}
-
-func (s *turnstileSolver) setReg(key any, value any) {
-	s.regs[regKey(key)] = value
-}
-
-func (s *turnstileSolver) copyQueue() []any {
-	queue, _ := s.getReg(turnstileQueueReg).([]any)
-	return copyAnySlice(queue)
 }
 
 func (s *turnstileSolver) asNumber(value any) (float64, bool) {
@@ -1232,7 +1205,7 @@ func (s *turnstileSolver) jsGetProp(obj any, prop any) any {
 	case nil:
 		return nil
 	case regMapRef:
-		return value.solver.getReg(prop)
+		return value.solver.GetReg(prop)
 	case map[string]any:
 		propKey := s.jsToString(prop)
 		if storage, ok := value["__storage_data__"].(map[string]any); ok {
@@ -1282,7 +1255,7 @@ func (s *turnstileSolver) jsGetProp(obj any, prop any) any {
 func (s *turnstileSolver) jsSetProp(obj any, prop any, value any) bool {
 	switch target := obj.(type) {
 	case regMapRef:
-		target.solver.setReg(prop, value)
+		target.solver.SetReg(prop, value)
 		return true
 	case map[string]any:
 		propKey := s.jsToString(prop)
@@ -1546,26 +1519,6 @@ func jsonFloat(value any) float64 {
 	return 0
 }
 
-func regKey(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return "nil"
-	case string:
-		return "s:" + v
-	case int:
-		return "n:" + strconv.Itoa(v)
-	case int64:
-		return "n:" + strconv.FormatInt(v, 10)
-	case float64:
-		if math.Trunc(v) == v {
-			return "n:" + strconv.FormatInt(int64(v), 10)
-		}
-		return "n:" + strconv.FormatFloat(v, 'g', -1, 64)
-	default:
-		return "x:" + fmt.Sprintf("%v", value)
-	}
-}
-
 func toIntIndex(value any) int {
 	switch v := value.(type) {
 	case int:
@@ -1582,56 +1535,6 @@ func toIntIndex(value any) int {
 		}
 	}
 	return -1
-}
-
-func copyAnySlice(value []any) []any {
-	if len(value) == 0 {
-		return []any{}
-	}
-	out := make([]any, len(value))
-	copy(out, value)
-	return out
-}
-
-func latin1Base64Decode(value string) (string, error) {
-	body, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return "", err
-	}
-	return string(bytesToLatin1Runes(body)), nil
-}
-
-func latin1Base64Encode(value string) string {
-	return base64.StdEncoding.EncodeToString(latin1StringToBytes(value))
-}
-
-func xorString(data, key string) string {
-	if key == "" {
-		return data
-	}
-	dataBytes := latin1StringToBytes(data)
-	keyBytes := latin1StringToBytes(key)
-	out := make([]byte, len(dataBytes))
-	for idx := range dataBytes {
-		out[idx] = dataBytes[idx] ^ keyBytes[idx%len(keyBytes)]
-	}
-	return string(bytesToLatin1Runes(out))
-}
-
-func latin1StringToBytes(value string) []byte {
-	bytes := make([]byte, 0, len(value))
-	for _, r := range value {
-		bytes = append(bytes, byte(r))
-	}
-	return bytes
-}
-
-func bytesToLatin1Runes(value []byte) []rune {
-	out := make([]rune, 0, len(value))
-	for _, b := range value {
-		out = append(out, rune(b))
-	}
-	return out
 }
 
 func maxInt(a, b int) int {

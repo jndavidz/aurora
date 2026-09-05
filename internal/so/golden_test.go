@@ -2,8 +2,11 @@ package so
 
 import (
 	"encoding/json"
+
 	"testing"
 	"time"
+
+	"aurora/internal/sentinelvm"
 )
 
 // golden 测试(2026-09-05,G3 前置):锁定 VM 各 opcode 的语义快照。
@@ -14,7 +17,7 @@ import (
 // (真实 collector_dx/snapshot_dx 样本需 live 抓取,补齐后可叠加全流程快照。)
 //
 // 指令格式对齐 run()/runQueue():队列 = [[opcode, args...], ...],
-// dx = latin1Base64Encode(xorString(json(queue), reqToken)),xor 对称可逆。
+// dx = sentinelvm.Latin1Base64Encode(sentinelvm.XORString(json(queue), reqToken)),xor 对称可逆。
 //
 // ⚠ 语义要点(由首轮 golden 失败澄清):操作类 opcode(op1/op5/op27...)的
 // 参数一律是【寄存器引用】,字面值必须先用 op2 存入寄存器 —— 否则被
@@ -27,7 +30,7 @@ func mustEncodeDX(t *testing.T, queue []any, key string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return latin1Base64Encode(xorString(string(b), key))
+	return sentinelvm.Latin1Base64Encode(sentinelvm.XORString(string(b), key))
 }
 
 // runGolden 跑一段微型字节码(snapshot 模式),返回 resolved(success 回调
@@ -126,7 +129,7 @@ func TestVMOpcodeGolden(t *testing.T) {
 				// vm unresolved 是预期内的执行形态(未调 success),不影响寄存器断言
 				t.Logf("run returned error (acceptable for reg-level cases): %v", err)
 			}
-			got := s.getReg(tc.reg)
+			got := s.GetReg(tc.reg)
 			gotJSON, _ := json.Marshal(got)
 			wantJSON, _ := json.Marshal(tc.want)
 			if string(gotJSON) != string(wantJSON) {

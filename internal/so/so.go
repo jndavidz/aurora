@@ -15,6 +15,7 @@ package so
 
 import (
 	"aurora/internal/browserfp"
+	"aurora/internal/sentinelvm"
 	"aurora/util"
 	"encoding/base64"
 	"encoding/json"
@@ -162,7 +163,7 @@ func BuildToken(soResult, chatReqToken, deviceID, flow string) (string, error) {
 //   - success/error 处理器把 jsToString(t) 用 latin1 编码后 base64(对齐浏览器 btoa
 //     对 128-255 字符的二进制行为)
 type soSolver struct {
-	regs     map[string]any
+	sentinelvm.Base
 	window   map[string]any
 	done     bool
 	resolved string
@@ -170,16 +171,16 @@ type soSolver struct {
 	profile  *browserfp.Profile
 }
 
-func newSOSolver() *soSolver { return &soSolver{regs: map[string]any{}} }
+func newSOSolver() *soSolver { return &soSolver{Base: sentinelvm.Base{Regs: map[string]any{}}} }
 
-type vmFunc = func(args ...any) (any, error)
+type vmFunc = sentinelvm.VmFunc // G3: 统一类型身份(CallFn 断言依赖)
 
 type regMapRef struct{ s *soSolver }
 
 // run 跑一段字节码。collector=true 时不设 success/error(不终止 VM,只填 regs);
 // collector=false 时设 success/error,期待 VM 通过 reg 3/4 退出。
 func (s *soSolver) run(reqToken, dx string, collector bool) (string, error) {
-	s.regs = map[string]any{}
+	s.Regs = map[string]any{}
 	s.profile = browserfp.Get()
 	s.window = s.buildWindow()
 	s.done = false
@@ -188,29 +189,29 @@ func (s *soSolver) run(reqToken, dx string, collector bool) (string, error) {
 	s.initRuntime()
 
 	if !collector {
-		s.setReg(successReg, vmFunc(func(args ...any) (any, error) {
+		s.SetReg(successReg, vmFunc(func(args ...any) (any, error) {
 			if !s.done {
 				s.done = true
 				var v any
 				if len(args) > 0 {
 					v = args[0]
 				}
-				s.resolved = latin1Base64Encode(toStr(v))
+				s.resolved = sentinelvm.Latin1Base64Encode(toStr(v))
 			}
 			return nil, nil
 		}))
-		s.setReg(errorReg, vmFunc(func(args ...any) (any, error) {
+		s.SetReg(errorReg, vmFunc(func(args ...any) (any, error) {
 			if !s.done {
 				s.done = true
 				var v any
 				if len(args) > 0 {
 					v = args[0]
 				}
-				s.rejected = latin1Base64Encode(toStr(v))
+				s.rejected = sentinelvm.Latin1Base64Encode(toStr(v))
 			}
 			return nil, nil
 		}))
-		s.setReg(callbackReg, vmFunc(func(args ...any) (any, error) {
+		s.SetReg(callbackReg, vmFunc(func(args ...any) (any, error) {
 			if len(args) < 3 {
 				return nil, nil
 			}
@@ -227,45 +228,45 @@ func (s *soSolver) run(reqToken, dx string, collector bool) (string, error) {
 					innerQueue = q
 				}
 			}
-			s.setReg(targetReg, vmFunc(func(callArgs ...any) (any, error) {
+			s.SetReg(targetReg, vmFunc(func(callArgs ...any) (any, error) {
 				if s.done {
 					return nil, nil
 				}
-				prevQ := s.copyQueue()
+				prevQ := s.CopyQueue(pcReg)
 				for i, regID := range mappedArgRegs {
 					if i < len(callArgs) {
-						s.setReg(regID, callArgs[i])
+						s.SetReg(regID, callArgs[i])
 					} else {
-						s.setReg(regID, nil)
+						s.SetReg(regID, nil)
 					}
 				}
-				s.setReg(pcReg, copyAnySlice(innerQueue))
+				s.SetReg(pcReg, sentinelvm.CopyAnySlice(innerQueue))
 				if err := s.runQueue(); err != nil {
-					s.setReg(pcReg, prevQ)
+					s.SetReg(pcReg, prevQ)
 					return err.Error(), nil
 				}
-				s.setReg(pcReg, prevQ)
-				return s.getReg(returnReg), nil
+				s.SetReg(pcReg, prevQ)
+				return s.GetReg(returnReg), nil
 			}))
 			return nil, nil
 		}))
 	}
-	s.setReg(xorKeyReg, reqToken)
+	s.SetReg(xorKeyReg, reqToken)
 
-	decoded, err := latin1Base64Decode(dx)
+	decoded, err := sentinelvm.Latin1Base64Decode(dx)
 	if err != nil {
 		return "", err
 	}
-	plain := xorString(decoded, reqToken)
+	plain := sentinelvm.XORString(decoded, reqToken)
 	var queue []any
 	if err := json.Unmarshal([]byte(plain), &queue); err != nil {
 		return "", err
 	}
-	s.setReg(pcReg, queue)
+	s.SetReg(pcReg, queue)
 
 	if err := s.runQueue(); err != nil && !s.done {
 		if !collector {
-			if success, ok := s.getReg(successReg).(vmFunc); ok {
+			if success, ok := s.GetReg(successReg).(vmFunc); ok {
 				_, _ = success(fmt.Sprintf("%d: %v", 0, err))
 			}
 		}
@@ -285,7 +286,7 @@ func (s *soSolver) run(reqToken, dx string, collector bool) (string, error) {
 
 // initRuntime 注册所有 opcode 处理(对齐 OpenSentinel/vm.js + deob/out.js)。
 func (s *soSolver) initRuntime() {
-	s.setReg(0, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(0, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
@@ -294,74 +295,74 @@ func (s *soSolver) initRuntime() {
 		// 寄存器全部抹掉,外层字节码随后被静默截断(对齐 turnstile 的
 		// opcode 0 用 SolveDX 新建 solver 的做法)。
 		sub := newSOSolver()
-		v, err := sub.run(s.jsToString(s.getReg(xorKeyReg)), s.jsToString(args[0]), true)
+		v, err := sub.run(s.jsToString(s.GetReg(xorKeyReg)), s.jsToString(args[0]), true)
 		if err != nil {
 			return nil, err
 		}
 		return v, nil
 	}))
-	s.setReg(1, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(1, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		s.setReg(args[0], xorString(s.jsToString(s.getReg(args[0])), s.jsToString(s.getReg(args[1]))))
+		s.SetReg(args[0], sentinelvm.XORString(s.jsToString(s.GetReg(args[0])), s.jsToString(s.GetReg(args[1]))))
 		return nil, nil
 	}))
-	s.setReg(2, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(2, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		s.setReg(args[0], args[1])
+		s.SetReg(args[0], args[1])
 		return nil, nil
 	}))
-	s.setReg(5, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(5, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		left := s.getReg(args[0])
-		right := s.getReg(args[1])
+		left := s.GetReg(args[0])
+		right := s.GetReg(args[1])
 		if arr, ok := left.([]any); ok {
-			s.setReg(args[0], append(arr, right))
+			s.SetReg(args[0], append(arr, right))
 			return nil, nil
 		}
 		if lNum, ok := s.asNumber(left); ok {
 			if rNum, ok := s.asNumber(right); ok {
-				s.setReg(args[0], lNum+rNum)
+				s.SetReg(args[0], lNum+rNum)
 				return nil, nil
 			}
 		}
-		s.setReg(args[0], s.jsToString(left)+s.jsToString(right))
+		s.SetReg(args[0], s.jsToString(left)+s.jsToString(right))
 		return nil, nil
 	}))
-	s.setReg(6, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(6, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		s.setReg(args[0], s.jsGetProp(s.getReg(args[1]), s.getReg(args[2])))
+		s.SetReg(args[0], s.jsGetProp(s.GetReg(args[1]), s.GetReg(args[2])))
 		return nil, nil
 	}))
-	s.setReg(7, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(7, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		_, err := s.callFn(s.getReg(args[0]), s.derefArgs(args[1:])...)
+		_, err := s.CallFn(s.GetReg(args[0]), s.DerefArgs(args[1:])...)
 		return nil, err
 	}))
-	s.setReg(8, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(8, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		s.setReg(args[0], s.getReg(args[1]))
+		s.SetReg(args[0], s.GetReg(args[1]))
 		return nil, nil
 	}))
-	s.setReg(11, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(11, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		pattern := s.jsToString(s.getReg(args[1]))
+		pattern := s.jsToString(s.GetReg(args[1]))
 		rx, err := regexp.Compile(pattern)
 		if err != nil {
-			s.setReg(args[0], nil)
+			s.SetReg(args[0], nil)
 			return nil, nil
 		}
 		docs, _ := s.jsGetProp(s.jsGetProp(s.window, "document"), "scripts").([]any)
@@ -371,207 +372,207 @@ func (s *soSolver) initRuntime() {
 				continue
 			}
 			if hit := rx.FindString(src); hit != "" {
-				s.setReg(args[0], hit)
+				s.SetReg(args[0], hit)
 				return nil, nil
 			}
 		}
-		s.setReg(args[0], nil)
+		s.SetReg(args[0], nil)
 		return nil, nil
 	}))
-	s.setReg(12, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(12, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		s.setReg(args[0], regMapRef{s: s})
+		s.SetReg(args[0], regMapRef{s: s})
 		return nil, nil
 	}))
-	s.setReg(13, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(13, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		_, err := s.callFn(s.getReg(args[1]), args[2:]...)
+		_, err := s.CallFn(s.GetReg(args[1]), args[2:]...)
 		if err != nil {
-			s.setReg(args[0], err.Error())
+			s.SetReg(args[0], err.Error())
 		}
 		return nil, nil
 	}))
-	s.setReg(14, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(14, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
 		var out any
-		if err := json.Unmarshal([]byte(s.jsToString(s.getReg(args[1]))), &out); err != nil {
+		if err := json.Unmarshal([]byte(s.jsToString(s.GetReg(args[1]))), &out); err != nil {
 			return nil, err
 		}
-		s.setReg(args[0], out)
+		s.SetReg(args[0], out)
 		return nil, nil
 	}))
-	s.setReg(15, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(15, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		body, err := jsJSONStringify(s.getReg(args[1]))
+		body, err := jsJSONStringify(s.GetReg(args[1]))
 		if err != nil {
 			return nil, err
 		}
-		s.setReg(args[0], body)
+		s.SetReg(args[0], body)
 		return nil, nil
 	}))
-	s.setReg(17, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(17, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		v, err := s.callFn(s.getReg(args[1]), s.derefArgs(args[2:])...)
+		v, err := s.CallFn(s.GetReg(args[1]), s.DerefArgs(args[2:])...)
 		if err != nil {
-			s.setReg(args[0], err.Error())
+			s.SetReg(args[0], err.Error())
 			return nil, nil
 		}
-		s.setReg(args[0], v)
+		s.SetReg(args[0], v)
 		return nil, nil
 	}))
-	s.setReg(18, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(18, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		decoded, err := latin1Base64Decode(s.jsToString(s.getReg(args[0])))
+		decoded, err := sentinelvm.Latin1Base64Decode(s.jsToString(s.GetReg(args[0])))
 		if err != nil {
 			return nil, err
 		}
-		s.setReg(args[0], decoded)
+		s.SetReg(args[0], decoded)
 		return nil, nil
 	}))
-	s.setReg(19, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(19, vmFunc(func(args ...any) (any, error) {
 		if len(args) == 0 {
 			return nil, nil
 		}
-		s.setReg(args[0], latin1Base64Encode(s.jsToString(s.getReg(args[0]))))
+		s.SetReg(args[0], sentinelvm.Latin1Base64Encode(s.jsToString(s.GetReg(args[0]))))
 		return nil, nil
 	}))
-	s.setReg(20, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(20, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		if s.valuesEqual(s.getReg(args[0]), s.getReg(args[1])) {
-			_, err := s.callFn(s.getReg(args[2]), args[3:]...)
+		if s.valuesEqual(s.GetReg(args[0]), s.GetReg(args[1])) {
+			_, err := s.CallFn(s.GetReg(args[2]), args[3:]...)
 			return nil, err
 		}
 		return nil, nil
 	}))
-	s.setReg(21, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(21, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 4 {
 			return nil, nil
 		}
-		left, _ := s.asNumber(s.getReg(args[0]))
-		right, _ := s.asNumber(s.getReg(args[1]))
-		thresh, _ := s.asNumber(s.getReg(args[2]))
+		left, _ := s.asNumber(s.GetReg(args[0]))
+		right, _ := s.asNumber(s.GetReg(args[1]))
+		thresh, _ := s.asNumber(s.GetReg(args[2]))
 		if absDiff(left, right) > thresh {
-			_, err := s.callFn(s.getReg(args[3]), args[4:]...)
+			_, err := s.CallFn(s.GetReg(args[3]), args[4:]...)
 			return nil, err
 		}
 		return nil, nil
 	}))
-	s.setReg(22, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(22, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		prevQ := s.copyQueue()
+		prevQ := s.CopyQueue(pcReg)
 		newInstr, _ := args[1].([]any)
-		s.setReg(pcReg, append([]any{}, newInstr...))
+		s.SetReg(pcReg, append([]any{}, newInstr...))
 		s.runQueue()
-		s.setReg(pcReg, prevQ)
+		s.SetReg(pcReg, prevQ)
 		return nil, nil
 	}))
-	s.setReg(23, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(23, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		if s.getReg(args[0]) != nil {
-			_, err := s.callFn(s.getReg(args[1]), args[2:]...)
+		if s.GetReg(args[0]) != nil {
+			_, err := s.CallFn(s.GetReg(args[1]), args[2:]...)
 			return nil, err
 		}
 		return nil, nil
 	}))
-	s.setReg(24, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(24, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		obj := s.getReg(args[1])
-		key := s.getReg(args[2])
-		s.setReg(args[0], s.jsGetProp(obj, key))
+		obj := s.GetReg(args[1])
+		key := s.GetReg(args[2])
+		s.SetReg(args[0], s.jsGetProp(obj, key))
 		return nil, nil
 	}))
-	s.setReg(25, vmFunc(func(args ...any) (any, error) { return nil, nil }))
-	s.setReg(26, vmFunc(func(args ...any) (any, error) { return nil, nil }))
-	s.setReg(27, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(25, vmFunc(func(args ...any) (any, error) { return nil, nil }))
+	s.SetReg(26, vmFunc(func(args ...any) (any, error) { return nil, nil }))
+	s.SetReg(27, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		cur := s.getReg(args[0])
+		cur := s.GetReg(args[0])
 		if arr, ok := cur.([]any); ok {
 			idx := -1
 			for i, v := range arr {
-				if s.valuesEqual(v, s.getReg(args[1])) {
+				if s.valuesEqual(v, s.GetReg(args[1])) {
 					idx = i
 					break
 				}
 			}
 			if idx >= 0 {
-				s.setReg(args[0], append(append([]any{}, arr[:idx]...), arr[idx+1:]...))
+				s.SetReg(args[0], append(append([]any{}, arr[:idx]...), arr[idx+1:]...))
 			}
 			return nil, nil
 		}
 		if n, ok := s.asNumber(cur); ok {
-			if m, ok := s.asNumber(s.getReg(args[1])); ok {
-				s.setReg(args[0], n-m)
+			if m, ok := s.asNumber(s.GetReg(args[1])); ok {
+				s.SetReg(args[0], n-m)
 			}
 		}
 		return nil, nil
 	}))
-	s.setReg(28, vmFunc(func(args ...any) (any, error) { return nil, nil }))
-	s.setReg(29, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(28, vmFunc(func(args ...any) (any, error) { return nil, nil }))
+	s.SetReg(29, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		left, _ := s.asNumber(s.getReg(args[1]))
-		right, _ := s.asNumber(s.getReg(args[2]))
-		s.setReg(args[0], left < right)
+		left, _ := s.asNumber(s.GetReg(args[1]))
+		right, _ := s.asNumber(s.GetReg(args[2]))
+		s.SetReg(args[0], left < right)
 		return nil, nil
 	}))
-	s.setReg(33, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(33, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		l, _ := s.asNumber(s.getReg(args[1]))
-		r, _ := s.asNumber(s.getReg(args[2]))
-		s.setReg(args[0], l*r)
+		l, _ := s.asNumber(s.GetReg(args[1]))
+		r, _ := s.asNumber(s.GetReg(args[2]))
+		s.SetReg(args[0], l*r)
 		return nil, nil
 	}))
-	s.setReg(34, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(34, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 2 {
 			return nil, nil
 		}
-		v := s.getReg(args[1])
+		v := s.GetReg(args[1])
 		if v == nil {
 			return nil, nil
 		}
 		// 简化:js Promise 用 sync 表示,collector 字节码通常不会用 await
-		s.setReg(args[0], v)
+		s.SetReg(args[0], v)
 		return nil, nil
 	}))
-	s.setReg(35, vmFunc(func(args ...any) (any, error) {
+	s.SetReg(35, vmFunc(func(args ...any) (any, error) {
 		if len(args) < 3 {
 			return nil, nil
 		}
-		divisor, _ := s.asNumber(s.getReg(args[2]))
-		left, _ := s.asNumber(s.getReg(args[1]))
+		divisor, _ := s.asNumber(s.GetReg(args[2]))
+		left, _ := s.asNumber(s.GetReg(args[1]))
 		if divisor == 0 {
-			s.setReg(args[0], 0.0)
+			s.SetReg(args[0], 0.0)
 		} else {
-			s.setReg(args[0], left/divisor)
+			s.SetReg(args[0], left/divisor)
 		}
 		return nil, nil
 	}))
-	s.setReg(windowReg, s.window)
+	s.SetReg(windowReg, s.window)
 }
 
 // ─── 浏览器 mock(简化版;字段对齐 turnstile/buildWindow,够 collector 字节码用)─
@@ -712,7 +713,7 @@ func (s *soSolver) buildWindow() map[string]any {
 		"setTimeout":      time.AfterFunc,
 		"setInterval":     time.Tick,
 		"atob":            func(s any) any { return atobLatin1(toStr(s)) },
-		"btoa":            func(s any) any { return latin1Base64Encode(toStr(s)) },
+		"btoa":            func(s any) any { return sentinelvm.Latin1Base64Encode(toStr(s)) },
 		"console":         map[string]any{},
 		"origin":          "https://chatgpt.com",
 		"isSecureContext": true,
@@ -721,15 +722,7 @@ func (s *soSolver) buildWindow() map[string]any {
 	mockWin["self"] = mockWin
 	mockWin["globalThis"] = mockWin
 	return mockWin
-}
-
-// ─── 注册/读取工具 ────────────────────────────────────────────────────────────
-
-func (s *soSolver) setReg(key any, value any) { s.regs[regKey(key)] = value }
-func (s *soSolver) getReg(key any) any        { return s.regs[regKey(key)] }
-func (s *soSolver) copyQueue() []any          { q, _ := s.getReg(pcReg).([]any); return copyAnySlice(q) }
-
-// maxQueueSteps 单次 runQueue 最大执行条数。防止上游下发构造过的字节码
+} // maxQueueSteps 单次 runQueue 最大执行条数。防止上游下发构造过的字节码
 // (如 opcode 22 自引用队列)导致 VM 无限循环空转 —— 旧实现无任何上限,
 // 一个损坏的 dx 就能让 goroutine 永久 100% CPU(对齐 turnstile 的 50000 步上限)。
 const maxQueueSteps = 50000
@@ -739,16 +732,16 @@ func (s *soSolver) runQueue() error {
 		if steps >= maxQueueSteps {
 			return fmt.Errorf("so: runQueue exceeded %d steps (possible infinite loop)", maxQueueSteps)
 		}
-		q, ok := s.getReg(pcReg).([]any)
+		q, ok := s.GetReg(pcReg).([]any)
 		if !ok || len(q) == 0 {
 			return nil
 		}
 		ins, ok := q[0].([]any)
-		s.setReg(pcReg, q[1:])
+		s.SetReg(pcReg, q[1:])
 		if !ok || len(ins) == 0 {
 			continue
 		}
-		fn, ok := s.getReg(ins[0]).(vmFunc)
+		fn, ok := s.GetReg(ins[0]).(vmFunc)
 		if !ok {
 			return fmt.Errorf("so: opcode %v not callable", ins[0])
 		}
@@ -756,22 +749,6 @@ func (s *soSolver) runQueue() error {
 			return err
 		}
 	}
-}
-
-func (s *soSolver) callFn(value any, args ...any) (any, error) {
-	fn, ok := value.(vmFunc)
-	if !ok {
-		return nil, nil
-	}
-	return fn(args...)
-}
-
-func (s *soSolver) derefArgs(args []any) []any {
-	out := make([]any, 0, len(args))
-	for _, a := range args {
-		out = append(out, s.getReg(a))
-	}
-	return out
 }
 
 func (s *soSolver) asNumber(value any) (float64, bool) {
@@ -855,7 +832,7 @@ func (s *soSolver) jsGetProp(obj any, prop any) any {
 	case nil:
 		return nil
 	case regMapRef:
-		return v.s.getReg(prop)
+		return v.s.GetReg(prop)
 	case map[string]any:
 		key := toStr(prop)
 		if val, ok := v[key]; ok {
@@ -1015,89 +992,12 @@ func absDiff(a, b float64) float64 {
 	return b - a
 }
 
-func copyAnySlice(v []any) []any {
-	if len(v) == 0 {
-		return []any{}
-	}
-	out := make([]any, len(v))
-	copy(out, v)
-	return out
-}
-
-func regKey(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return "nil"
-	case string:
-		return "s:" + v
-	case int:
-		return "n:" + strconv.Itoa(v)
-	case int64:
-		return "n:" + strconv.FormatInt(v, 10)
-	case float64:
-		if v == float64(int64(v)) {
-			return "n:" + strconv.FormatInt(int64(v), 10)
-		}
-		return "n:" + strconv.FormatFloat(v, 'g', -1, 64)
-	}
-	return "x:" + fmt.Sprintf("%v", value)
-}
-
-// latin1Base64Decode 对齐浏览器 atob 的 Latin-1 语义(128-255 字符按字节处理)。
-func latin1Base64Decode(value string) (string, error) {
-	body, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return "", err
-	}
-	runes := make([]rune, 0, len(body))
-	for _, b := range body {
-		runes = append(runes, rune(b))
-	}
-	return string(runes), nil
-}
-
-// latin1Base64Encode 对齐浏览器 btoa:把字符串当 Latin-1,逐字节 base64。
-func latin1Base64Encode(value string) string {
-	body := make([]byte, 0, len(value))
-	for _, r := range value {
-		body = append(body, byte(r))
-	}
-	return base64.StdEncoding.EncodeToString(body)
-}
-
 func atobLatin1(value string) string {
 	body, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
 		return ""
 	}
 	return string(body)
-}
-
-func xorString(data, key string) string {
-	if key == "" {
-		return data
-	}
-	db := make([]byte, 0, len(data))
-	kb := make([]byte, 0, len(key))
-	for _, r := range data {
-		db = append(db, byte(r))
-	}
-	for _, r := range key {
-		kb = append(kb, byte(r))
-	}
-	out := make([]byte, len(db))
-	for i := range db {
-		out[i] = db[i] ^ kb[i%len(kb)]
-	}
-	return string(bytesToLatin1Runes(out))
-}
-
-func bytesToLatin1Runes(value []byte) []rune {
-	out := make([]rune, 0, len(value))
-	for _, b := range value {
-		out = append(out, rune(b))
-	}
-	return out
 }
 
 func jsJSONStringify(value any) (string, error) {
