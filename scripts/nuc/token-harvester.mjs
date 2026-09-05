@@ -8,8 +8,9 @@
 // 站点范围(有意排除,勿随手加回):
 //   - 豆包:通道冻结(2026-09-05 拍板),doubao-hook 捕获通路保留但不运行
 //   - GLM/Kimi:容器读 tokens-state(rw)进程 refresh 自愈,文件推送无效
-//   - Gemini/Claude/ChatGPT:桥/池体系,不经 token 文件
-//   grok:登录态已确认在 NUC Chrome(2026-09-05 用户确认),已纳入
+//   - Gemini/Claude:桥体系,不经 token 文件
+//   - ChatGPT:2026-09-05 并入(页面 fetch /api/auth/session 提取 access+session,
+//     覆盖单账号池文件;当前池即单账号,多账号化时需改多行合并逻辑)
 //
 // 幂等:提取值与 NAS 部署区现值 md5 对比,变化才推。
 // 凭证红线:日志只记 OK/FAIL + 长度/天数,绝不打印凭证内容。
@@ -53,6 +54,8 @@ const SITES = [
       const cookie = rel.map((x) => `${x.name}=${x.value}`).join("; ");
       return (uid ? uid.value : "") + "|" + cookie;
     } },
+  { name: "chatgpt", url: "https://chatgpt.com/", kind: "chatgpt",
+    files: { access: "access_tokens.txt", session: "session_tokens.txt" } },
 ];
 
 function httpReq(port, method, p) {
@@ -106,10 +109,34 @@ function validJWT(token) {
   }
 }
 
+// harvestSite 返回 {文件名: 内容} 映射(多数站单文件;chatgpt 双文件)。
 async function harvestSite(site) {
   const t = await ensurePage(site.url);
   const c = await cdp(t.webSocketDebuggerUrl);
   try {
+    if (site.kind === "chatgpt") {
+      // 页面上下文 fetch /api/auth/session(同源带 cookie)拿 accessToken
+      // (session→access exchange 已失效,页面直取最可靠);session-token 走 cookie。
+      const r = await cmdT(c, "Runtime.evaluate", {
+        expression: `(async () => { try { const r = await fetch('/api/auth/session', { credentials: 'include' }); const j = await r.json(); return JSON.stringify({ at: j.accessToken || '' }); } catch (e) { return JSON.stringify({ at: '' }); } })()`,
+        returnByValue: true,
+        awaitPromise: true,
+      }, 25000);
+      const at = (JSON.parse(r.result.result.value) || {}).at || "";
+      if (!at) throw new Error("no accessToken (logged out?)");
+      const gr = await cmdT(c, "Network.getAllCookies");
+      // NextAuth 大 cookie 分片:__Secure-next-auth.session-token.0/.1/... 按序拼接
+      const parts = (gr.result.cookies || [])
+        .filter((x) => /^__Secure-next-auth\.session-token(\.\d+)?$/.test(x.name))
+        .sort((a, b) => {
+          const na = parseInt((a.name.match(/\.(\d+)$/) || [])[1] || "0", 10);
+          const nb = parseInt((b.name.match(/\.(\d+)$/) || [])[1] || "0", 10);
+          return na - nb;
+        });
+      if (!parts.length || !parts[0].value) throw new Error("no session-token cookie (logged out?)");
+      const sessValue = parts.map((x) => x.value).join("");
+      return { [site.files.access]: at, [site.files.session]: sessValue };
+    }
     let value = null;
     if (site.kind === "local") {
       value = await readLocal(c, site.keys);
@@ -133,7 +160,7 @@ async function harvestSite(site) {
       if (!req || !req.value) throw new Error(`no ${site.require} cookie (logged out?)`);
       value = site.assemble(rel);
     }
-    return value;
+    return { [site.file]: value };
   } finally {
     c.close();
   }
@@ -172,23 +199,50 @@ function saveState(file, content) {
 }
 
 console.log("[harvest]", new Date().toISOString(), "start");
-let okAll = true;
+const failures = [];
 for (const site of SITES) {
   try {
-    const value = await harvestSite(site);
-    const md5 = createHash("md5").update(value + "\n").digest("hex");
-    if (md5 === remoteMd5(site.file)) {
-      saveState(site.file, value); // 幂等也要保证 state 最新(签到读它)
-      console.log(`[harvest] ${site.name}: unchanged(幂等跳过)`);
-      continue;
+    const outputs = await harvestSite(site);
+    for (const [file, value] of Object.entries(outputs)) {
+      const md5 = createHash("md5").update(value + "\n").digest("hex");
+      if (md5 === remoteMd5(file)) {
+        saveState(file, value); // 幂等也要保证 state 最新(签到读它)
+        console.log(`[harvest] ${site.name}/${file}: unchanged(幂等跳过)`);
+        continue;
+      }
+      pushToken(file, value);
+      saveState(file, value);
+      console.log(`[harvest] ${site.name}/${file}: OK len=${value.length}(已推 NAS,E3 热加载生效)`);
     }
-    pushToken(site.file, value);
-    saveState(site.file, value);
-    console.log(`[harvest] ${site.name}: OK len=${value.length} → ${site.file}(已推 NAS,E3 热加载生效)`);
   } catch (e) {
-    okAll = false;
+    failures.push(`${site.name}: ${e.message}`);
     console.log(`[harvest] ${site.name}: FAIL ${e.message}`);
   }
 }
+
+// ── 失败告警(复用 keeper webhook;状态去重:失败集合未变不重复发)─────
+const alertURL = process.env.CREDENTIAL_KEEPER_ALERT_URL || "";
+if (failures.length > 0 || fs.existsSync(path.join(STATE_DIR, "last-harvest-failures.txt"))) {
+  const key = failures.sort().join("; ");
+  const prev = (() => { try { return fs.readFileSync(path.join(STATE_DIR, "last-harvest-failures.txt"), "utf8").trim(); } catch { return ""; } })();
+  if (key !== prev && alertURL) {
+    const text = failures.length > 0
+      ? `[token-harvester] 提取失败: ${failures.join("; ")}`
+      : "[token-harvestere] 恢复:全部站点提取成功";
+    try {
+      await fetch(alertURL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(10000),
+      });
+      console.log(`[harvest] alert sent: ${text.slice(0, 120)}`);
+    } catch (e) {
+      console.log(`[harvest] alert send failed: ${e.message}`);
+    }
+  }
+  fs.writeFileSync(path.join(STATE_DIR, "last-harvest-failures.txt"), key);
+}
+
 console.log("[harvest]", new Date().toISOString(), "done");
-process.exit(okAll ? 0 : 1);
+process.exit(failures.length ? 1 : 0);

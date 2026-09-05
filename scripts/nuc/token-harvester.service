@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# 复用 keeper 的告警 env(CREDENTIAL_KEEPER_ALERT_URL);失败时 webhook 通知
+EnvironmentFile=-/etc/credential-keeper.env
 ExecStart=/usr/bin/node /opt/credential-keeper/token-harvester.mjs
 # 凭证红线:本服务日志只含 OK/FAIL 与长度,不含凭证内容
 

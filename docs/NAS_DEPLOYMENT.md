@@ -262,6 +262,7 @@ nohup ./aurora-linux >> .runtime/logs/aurora_run.log 2>&1 &
 - **搜索开关(2026-09-02 提速)**:`DEEPSEEK_WEB_SEARCH=1` 时 quick 档(`-chat`)带联网搜索(+1~2s 首字延迟);
   **默认关闭**(API 客户端联网应由自己侧调 search 工具)。未在 NAS `.env` 设置 = 关闭。
   提速专项实测详见 `docs/WORKBUDDY_VALIDATION_2026-09-02.md` §11(官方 460ms vs 反代 3126ms→2400ms)。
+- **Kimi 搜索开关(2026-09-05)**:`KIMI_WEB_SEARCH=1` 时 chat 变体带 `TOOL_TYPE_SEARCH`;默认关。对照实测开/关延迟无显著差异(2.5-3.6s,上游抖动主导),开关仅为行为控制;千问/MiniMax 请求体无搜索开关字段,无可做项。
 
 ---
 

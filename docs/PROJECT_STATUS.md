@@ -53,6 +53,7 @@
 | N1 测试修复 | `2c91bb3` | provider 包 3 个失败（97181ee 格式变更遗留） |
 | N4 GLM 搜索开关 | `bab60f0` | `GLM_WEB_SEARCH`（默认关） |
 | deepseek 搜索开关 | `6acf0c7` | `DEEPSEEK_WEB_SEARCH`（默认关，**实测 -700ms/-23%**） |
+| kimi 搜索开关 | 09-05 | `KIMI_WEB_SEARCH`（默认关）;对照实测开/关无显著延迟差异（上游抖动主导），仅为行为控制。千问（quick+deep_search 已 nil）/MiniMax（无字段）无搜索开关可做 |
 | C1 灰度 | `5204d31`/`6a2e83c` | 4 家 TLSFaked 全量部署（deepseek/glm/kimi/doubao） |
 | doubao-hook | `db120b4`/`710d533` | Network 主通道（前端改 XHR 后 fetch hook 失效的对策）；a_bogus 非空校验 |
 | 豆包 CDP 桥 | `6b2eb84` | bridge doubao adapter（页内 fetch）+ aurora doubao_cdp.go |

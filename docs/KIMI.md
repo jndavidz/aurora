@@ -53,7 +53,7 @@ Resp: {"accessToken":"...","refreshToken":"..."}   # 两者都轮换
 ## 四、变体行为
 
 ### chat(纯对话)
-- 单条拍平消息 + `thinking:true`,**默认开启联网搜索**(`TOOL_TYPE_SEARCH`,同网页端),剥离客户端 tools。
+- 单条拍平消息 + `thinking:true`,联网搜索由 `KIMI_WEB_SEARCH` 控制(**默认关**,=1 开启;2026-09-05 对照实测:开/关延迟无显著差异 2.5-3.6s,上游抖动主导——保留开关只为行为控制)。正文引用标记由 `kimiweb.ConsumeStream` 流式剥离。
 - 正文里的引用标记(`🛠...🛠` / `🎨` / `` / ``,联网搜索时模型嵌入的引用占位符)由 `kimiweb.ConsumeStream` 流式剥离(标记可能跨帧,内置 citationStripper)。
 - 原生工具调用(模型自带 ipython 等)**不外露**:模型服务端执行后把结果折进正文,provider 只流文本/思考。
 
