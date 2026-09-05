@@ -150,6 +150,9 @@ if h.providers != nil {
 
 ### 5.2 ChatGPT 共享收集器 `toolCallingRetry`(commit 8c694e3)
 
+> 文件:`internal/handler/tool_calling.go`(2026-09-05 G4 渐进拆分,自 chat_handler.go/shared.go 原样迁出;
+> 含 chatRequestState(F2)、toolCallingRetry/handleToolCalling/responsesToolCalling 双入口、looksLike* 分类器)
+
 ChatGPT 的 coding 变体不注册为 provider,在 handler 内实现,且与 chat/completions
 共用同一套重试/兜底逻辑:
 
