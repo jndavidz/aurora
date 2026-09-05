@@ -13,7 +13,7 @@
 >（音频隔离实测数据基线，长期有效）、`PI_AGENT_DEBUG.md`（pi 路由适配活运维知识，
 > router.go:115 引用）、`ARCHITECTURE_AUDIT_2026-08-31.md`（1712 行全量审计，查阅用）。
 >
-> 最后更新：2026-09-05 ｜ 基线：`local-toolfix` @ `5416b19`（已推送，NAS/NUC 已部署）｜ 31 包测试全绿
+> 最后更新：2026-09-05（下午）｜ 基线：`local-toolfix`（5416b19 之后新增 E2 收口 + 遗留缺陷清零 + C2/C3/N3）｜ 31 包测试全绿
 
 ---
 
@@ -75,35 +75,49 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 - 修复改名的连锁回归：`newCdpBase` 对 `gpt-5.6-chat` 的解析跳过（-coding 前置判定）；桥侧 `aliases: ["auto","doubao"]`
 - **破坏性变更**：旧 `-chat` id 已 404；面板自建 preset 需同步
 
+### 反检测加固 + E2 收口 + 遗留缺陷清零（09-05 下午）
+
+| 项 | 说明 |
+|---|---|
+| E2 handler 收口 | chat/audio/image_handler 共 50+ 处手拼 `gin.H{"error":gin.H{...}}` → `apierrors.JSONError`/`NotFoundAccount`；apierrors 新增 `Param()` 辅助；`Not Account Found.` 统一走 `NotFoundAccount`（含 Abort 语义）；简单字符串 403/500 保持原格式不强行改形 |
+| C2 sec-ch-ua 动态化 | `util.SecChUaForUA()` 从 UA 提取 Chrome 主版本派生 `Sec-Ch-Ua`；`WithUserAgent`/`NewBaseHeaderWithState` 覆盖 UA 时自动重对齐（版本不一致=经典 bot 信号） |
+| C3 device id 账号级固化 | `NewChatClientStateForAccount()`：优先账号指纹 OaiDeviceID → token 派生确定性 v4 型 UUID → 兜底随机；6 个调用点全部接入；SessionID 保持每请求新生成（对齐浏览器每标签页语义） |
+| N3 指纹外置 | `SENTINEL_SDK_VERSION`（默认 20260423af3c，6 处引用点：browserfp/sentinel/prooftoken/so/turnstile）与 `OAI_BUILD_NUMBER`（默认 7823760）环境变量化，上游轮换改 compose 环境变量即可，无需重编译 |
+| P0-13 修复 | kimiweb 帧 `make([]byte, length)` 加 8MB 上界（对齐 glmweb 8MB/deepseekweb 4MB），防上游异常大帧内存耗尽 |
+| P1-4 修复 | grokweb 主读循环每帧刷新 120s ReadDeadline，半开 TCP 不再永久挂起 goroutine/fd |
+| P1-7 修复 | qianwenweb 差值输出校验 HasPrefix（同 P1-6 glmweb 模式），上游重排引用时整体替换而非重复输出 |
+| P1-35 修复 | doubaoweb/geminweb `nextAccount` unlock→sleep→relock 竞态：改为锁内预标记 `lastUsed=now+wait`（wait>0）或 now（wait≤0），并发 goroutine 无法再绕过限频 |
+
 ---
 
 ## 三、未完成（按优先级）
 
 | 优先 | 项 | 工作量 | 说明 |
 |---|---|---|---|
-| **P1** | E2 handler 收口 | 0.5 天 | 60 处手拼 `gin.H{"error":…}` → apierrors（机械化替换） |
-| **P2** | C2 sec-ch-ua 动态化 | 0.5–1 天 | `builder.go:40` 硬编码 Chromium 头；随 C1 灰度观察 |
-| **P2** | C3 device id 账号级固化 | 0.5–1 天 | `client_state.go:24-25` 每请求新 UUID |
-| **P2** | N3 硬编码指纹外置 | 1 天 | sentinel SDK `20260423af3c` / Build-Number `7823760` 配置化（上游轮换即求解失败） |
-| **P3** | E3 凭证热加载 | 1 天 | deepseekweb 补 mtime 重读（GLM/Kimi 已部分自愈） |
-| **P4** | G3 VM 合并 | 1–3 周 | so(1107)+turnstile(1640) 仅 7 同名函数；**暂缓**（上游改版时抽象层先碎） |
-| **P4** | G4 拆 handler / F1 webclient / F2 context | 各 1–3 周 | 大重构，按路线图节奏 |
+| ~~P1~~ | ~~E2 handler 收口~~ | — | **已完成**（09-05 下午，50+ 处机械化替换，见 §二） |
+| ~~P2~~ | ~~C2 sec-ch-ua 动态化~~ | — | **已完成**（09-05 下午，`util.SecChUaForUA`） |
+| ~~P2~~ | ~~C3 device id 账号级固化~~ | — | **已完成**（09-05 下午，`NewChatClientStateForAccount`） |
+| ~~P2~~ | ~~N3 硬编码指纹外置~~ | — | **已完成**（09-05 下午，`SENTINEL_SDK_VERSION`/`OAI_BUILD_NUMBER`） |
+| P3 | E3 凭证热加载 | 1 天 | deepseekweb 补 mtime 重读（GLM/Kimi 已部分自愈） |
+| P4 | G3 VM 合并 | 1–3 周 | so(1107)+turnstile(1640) 仅 7 同名函数；**暂缓**（上游改版时抽象层先碎） |
+| P4 | G4 拆 handler / F1 webclient / F2 context | 各 1–3 周 | 大重构，按路线图节奏 |
 
 **明确不做**：G2 chat 限频/Pool 信号量（与「速度快」及拟真人拍板冲突）；workbuddy 融合；双活多副本；turnstile/so 抽象层；启用元宝。
 （补充自 ARCHITECTURE_AUDIT §9）：不把 ChatGPT 塞进 Provider 接口；不写 turnstile/so 优雅抽象层；不引依赖注入框架；typings 不换官方 SDK；不一次性重写 handler；不强求 10 家客户端 100% 统一（Gemini RPC/Grok WS/Mimo ASR/Doubao 模板是结构性异类）；暂不做指标/追踪体系；测试覆盖率分层设定（toolcall 85%、客户端靠 live 测试）。
 
-### 3.1 遗留缺陷清单（ARCHITECTURE_AUDIT §5，Phase 0 已修 11 处，以下仍未修）
+### 3.1 遗留缺陷清单（ARCHITECTURE_AUDIT §5，Phase 0 已修 11 处 + 09-05 下午清零 4 处）
 
 > 来源：`archive/ARCHITECTURE_AUDIT_2026-08-31.md` §5（13 P0 + 35 P1，全带文件:行号）。
 > **注意**：同文件多处问题可能被同一次改动顺带修掉，动手前先 grep 现状。
+> **09-05 下午**：审计清单内所有"未修"项已全部修复（P0-13 / P1-4 / P1-7 / P1-35），见 §二。
 
 | 级别 | 位置 | 问题 | 现状 |
 |---|---|---|---|
-| P0-13 | `kimiweb/stream.go:175` | `make([]byte, length)`，length 上游可控 uint32 无上限（deepseekweb 4MB / glmweb 8MB 有界） | **未修**（09-05 复核） |
-| P1-6 | `glmweb/stream.go:130,135` | 全量重发协议 `TrimPrefix` 差值不校验 `HasPrefix` → 上游重排引用时**整段重复输出**（glm-flash 偶发重复回复的根因） | **未修** |
-| P1-7 | `qianwenweb/stream.go:88` | 同上（geminweb:205 有防御） | 未修 |
-| P1-35 | `doubaoweb/client.go:126`/`geminweb/client.go:124` | nextAccount 解锁后 sleep 再重加锁 → 限频被绕过且时间戳失真 | 未修 |
-| P1-4 | `grokweb/client.go:163` | 主读循环无 ReadDeadline → 半开 TCP 时 goroutine/fd 泄漏（grok 偶发挂起与此相关） | 未修 |
+| P0-13 | `kimiweb/stream.go:175` | `make([]byte, length)`，length 上游可控 uint32 无上限 | **已修**（8MB 上界，09-05 下午） |
+| P1-4 | `grokweb/client.go:163` | 主读循环无 ReadDeadline → 半开 TCP 泄漏 goroutine/fd | **已修**（120s 每帧刷新，09-05 下午） |
+| P1-6 | `glmweb/stream.go:130,135` | TrimPrefix 差值不校验 HasPrefix → 整段重复输出 | 已修（`f10eb1a`，glm-flash 偶发重复回复根因） |
+| P1-7 | `qianwenweb/stream.go:88` | 同 P1-6 | **已修**（09-05 下午，HasPrefix 校验+整体替换） |
+| P1-35 | `doubaoweb/client.go:126`/`geminweb/client.go:124` | nextAccount 解锁后 sleep 再重加锁 → 限频被绕过 | **已修**（锁内预标记 lastUsed=now+wait，09-05 下午） |
 | 其余 P0-2/3/4/5/6/7/12 | so.go 递归清寄存器、并发写 map、runQueue 无上限、browserfp 未判空、api/router init 双重初始化 | **Phase 0 已修**（52 文件 +521/-316，见 audit §7 注记）——动手前先核对 | 已修 |
 
 Phase 0 已修 11 处清单（防重复修）：prooftoken diffLen 上界、api/router 显式 Initialize+sync.Once、minimaxweb instanceUUID 加锁、qianwenweb/yuanbaoweb onDelta nil 守卫、sseparser Parts 长度保护 ×2、browserfp RWMutex+惰性初始化（连带修 turnstile/prooftoken nil panic）、toolcall/fence（只剥工具围栏+尾部反引号保留 2）、toolcall/recover（工具名白名单+大小写归一）、so.go（opcode0 独立 solver/50000 步上限/Snapshot 60s 超时）。
@@ -180,3 +194,4 @@ NAS(10.10.10.2) aurora 容器 :65432 ──┬── NUC(10.10.10.3) Chrome CDP:
 | 09-02 | coding 变体全量封存（`CODING_ENABLED=false`，4e0e8c8）；workbuddy 通道转验证期 |
 | 09-04 | workbuddy 融合取消（定位收敛纯对话反代）；拟真人仅限测试；C1 四家 TLS 部署；E1/E2/G2 落地；豆包走桥（路线1） |
 | 09-05 | 模型 id 全量小写 `-` 化部署；豆包滑块→登出→限频，**冷冻** |
+| 09-05（下午） | E2 收口 + 遗留缺陷清零（P0-13/P1-4/P1-7/P1-35）+ C2/C3/N3 反检测加固；指纹参数外置为 `SENTINEL_SDK_VERSION`/`OAI_BUILD_NUMBER` |

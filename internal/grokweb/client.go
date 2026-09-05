@@ -160,7 +160,12 @@ func (c *Client) Complete(req CompletionRequest, onDelta func(Delta)) StreamResu
 	}
 
 	// 单读循环:消费所有帧直到 response.done / error。
+	// P1-4: 原实现无 ReadDeadline,半开 TCP(sws 不回数据也不关连接)时
+	// ReadMessage 永久阻塞,goroutine/fd 泄漏(grok 偶发挂起与此相关)。
+	// 每帧刷新 120s 读截止:正常流式帧间隔远小于此值,半开连接会超时返回。
+	const readTimeout = 120 * time.Second
 	for {
+		s.ws.SetReadDeadline(time.Now().Add(readTimeout))
 		_, data, err := s.ws.ReadMessage()
 		if err != nil {
 			if res.Text == "" {

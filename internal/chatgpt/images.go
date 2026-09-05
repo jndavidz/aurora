@@ -447,7 +447,7 @@ func GeneratePictureConversationImages(client httpclient.AuroraHttpClient, accou
 	if proxy != "" {
 		client.SetProxy(proxy)
 	}
-	state := NewChatClientState()
+	state := NewChatClientStateForAccount(account)
 	conduitToken, err := prepareImageConversation(client, account, turnStile, prompt, model, state)
 	if err != nil {
 		return nil, "", err
@@ -514,7 +514,7 @@ func GeneratePictureConversationImagesWithReferences(client httpclient.AuroraHtt
 	if proxy != "" {
 		client.SetProxy(proxy)
 	}
-	state := NewChatClientState()
+	state := NewChatClientStateForAccount(account)
 	conduitToken, err := prepareImageConversation(client, account, turnStile, prompt, model, state)
 	if err != nil {
 		return nil, "", err

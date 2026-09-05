@@ -13,6 +13,7 @@ import (
 	"aurora/httpclient"
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
+	"aurora/internal/apierrors"
 	"aurora/internal/chatgpt"
 	"aurora/internal/config"
 	officialtypes "aurora/typings/official"
@@ -127,21 +128,11 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 	var imageRequest officialtypes.ImageGenerationRequest
 	err := c.BindJSON(&imageRequest)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Request must be proper JSON", nil, err.Error())
 		return
 	}
 	if imageRequest.Prompt == "" {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Missing required parameter: prompt",
-			"type":    "invalid_request_error",
-			"param":   "prompt",
-			"code":    "missing_required_parameter",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Missing required parameter: prompt", apierrors.Param("prompt"), "missing_required_parameter")
 		return
 	}
 	if imageRequest.N <= 0 {
@@ -156,17 +147,11 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil || account.Token == "" {
-		c.JSON(400, gin.H{"error": "Images API requires a logged-in ChatGPT access token."})
-		c.Abort()
+		apierrors.NotFoundAccount(c)
 		return
 	}
 	if !account.Type.Satisfies(accounts.CapImageGenerate) {
@@ -220,12 +205,7 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 				writeImageStreamDone(c)
 				return
 			}
-			c.JSON(500, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "image_generation_error",
-				"param":   nil,
-				"code":    "image_generation_error",
-			}})
+			apierrors.JSONError(c, 500, "image_generation_error", err.Error(), nil, "image_generation_error")
 			return
 		}
 		for _, imageResult := range imageResults {
@@ -248,12 +228,7 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 							writeImageStreamDone(c)
 							return
 						}
-						c.JSON(500, gin.H{"error": gin.H{
-							"message": err.Error(),
-							"type":    "image_download_error",
-							"param":   nil,
-							"code":    "image_download_error",
-						}})
+						apierrors.JSONError(c, 500, "image_download_error", err.Error(), nil, "image_download_error")
 						return
 					}
 					item.B64JSON = base64.StdEncoding.EncodeToString(imageBytes)
@@ -290,12 +265,7 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 				writeImageStreamDone(c)
 				return
 			}
-			c.JSON(500, gin.H{"error": gin.H{
-				"message": "No image result found in response: " + upstreamText,
-				"type":    "image_generation_error",
-				"param":   nil,
-				"code":    "image_generation_error",
-			}})
+			apierrors.JSONError(c, 500, "image_generation_error", "No image result found in response: "+upstreamText, nil, "image_generation_error")
 			return
 		}
 		if len(data) >= imageRequest.N {
@@ -311,12 +281,7 @@ func (h *ImageHandler) Generations(c *gin.Context) {
 			writeImageStreamDone(c)
 			return
 		}
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "No image result found in response",
-			"type":    "image_generation_error",
-			"param":   nil,
-			"code":    "image_generation_error",
-		}})
+		apierrors.JSONError(c, 500, "image_generation_error", "No image result found in response", nil, "image_generation_error")
 		return
 	}
 	if stream {
@@ -697,12 +662,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 			Messages       interface{}                     `json:"messages,omitempty"`
 		}
 		if err := c.BindJSON(&body); err != nil {
-			c.JSON(400, gin.H{"error": gin.H{
-				"message": "Request must be proper JSON",
-				"type":    "invalid_request_error",
-				"param":   nil,
-				"code":    err.Error(),
-			}})
+			apierrors.JSONError(c, 400, "invalid_request_error", "Request must be proper JSON", nil, err.Error())
 			return
 		}
 		prompt = strings.TrimSpace(body.Prompt)
@@ -716,12 +676,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 		for _, src := range body.Images {
 			item, _, err := imageEditConvertURL(client, src.ImageURL)
 			if err != nil {
-				c.JSON(400, gin.H{"error": gin.H{
-					"message": "invalid image reference: " + err.Error(),
-					"type":    "invalid_request_error",
-					"param":   "images",
-					"code":    "invalid_image",
-				}})
+				apierrors.JSONError(c, 400, "invalid_request_error", "invalid image reference: "+err.Error(), apierrors.Param("images"), "invalid_image")
 				return
 			}
 			if len(item.Data) > 0 {
@@ -731,12 +686,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 		if body.Image != nil {
 			item, _, err := imageEditConvertURL(client, body.Image.ImageURL)
 			if err != nil {
-				c.JSON(400, gin.H{"error": gin.H{
-					"message": "invalid image reference: " + err.Error(),
-					"type":    "invalid_request_error",
-					"param":   "image",
-					"code":    "invalid_image",
-				}})
+				apierrors.JSONError(c, 400, "invalid_request_error", "invalid image reference: "+err.Error(), apierrors.Param("image"), "invalid_image")
 				return
 			}
 			if len(item.Data) > 0 {
@@ -776,12 +726,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 		for _, p := range imageParts {
 			item, _, err := imageEditConvertURL(client, p)
 			if err != nil {
-				c.JSON(400, gin.H{"error": gin.H{
-					"message": "invalid image reference: " + err.Error(),
-					"type":    "invalid_request_error",
-					"param":   "input",
-					"code":    "invalid_image",
-				}})
+				apierrors.JSONError(c, 400, "invalid_request_error", "invalid image reference: "+err.Error(), apierrors.Param("input"), "invalid_image")
 				return
 			}
 			if len(item.Data) > 0 {
@@ -794,12 +739,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 	} else {
 		form, err := c.MultipartForm()
 		if err != nil {
-			c.JSON(400, gin.H{"error": gin.H{
-				"message": "Request must be multipart/form-data or application/json: " + err.Error(),
-				"type":    "invalid_request_error",
-				"param":   nil,
-				"code":    "invalid_multipart",
-			}})
+			apierrors.JSONError(c, 400, "invalid_request_error", "Request must be multipart/form-data or application/json: "+err.Error(), nil, "invalid_multipart")
 			return
 		}
 		parseFormFields(
@@ -836,21 +776,11 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 	}
 
 	if len(imageSources) == 0 {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Missing required image input. Provide multipart 'image'/'images' field, or JSON 'image'/'images' field with image_url.",
-			"type":    "invalid_request_error",
-			"param":   "image",
-			"code":    "missing_required_parameter",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Missing required image input. Provide multipart 'image'/'images' field, or JSON 'image'/'images' field with image_url.", apierrors.Param("image"), "missing_required_parameter")
 		return
 	}
 	if !asVariation && prompt == "" {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Missing required parameter: prompt",
-			"type":    "invalid_request_error",
-			"param":   "prompt",
-			"code":    "missing_required_parameter",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Missing required parameter: prompt", apierrors.Param("prompt"), "missing_required_parameter")
 		return
 	}
 	if n <= 0 {
@@ -866,17 +796,11 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil || account.Token == "" {
-		c.JSON(400, gin.H{"error": "Images API requires a logged-in ChatGPT access token."})
-		c.Abort()
+		apierrors.NotFoundAccount(c)
 		return
 	}
 	if !account.Type.Satisfies(accounts.CapImageGenerate) {
@@ -930,12 +854,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 				writeImageStreamDone(c)
 				return
 			}
-			c.JSON(upStatus, gin.H{"error": gin.H{
-				"message": "upload image failed: " + upErr.Error(),
-				"type":    "image_upload_error",
-				"param":   fmt.Sprintf("image[%d]", idx),
-				"code":    "image_upload_error",
-			}})
+			apierrors.JSONError(c, upStatus, "image_upload_error", "upload image failed: "+upErr.Error(), apierrors.Param(fmt.Sprintf("image[%d]", idx)), "image_upload_error")
 			return
 		}
 		references = append(references, chatgpt.ImageEditReference{
@@ -973,12 +892,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 				writeImageStreamDone(c)
 				return
 			}
-			c.JSON(500, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "image_generation_error",
-				"param":   nil,
-				"code":    "image_generation_error",
-			}})
+			apierrors.JSONError(c, 500, "image_generation_error", err.Error(), nil, "image_generation_error")
 			return
 		}
 		for _, imageResult := range imageResults {
@@ -1001,12 +915,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 							writeImageStreamDone(c)
 							return
 						}
-						c.JSON(500, gin.H{"error": gin.H{
-							"message": err.Error(),
-							"type":    "image_download_error",
-							"param":   nil,
-							"code":    "image_download_error",
-						}})
+						apierrors.JSONError(c, 500, "image_download_error", err.Error(), nil, "image_download_error")
 						return
 					}
 					item.B64JSON = base64.StdEncoding.EncodeToString(imageBytes)
@@ -1043,12 +952,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 				writeImageStreamDone(c)
 				return
 			}
-			c.JSON(500, gin.H{"error": gin.H{
-				"message": "No image result found in response: " + upstreamText,
-				"type":    "image_generation_error",
-				"param":   nil,
-				"code":    "image_generation_error",
-			}})
+			apierrors.JSONError(c, 500, "image_generation_error", "No image result found in response: "+upstreamText, nil, "image_generation_error")
 			return
 		}
 		if len(data) >= n {
@@ -1064,12 +968,7 @@ func (h *ImageHandler) runImageEditFlow(c *gin.Context, asVariation bool) {
 			writeImageStreamDone(c)
 			return
 		}
-		c.JSON(500, gin.H{"error": gin.H{
-			"message": "No image result found in response",
-			"type":    "image_generation_error",
-			"param":   nil,
-			"code":    "image_generation_error",
-		}})
+		apierrors.JSONError(c, 500, "image_generation_error", "No image result found in response", nil, "image_generation_error")
 		return
 	}
 	if stream {

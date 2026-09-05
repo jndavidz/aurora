@@ -172,6 +172,12 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 			res.Finished = true
 			break
 		}
+		// P0-13: length 上游可控 uint32 无上限——加 8MB 上界(对齐 glmweb 8MB / deepseekweb 4MB),
+		// 防止上游异常/恶意大帧导致内存耗尽
+		if length > 8*1024*1024 {
+			res.Err = "kimi stream: frame too large"
+			break
+		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {
 			res.Err = "kimi stream: truncated frame"

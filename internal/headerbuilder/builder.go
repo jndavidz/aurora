@@ -38,7 +38,7 @@ func (b *Builder) WithBaseHeaders(conversationID string) *Builder {
 	} else {
 		b.header.Set("Referer", "https://chatgpt.com/")
 	}
-	b.header.Set("Sec-Ch-Ua", `"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"`)
+	b.header.Set("Sec-Ch-Ua", util.SecChUaForUA(util.FixedUserAgent))
 	b.header.Set("Sec-Ch-Ua-Mobile", "?0")
 	b.header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
 	b.header.Set("Priority", "u=1, i")
@@ -46,7 +46,7 @@ func (b *Builder) WithBaseHeaders(conversationID string) *Builder {
 	b.header.Set("Sec-Fetch-Mode", "cors")
 	b.header.Set("Sec-Fetch-Site", "same-origin")
 	b.header.Set("User-Agent", util.FixedUserAgent)
-	b.header.Set("Oai-Client-Build-Number", "7823760")
+	b.header.Set("Oai-Client-Build-Number", util.OaiBuildNumber()) // N3: 外置 OAI_BUILD_NUMBER
 	if fp := browserfp.Get(); fp != nil {
 		b.header.Set("Oai-Client-Version", fp.BuildID)
 	} else {
@@ -55,10 +55,12 @@ func (b *Builder) WithBaseHeaders(conversationID string) *Builder {
 	return b
 }
 
-// WithUserAgent 设置 User-Agent。
+// WithUserAgent 设置 User-Agent。UA 覆盖时 Sec-Ch-Ua 必须同步重派生
+// (C2:两者版本不一致是经典 bot 检测信号)。
 func (b *Builder) WithUserAgent(ua string) *Builder {
 	if ua != "" {
 		b.header.Set("User-Agent", ua)
+		b.header.Set("Sec-Ch-Ua", util.SecChUaForUA(ua))
 	}
 	return b
 }
@@ -224,7 +226,7 @@ func NewBaseHeaderWithState(conversationID, deviceID, sessionID, userAgent strin
 		b.WithSessionID(sessionID)
 	}
 	if userAgent != "" {
-		b.header.Set("User-Agent", userAgent)
+		b.WithUserAgent(userAgent)
 	}
 	return b.Build()
 }

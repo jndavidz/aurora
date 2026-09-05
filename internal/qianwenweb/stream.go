@@ -89,11 +89,20 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 				text = m.Content
 			}
 		}
-		// 差值输出增量
-		if d := strings.TrimPrefix(text, lastText); d != "" {
+		// 差值输出增量(全量重发,只发新增部分)。
+		// P1-7(2026-09-05):校验 HasPrefix——上游重写/回滚已输出段落时(如联网搜索
+		// 重排引用),累计文本不再是 lastText 的延长,TrimPrefix 会把整段当增量重复
+		// 输出(与 glmweb P1-6 同根因)。此时以新累计文本整体替换。
+		if strings.HasPrefix(text, lastText) {
+			if d := strings.TrimPrefix(text, lastText); d != "" {
+				res.Text = text
+				lastText = text
+				onDelta(Delta{Text: d})
+			}
+		} else if text != lastText {
 			res.Text = text
 			lastText = text
-			onDelta(Delta{Text: d})
+			onDelta(Delta{Text: text})
 		}
 		if fr.Data.Status == "complete" {
 			res.Finished = true

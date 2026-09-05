@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"aurora/internal/browserfp"
+	"aurora/util"
 )
 
 const (
@@ -619,7 +620,8 @@ func (s *turnstileSolver) buildWindow() map[string]any {
 	}, []string{})
 	scripts := []any{
 		withOrderedKeys(map[string]any{"src": "https://chatgpt.com/backend-api/sentinel/sdk.js"}, []string{}),
-		withOrderedKeys(map[string]any{"src": "https://chatgpt.com/sentinel/20260423af3c/sdk.js"}, []string{}),
+		// N3: SDK 版本外置 SENTINEL_SDK_VERSION(上游轮换时改环境变量)
+		withOrderedKeys(map[string]any{"src": util.SentinelSDKURL()}, []string{}),
 	}
 	localStorageData := withOrderedKeys(map[string]any{
 		"statsig.stable_id.444584300":         `"` + deviceID + `"`,

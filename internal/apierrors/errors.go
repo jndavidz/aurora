@@ -55,3 +55,9 @@ func NotFoundAccount(c *gin.Context) {
 func strPtr(s string) *string {
 	return &s
 }
+
+// Param 返回指向 s 的指针,用于 JSONError 的 param 字段。
+// (E2 收口:handler 不再手拼 gin.H,统一走 JSONError 时需要 *string 参数。)
+func Param(s string) *string {
+	return &s
+}

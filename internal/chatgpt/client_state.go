@@ -1,11 +1,13 @@
 package chatgpt
 
 import (
+	"crypto/sha256"
 	"math"
 	"time"
 
 	"github.com/google/uuid"
 
+	"aurora/internal/accounts"
 	chatgpt_types "aurora/typings/chatgpt"
 	"aurora/util"
 )
@@ -27,6 +29,36 @@ func NewChatClientState() *ChatClientState {
 		ParentMessageID: "client-created-root",
 		UserAgent:       util.FixedUserAgent,
 	}
+}
+
+// NewChatClientStateForAccount 创建账号级固化的 client state。
+// C3(2026-09-05):DeviceID 此前每请求新生成 —— 真实浏览器的 oai-did 存在
+// localStorage 长期稳定,每请求轮换是强 bot 信号。改为:
+//  1. 优先用账号指纹的 OaiDeviceID(账号级,loader/pool 已固化);
+//  2. 指纹为空(临时账号等)时用 token 派生确定性 UUID(同账号恒定,重装不漂移);
+//  3. 无账号上下文才回退随机(兼容旧路径)。
+// SessionID 仍每请求新生成(对齐浏览器每标签页/每次访问语义)。
+func NewChatClientStateForAccount(account *accounts.Account) *ChatClientState {
+	state := NewChatClientState()
+	if account != nil {
+		if account.Fingerprint.OaiDeviceID != "" {
+			state.DeviceID = account.Fingerprint.OaiDeviceID
+		} else if account.Token != "" {
+			state.DeviceID = deterministicDeviceID(account.Token)
+		}
+	}
+	return state
+}
+
+// deterministicDeviceID 从 token 派生格式上与 v4 UUID 无异的确定性设备 id
+// (sha256 取前 16 字节,重写 version/variant 位)。
+func deterministicDeviceID(token string) string {
+	sum := sha256.Sum256([]byte("aurora:device:" + token))
+	var id uuid.UUID
+	copy(id[:], sum[:16])
+	id[6] = (id[6] & 0x0f) | 0x40 // version 4
+	id[8] = (id[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return id.String()
 }
 
 func (s *ChatClientState) TimeSinceLoadedSeconds() int {

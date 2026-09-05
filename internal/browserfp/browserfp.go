@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"aurora/util"
 )
 
 // ─── Language ──────────────────────────────────────────────────────────────
@@ -108,9 +110,11 @@ var NavigatorProbes = []string{
 // ScriptURLs sentinel SDK 脚本 URL 池。
 // 浏览器中 hPt(Array.from(document.scripts).map(e=>e?.src).filter(e=>e))
 // 会随机选一个 script URL。
+// N3(2026-09-05):版本化路径的 SDK 版本外置为 SENTINEL_SDK_VERSION 环境变量
+// (上游轮换时改环境变量即可,无需改代码),默认 20260423af3c。
 var ScriptURLs = []string{
 	"https://chatgpt.com/backend-api/sentinel/sdk.js",
-	"https://chatgpt.com/sentinel/20260423af3c/sdk.js",
+	util.SentinelSDKURL(),
 }
 
 // DefaultBuildID 当前 chatgpt.com 的 data-build 属性。

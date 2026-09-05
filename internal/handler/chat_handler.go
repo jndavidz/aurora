@@ -13,6 +13,7 @@ import (
 	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
+	"aurora/internal/apierrors"
 	"aurora/internal/chatgpt"
 	"aurora/internal/config"
 	"aurora/internal/httpstream"
@@ -67,33 +68,18 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	var original_request officialtypes.APIRequest
 	err := c.BindJSON(&original_request)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Request must be proper JSON", nil, err.Error())
 		return
 	}
 	if len(original_request.Messages) == 0 {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Missing required parameter: messages",
-			"type":    "invalid_request_error",
-			"param":   "messages",
-			"code":    "missing_required_parameter",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Missing required parameter: messages", apierrors.Param("messages"), "missing_required_parameter")
 		return
 	}
 
 	// coding 封存(2026-09-02):开关关闭时显式 400(不静默转 chat,避免误导;
 	// 见 docs/CHATGPT_TOOL_BRIDGE.md —— agent 循环延迟/稳定性不达标,冻结不删除)
 	if !h.cfg.CodingEnabled && isCodingModelName(original_request.Model) {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "coding 模型已封存(2026-09-02,aurora 收敛为对话网关)。如需恢复,设置环境变量 CODING_ENABLED=true 并重启",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    "coding_disabled",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型已封存(2026-09-02,aurora 收敛为对话网关)。如需恢复,设置环境变量 CODING_ENABLED=true 并重启", nil, "coding_disabled")
 		return
 	}
 
@@ -118,12 +104,7 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	requestedModel := original_request.Model
 	if base, coding := normalizeCodingModel(original_request.Model); coding {
 		if len(original_request.Tools) == 0 {
-			c.JSON(400, gin.H{"error": gin.H{
-				"message": "coding 模型(gpt-coding)需要携带 tools 参数",
-				"type":    "invalid_request_error",
-				"param":   "tools",
-				"code":    "missing_tools",
-			}})
+			apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型(gpt-coding)需要携带 tools 参数", apierrors.Param("tools"), "missing_tools")
 			return
 		}
 		original_request.Model = base
@@ -131,17 +112,11 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil {
-		c.JSON(400, gin.H{"error": "Not Account Found."})
-		c.Abort()
+		apierrors.NotFoundAccount(c)
 		return
 	}
 
@@ -175,7 +150,7 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		clientState = h.sessions.Get(translated_request.ConversationID)
 	}
 	if clientState == nil {
-		clientState = chatgpt.NewChatClientState()
+		clientState = chatgpt.NewChatClientStateForAccount(account)
 	}
 	clientState.ConversationID = translated_request.ConversationID
 	clientState.ParentMessageID = translated_request.ParentMessageID
@@ -193,12 +168,7 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 
 	response, wsConn, turnStile, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, original_request.Stream, clientState, h.accountPool)
 	if err != nil {
-		c.JSON(status, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "request_conversion_error",
-			"param":   "model",
-			"code":    "request_conversion_error",
-		}})
+		apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
 		return
 	}
 	defer response.Body.Close()
@@ -296,12 +266,7 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 
 		response, wsConn, _, status, err = conversationClientOrder(&client, account, translated_request, proxyUrl, original_request.Stream, clientState, h.accountPool)
 		if err != nil {
-			c.JSON(status, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "request_conversion_error",
-				"param":   "model",
-				"code":    "request_conversion_error",
-			}})
+			apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
 			return
 		}
 		defer response.Body.Close()
@@ -333,23 +298,13 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	var responsesRequest officialtypes.ResponsesAPIRequest
 	err := c.BindJSON(&responsesRequest)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Request must be proper JSON", nil, err.Error())
 		return
 	}
 
 	// coding 封存(同 Nightmare 入口)
 	if !h.cfg.CodingEnabled && isCodingModelName(responsesRequest.Model) {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "coding 模型已封存(2026-09-02,aurora 收敛为对话网关)。如需恢复,设置环境变量 CODING_ENABLED=true 并重启",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    "coding_disabled",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型已封存(2026-09-02,aurora 收敛为对话网关)。如需恢复,设置环境变量 CODING_ENABLED=true 并重启", nil, "coding_disabled")
 		return
 	}
 
@@ -368,12 +323,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 
 	original_request, err := responsesRequest.ToAPIRequest()
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "invalid_request_error",
-			"param":   "input",
-			"code":    "invalid_request_error",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", err.Error(), apierrors.Param("input"), "invalid_request_error")
 		return
 	}
 
@@ -382,12 +332,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	requestedModel := original_request.Model
 	if base, coding := normalizeCodingModel(original_request.Model); coding {
 		if len(original_request.Tools) == 0 {
-			c.JSON(400, gin.H{"error": gin.H{
-				"message": "coding 模型(gpt-coding)需要携带 tools 参数",
-				"type":    "invalid_request_error",
-				"param":   "tools",
-				"code":    "missing_tools",
-			}})
+			apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型(gpt-coding)需要携带 tools 参数", apierrors.Param("tools"), "missing_tools")
 			return
 		}
 		original_request.Model = base
@@ -395,17 +340,11 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil {
-		c.JSON(400, gin.H{"error": "Not Account Found."})
-		c.Abort()
+		apierrors.NotFoundAccount(c)
 		return
 	}
 	if !account.Type.Satisfies(accounts.CapResponses) {
@@ -439,7 +378,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		clientState = h.sessions.Get(translated_request.ConversationID)
 	}
 	if clientState == nil {
-		clientState = chatgpt.NewChatClientState()
+		clientState = chatgpt.NewChatClientStateForAccount(account)
 	}
 	clientState.ConversationID = translated_request.ConversationID
 	clientState.ParentMessageID = translated_request.ParentMessageID
@@ -473,12 +412,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	if !streamRequested {
 		response, wsConn, _, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
 		if err != nil {
-			c.JSON(status, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "request_conversion_error",
-				"param":   "model",
-				"code":    "request_conversion_error",
-			}})
+			apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
 			return
 		}
 		defer response.Body.Close()
@@ -522,12 +456,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 
 			response, wsConn, _, status, err = conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
 			if err != nil {
-				c.JSON(status, gin.H{"error": gin.H{
-					"message": err.Error(),
-					"type":    "request_conversion_error",
-					"param":   "model",
-					"code":    "request_conversion_error",
-				}})
+				apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
 				return
 			}
 			defer response.Body.Close()
@@ -752,7 +681,7 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 			}
 			return
 		}
-		c.JSON(terr.status, gin.H{"error": gin.H{"message": terr.msg, "type": terr.typ, "param": nil, "code": terr.code}})
+		apierrors.JSONError(c, terr.status, terr.typ, terr.msg, nil, terr.code)
 		return
 	}
 
@@ -850,21 +779,11 @@ func writeResponsesFunctionCallEvent(c *gin.Context, outputIndex int, fcID, call
 func (h *ChatHandler) Files(c *gin.Context) {
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Files API requires a logged-in ChatGPT access token.",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    "missing_access_token",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Files API requires a logged-in ChatGPT access token.", nil, "missing_access_token")
 		return
 	}
 	if account == nil || account.Token == "" || !account.Type.Satisfies(accounts.CapFileUpload) {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Files API requires a logged-in ChatGPT access token.",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    "missing_access_token",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Files API requires a logged-in ChatGPT access token.", nil, "missing_access_token")
 		return
 	}
 
@@ -885,12 +804,7 @@ func (h *ChatHandler) Files(c *gin.Context) {
 		return
 	}
 	if len(data) == 0 {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Uploaded file is empty",
-			"type":    "invalid_request_error",
-			"param":   "file",
-			"code":    "empty_file",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Uploaded file is empty", apierrors.Param("file"), "empty_file")
 		return
 	}
 
@@ -907,12 +821,7 @@ func (h *ChatHandler) Files(c *gin.Context) {
 
 	uploaded, status, err := chatgpt.UploadFile(fileClient, account, account.Proxy, formFile.Filename, contentType, data)
 	if err != nil {
-		c.JSON(status, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "file_upload_error",
-			"param":   "file",
-			"code":    "file_upload_error",
-		}})
+		apierrors.JSONError(c, status, "file_upload_error", err.Error(), apierrors.Param("file"), "file_upload_error")
 		return
 	}
 	uploaded.CreatedAt = time.Now().Unix()
@@ -982,7 +891,7 @@ func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *official
 		*clientState = h.sessions.Get(baseTranslated.ConversationID)
 	}
 	if *clientState == nil {
-		*clientState = chatgpt.NewChatClientState()
+		*clientState = chatgpt.NewChatClientStateForAccount(account)
 	}
 	(*clientState).ConversationID = baseTranslated.ConversationID
 	(*clientState).ParentMessageID = baseTranslated.ParentMessageID
@@ -1191,7 +1100,7 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 
 	out, terr := h.toolCallingRetry(c, originalRequest, client, account, clientState, reqModel, uid, proxyUrl, inputTokens)
 	if terr != nil {
-		c.JSON(terr.status, gin.H{"error": gin.H{"message": terr.msg, "type": terr.typ, "param": nil, "code": terr.code}})
+		apierrors.JSONError(c, terr.status, terr.typ, terr.msg, nil, terr.code)
 		return
 	}
 
@@ -1276,12 +1185,7 @@ func (h *ChatHandler) writeToolCallingStream(c *gin.Context, model string, text 
 func (h *ChatHandler) ChatGPTConversation(c *gin.Context) {
 	var original_request chatgpt_types.ChatGPTRequest
 	if err := c.BindJSON(&original_request); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Request must be proper JSON", nil, err.Error())
 		return
 	}
 	if len(original_request.Messages) > 0 && original_request.Messages[0].Author.Role == "" {
@@ -1290,16 +1194,11 @@ func (h *ChatHandler) ChatGPTConversation(c *gin.Context) {
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, false)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil || account.Token == "" || !account.Type.Satisfies(accounts.CapChat) {
-		c.JSON(400, gin.H{"error": "Not Account Found."})
+		apierrors.NotFoundAccount(c)
 		return
 	}
 

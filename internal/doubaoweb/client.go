@@ -125,13 +125,19 @@ func (c *Client) nextAccount() (*Account, error) {
 	idx := best
 	acct := c.accounts[idx]
 	wait := minInterval - time.Since(c.lastUsed[idx])
+	// P1-35: 原实现 unlock→sleep→relock→set lastUsed,并发 goroutine 在
+	// sleep 窗口内可选中同一账号绕过限频,且时间戳记录的是 sleep 后而非
+	// 选中时。改为在锁内提前标记 lastUsed 为预计使用时刻,后续 goroutine
+	// 看到 lastUsed 仍会正确等待。
+	if wait > 0 {
+		c.lastUsed[idx] = time.Now().Add(wait)
+	} else {
+		c.lastUsed[idx] = time.Now()
+	}
 	c.mu.Unlock()
 	if wait > 0 {
 		time.Sleep(wait)
 	}
-	c.mu.Lock()
-	c.lastUsed[idx] = time.Now()
-	c.mu.Unlock()
 	return acct, nil
 }
 

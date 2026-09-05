@@ -85,7 +85,7 @@ func NewConfig(userAgent string) *Config {
 		ScreenWidth:         fp.ScreenWidth,
 		ScreenHeight:        fp.ScreenHeight,
 		HardwareConcurrency: fp.HardwareConcurrency,
-		SentinelSV:          "20260423af3c",
+		SentinelSV:          util.SentinelSDKVersion(), // N3: 外置 SENTINEL_SDK_VERSION
 		BuildID:             fp.BuildID,
 	}
 }

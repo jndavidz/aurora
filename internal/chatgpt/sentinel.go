@@ -21,6 +21,7 @@ import (
 	"aurora/internal/prooftoken"
 	"aurora/internal/so"
 	"aurora/internal/turnstile"
+	"aurora/util"
 )
 
 // TurnStile 表示一次 sentinel 风控流程的完整状态，
@@ -526,7 +527,8 @@ func POSTSentinelReq(client httpclient.AuroraHttpClient, account *accounts.Accou
 	header.Set("X-Openai-Target-Path", targetPath)
 	header.Set("X-Openai-Target-Route", targetPath)
 	if state == nil || state.ConversationID == "" {
-		header.Set("Referer", "https://chatgpt.com/backend-api/sentinel/frame.html?sv=20260423af3c")
+		// N3: sv 版本外置 SENTINEL_SDK_VERSION(上游轮换时改环境变量)
+		header.Set("Referer", "https://chatgpt.com/backend-api/sentinel/frame.html?sv="+util.SentinelSDKVersion())
 	}
 	if account != nil && account.Type == accounts.TypeNoAuth && account.Token != "" {
 		header.Set("Oai-Device-Id", account.Token)

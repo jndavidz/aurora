@@ -12,6 +12,7 @@ import (
 
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
+	"aurora/internal/apierrors"
 	"aurora/internal/chatgpt"
 	"aurora/internal/config"
 	chatgpt_types "aurora/typings/chatgpt"
@@ -27,12 +28,7 @@ import (
 var ErrNoAvailable = errors.New("no available account of the requested type")
 
 func respondError(c *gin.Context, status int, err error) {
-	c.JSON(status, gin.H{"error": gin.H{
-		"message": err.Error(),
-		"type":    "invalid_request_error",
-		"param":   nil,
-		"code":    http.StatusText(status),
-	}})
+	apierrors.JSONError(c, status, "invalid_request_error", err.Error(), nil, http.StatusText(status))
 }
 
 // resolveAccount 从请求 Authorization header 解析账号

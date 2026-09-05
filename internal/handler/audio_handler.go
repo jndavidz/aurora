@@ -8,6 +8,7 @@ import (
 	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
+	"aurora/internal/apierrors"
 	"aurora/internal/chatgpt"
 	"aurora/internal/config"
 	"aurora/internal/provider"
@@ -59,32 +60,17 @@ func (h *AudioHandler) TTS(c *gin.Context) {
 	var original_request officialtypes.TTSAPIRequest
 	err := c.BindJSON(&original_request)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be proper JSON",
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    err.Error(),
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Request must be proper JSON", nil, err.Error())
 		return
 	}
 	if original_request.Input == "" {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Missing required parameter: input",
-			"type":    "invalid_request_error",
-			"param":   "input",
-			"code":    "missing_required_parameter",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Missing required parameter: input", apierrors.Param("input"), "missing_required_parameter")
 		return
 	}
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil || account.Token == "" {
@@ -101,18 +87,13 @@ func (h *AudioHandler) TTS(c *gin.Context) {
 
 	// Convert the chat request to a ChatGPT request
 	translated_request := chatgptrequestconverter.ConvertTTSAPIRequest(original_request.Input)
-	clientState := chatgpt.NewChatClientState()
+	clientState := chatgpt.NewChatClientStateForAccount(account)
 	clientState.ConversationID = translated_request.ConversationID
 	clientState.ParentMessageID = translated_request.ParentMessageID
 
 	response, wsConn, _, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
 	if err != nil {
-		c.JSON(status, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "request_conversion_error",
-			"param":   "model",
-			"code":    "request_conversion_error",
-		}})
+		apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
 		return
 	}
 	defer response.Body.Close()
@@ -140,12 +121,7 @@ func (h *AudioHandler) TTS(c *gin.Context) {
 	}
 	data, status, err := chatgpt.GetTTS(client, account, msgId, convId, voice, format, proxyUrl)
 	if err != nil {
-		c.JSON(status, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "synthesize_request_error",
-			"param":   nil,
-			"code":    status,
-		}})
+		apierrors.JSONError(c, status, "synthesize_request_error", err.Error(), nil, status)
 		return
 	}
 	c.Data(200, ttsTypeMap[format], data)
@@ -171,22 +147,12 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 	contentType := strings.Split(c.GetHeader("Content-Type"), ";")[0]
 	contentType = strings.ToLower(strings.TrimSpace(contentType))
 	if !strings.HasPrefix(contentType, "multipart/form-data") {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Request must be multipart/form-data",
-			"type":    "invalid_request_error",
-			"param":   "Content-Type",
-			"code":    "invalid_content_type",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Request must be multipart/form-data", apierrors.Param("Content-Type"), "invalid_content_type")
 		return
 	}
 
 	if err := c.Request.ParseMultipartForm(50 << 20); err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Failed to parse multipart form: " + err.Error(),
-			"type":    "invalid_request_error",
-			"param":   nil,
-			"code":    "parse_error",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Failed to parse multipart form: "+err.Error(), nil, "parse_error")
 		return
 	}
 
@@ -204,12 +170,7 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 
 	respContentType, formatOK := transcriptionsSupportedFormats[responseFormat]
 	if !formatOK {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": fmt.Sprintf("Unsupported response_format: %s. Supported values: json, text, verbose_json", responseFormat),
-			"type":    "invalid_request_error",
-			"param":   "response_format",
-			"code":    "invalid_response_format",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", fmt.Sprintf("Unsupported response_format: %s. Supported values: json, text, verbose_json", responseFormat), apierrors.Param("response_format"), "invalid_response_format")
 		return
 	}
 
@@ -220,53 +181,30 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 
 	formFile, fileHeader, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Missing required multipart field: file",
-			"type":    "invalid_request_error",
-			"param":   "file",
-			"code":    "missing_required_parameter",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Missing required multipart field: file", apierrors.Param("file"), "missing_required_parameter")
 		return
 	}
 	defer formFile.Close()
 
 	audioData, err := io.ReadAll(formFile)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "invalid_request_error",
-			"param":   "file",
-			"code":    "file_read_error",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", err.Error(), apierrors.Param("file"), "file_read_error")
 		return
 	}
 	if len(audioData) == 0 {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Uploaded audio file is empty",
-			"type":    "invalid_request_error",
-			"param":   "file",
-			"code":    "empty_file",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Uploaded audio file is empty", apierrors.Param("file"), "empty_file")
 		return
 	}
 
 	// mimo-v2.5-asr 走小米 Mimo 网页 ASR(无需 ChatGPT 账号)
 	if strings.HasPrefix(model, "mimo-") && strings.HasSuffix(model, "-asr") {
 		if h.mimo == nil {
-			c.JSON(502, gin.H{"error": gin.H{
-				"message": "mimo ASR unavailable: MIMO_WEB_TOKENS not configured",
-				"type":    "transcription_error",
-				"code":    "mimo_unavailable",
-			}})
+			apierrors.JSONError(c, 502, "transcription_error", "mimo ASR unavailable: MIMO_WEB_TOKENS not configured", nil, "mimo_unavailable")
 			return
 		}
 		text, err := h.mimo.AsrText(fileHeader.Filename, audioData)
 		if err != nil {
-			c.JSON(502, gin.H{"error": gin.H{
-				"message": err.Error(),
-				"type":    "transcription_error",
-				"code":    "transcription_error",
-			}})
+			apierrors.JSONError(c, 502, "transcription_error", err.Error(), nil, "transcription_error")
 			return
 		}
 		switch responseFormat {
@@ -287,21 +225,11 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 
 	account, _, err := resolveAccount(c, h.accountPool, h.cfg, true)
 	if err != nil {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "authorization_error",
-			"param":   "Authorization",
-			"code":    400,
-		}})
+		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
 		return
 	}
 	if account == nil || account.Token == "" {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "Audio transcription requires a logged-in ChatGPT access token.",
-			"type":    "invalid_request_error",
-			"param":   "file",
-			"code":    "missing_access_token",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "Audio transcription requires a logged-in ChatGPT access token.", apierrors.Param("file"), "missing_access_token")
 		return
 	}
 	if !account.Type.Satisfies(accounts.CapTranscribe) {
@@ -327,12 +255,7 @@ func (h *AudioHandler) handleTranscription(c *gin.Context, isTranslation bool) {
 
 	text, status, err := chatgpt.TranscribeAudio(client, account, proxyUrl, audioData, fileHeader.Filename, mimeType, language)
 	if err != nil {
-		c.JSON(status, gin.H{"error": gin.H{
-			"message": err.Error(),
-			"type":    "transcription_error",
-			"param":   nil,
-			"code":    "transcription_error",
-		}})
+		apierrors.JSONError(c, status, "transcription_error", err.Error(), nil, "transcription_error")
 		return
 	}
 

@@ -15,6 +15,7 @@ package so
 
 import (
 	"aurora/internal/browserfp"
+	"aurora/util"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -587,7 +588,8 @@ func (s *soSolver) buildWindow() map[string]any {
 	html.appendChild(body)
 
 	sdk := mkElement("script")
-	sdk.src = "https://chatgpt.com/sentinel/20260423af3c/sdk.js"
+	// N3: SDK 版本外置 SENTINEL_SDK_VERSION(上游轮换时改环境变量)
+	sdk.src = util.SentinelSDKURL()
 	sdk.attrs["src"] = sdk.src
 	sdk.getAttribute = func(name string) any {
 		if name == "src" {
