@@ -89,6 +89,49 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | **P4** | G4 拆 handler / F1 webclient / F2 context | 各 1–3 周 | 大重构，按路线图节奏 |
 
 **明确不做**：G2 chat 限频/Pool 信号量（与「速度快」及拟真人拍板冲突）；workbuddy 融合；双活多副本；turnstile/so 抽象层；启用元宝。
+（补充自 ARCHITECTURE_AUDIT §9）：不把 ChatGPT 塞进 Provider 接口；不写 turnstile/so 优雅抽象层；不引依赖注入框架；typings 不换官方 SDK；不一次性重写 handler；不强求 10 家客户端 100% 统一（Gemini RPC/Grok WS/Mimo ASR/Doubao 模板是结构性异类）；暂不做指标/追踪体系；测试覆盖率分层设定（toolcall 85%、客户端靠 live 测试）。
+
+### 3.1 遗留缺陷清单（ARCHITECTURE_AUDIT §5，Phase 0 已修 11 处，以下仍未修）
+
+> 来源：`archive/ARCHITECTURE_AUDIT_2026-08-31.md` §5（13 P0 + 35 P1，全带文件:行号）。
+> **注意**：同文件多处问题可能被同一次改动顺带修掉，动手前先 grep 现状。
+
+| 级别 | 位置 | 问题 | 现状 |
+|---|---|---|---|
+| P0-13 | `kimiweb/stream.go:175` | `make([]byte, length)`，length 上游可控 uint32 无上限（deepseekweb 4MB / glmweb 8MB 有界） | **未修**（09-05 复核） |
+| P1-6 | `glmweb/stream.go:130,135` | 全量重发协议 `TrimPrefix` 差值不校验 `HasPrefix` → 上游重排引用时**整段重复输出**（glm-flash 偶发重复回复的根因） | **未修** |
+| P1-7 | `qianwenweb/stream.go:88` | 同上（geminweb:205 有防御） | 未修 |
+| P1-35 | `doubaoweb/client.go:126`/`geminweb/client.go:124` | nextAccount 解锁后 sleep 再重加锁 → 限频被绕过且时间戳失真 | 未修 |
+| P1-4 | `grokweb/client.go:163` | 主读循环无 ReadDeadline → 半开 TCP 时 goroutine/fd 泄漏（grok 偶发挂起与此相关） | 未修 |
+| 其余 P0-2/3/4/5/6/7/12 | so.go 递归清寄存器、并发写 map、runQueue 无上限、browserfp 未判空、api/router init 双重初始化 | **Phase 0 已修**（52 文件 +521/-316，见 audit §7 注记）——动手前先核对 | 已修 |
+
+Phase 0 已修 11 处清单（防重复修）：prooftoken diffLen 上界、api/router 显式 Initialize+sync.Once、minimaxweb instanceUUID 加锁、qianwenweb/yuanbaoweb onDelta nil 守卫、sseparser Parts 长度保护 ×2、browserfp RWMutex+惰性初始化（连带修 turnstile/prooftoken nil panic）、toolcall/fence（只剥工具围栏+尾部反引号保留 2）、toolcall/recover（工具名白名单+大小写归一）、so.go（opcode0 独立 solver/50000 步上限/Snapshot 60s 超时）。
+
+### 3.2 对外接口规格（活知识）
+
+| 路径 | Handler | 规格 |
+|---|---|---|
+| `POST /v1/chat/completions` | `Nightmare` | OpenAI Chat Completions |
+| `POST /v1/responses` | `Responses` | OpenAI Responses API |
+| `POST /v1/models/responses` | `Responses` | **pi 适配器专用别名**（来源：PI_AGENT_DEBUG.md §3，router.go:115） |
+
+### 3.3 保活触发阈值与 keeper 设计（RELIABILITY §3.3/§5.2/§5.3）
+
+- 剩余 >30% 不动作；30%~10% 触发保活（refresh 优先）；≤10% 保活+告警；已失效告警+摘除转兜底
+- credential-keeper 四件套：**probe**（每 6h，随时）/ **act**（refresh 随时、CDP 型 22:00–24:00、人工型只告警）/ **publish**（scp 推 NAS）/ **alert**（日志+webhook，去重）
+- 回写通路选型：scp + 热加载 ✅（推荐）；POST /admin ⚠️；NFS 谨慎（群晖 ACL 前科）
+- 失败退避 1min→5min→30min；需浏览器的重试排次日窗口，不当夜反复
+
+### 3.4 toolcall 双协议活知识（AUDIT §6.5）
+
+| 维度 | 标签协议（tags.go+parser.go） | 围栏协议（fence.go） |
+|---|---|---|
+| 变体容忍 | 强：6 条正则归一化 | 零 |
+| 半分隔符保护 | keepPartialTagTail 保留最长前缀 ✅ | 只保留 1 个字符 ❌（Phase 0 改为 2） |
+| 解析失败 | Flush 回吐原文 | 静默丢弃 |
+| 适配 | ChatGPT/DeepSeek/Doubao/Yuanbao | GLM/Gemini/Grok/MiniMax/Mimo |
+
+> GLM 网页版会忽略 `<tool_call>` 标签（fence.go:11-19 实证），故 GLM 必须走围栏协议——这是协议选择的历史依据。
 
 ---
 
