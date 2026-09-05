@@ -79,14 +79,15 @@ async function saveCapture(c, url, body) {
       bot_id: (body && body.client_meta && body.client_meta.bot_id) || "",
       version: q.doubao_pc_version || q.pc_version || "",
       query: u.searchParams.toString(),
-      template: JSON.stringify(body || {}),
+      ...(body ? { template: JSON.stringify(body) } : {}),
     };
     fs.mkdirSync(path.dirname(OUT), { recursive: true });
     // 合并:保留旧文件的其它信息(如多条账号),更新第一条
     let list = [];
     try { list = JSON.parse(fs.readFileSync(OUT, "utf8")); } catch (e) {}
     if (!Array.isArray(list)) list = [];
-    list[0] = acct;
+    // merge:Network 通道无 postData 时保留旧 template(a_bogus/msToken 仍更新)
+    list[0] = { ...(list[0] || {}), ...acct };
     fs.writeFileSync(OUT, JSON.stringify(list, null, 2));
     // 同步 NAS(aurora 直连读 NAS 文件;ssh 免密,Windows OpenSSH)
     let pushed = false;
@@ -121,6 +122,13 @@ async function ensureConnections() {
         await c.cmd("Page.enable").catch(() => {});
         await c.cmd("Page.addScriptToEvaluateOnNewDocument", { source: HOOK_JS }).catch(() => {});
         await injectHook(c).catch(() => {}); // 对已加载页面立即注入一次
+        // Network 事件监听(主通道): 豆包前端可能走 XHR 而非 fetch,hook 抓不到
+        c.on((m) => {
+          if (m.method !== "Network.requestWillBeSent") return;
+          const req = m.params && m.params.request;
+          if (!req || !req.url || !req.url.includes("/chat/completion")) return;
+          latestNetReq = { url: req.url, postData: req.postData || "", ts: Date.now() };
+        });
         conns.push({ url: p.url, c });
         console.log("[doubao-hook] 连接:", p.url.slice(0, 60));
       } catch (e) {}
