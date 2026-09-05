@@ -91,6 +91,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | F2 收窄版 | `chatRequestState` struct 替代 toolCalling 系列 6 指针输出参数（`fba5b63`）。澄清语义：仅 clientState 是 in-out，其余纯输入。零业务逻辑变更，S1 核心路径后续改动的复利点。G4 的"拆 handler"以此为起点自然推进 |
 | G1 publish 最小版 | `scripts/keeper/publish-tokens.sh`（`7080e2d`）：同步区 → 部署区 token 同步（幂等/原子覆盖/空文件保留/JSON 防呆），配合 E3 实现"PC 补票 → 容器内即时生效"闭环。GLM/Kimi 排除（tokens-state 进程自愈）。NAS 实测通过。act（CDP 自动重抓）维持留空：现有 probe+alert+人工响应已构成实际闭环 |
 | G3 前置 golden | so/turnstile VM 零测试 → `golden_test.go` ×2（09-05）：微型字节码锁定核心 opcode 语义（赋值/拷贝/加法拼接/xor/base64/JSON/删元素/子队列）+ 端到端 success 字节级快照 + P0-4 无限循环终止哨兵。首轮失败即澄清关键语义：**操作类 opcode 参数均为寄存器引用，字面值须先 op2 入寄存器**。真实 dx 样本待 live 抓取后可叠加全流程快照 |
+| G4 第一步 | `internal/handler/tool_calling.go`（09-05）：toolCalling 全集（chatRequestState + 双入口 + 共享收集器 + looksLike* 分类器 + 输出辅助）自 chat_handler.go/shared.go 原样迁出，纯移动零逻辑变更。handler 内chat 路径文件收敛为：chat_handler（入口编排）/ tool_calling（工具调用）/ shared（请求基础设施） |
 
 ---
 
@@ -104,7 +105,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | ~~P2~~ | ~~N3 硬编码指纹外置~~ | — | **已完成**（09-05 下午，`SENTINEL_SDK_VERSION`/`OAI_BUILD_NUMBER`） |
 | ~~P3~~ | ~~E3 凭证热加载~~ | — | **已完成**(09-05 下午,deepseekweb mtime 重读;minimax/mimo 同类问题见 §3.3 注记) |
 | ~~P4~~ | ~~G3 VM 合并~~ | **前置已备** | so/turnstile golden 测试已就位（09-05）——合并的测试保护网完成；合并本身仍**暂缓**（上游改版时抽象层先碎，等稳定期+真实 dx 样本再评估） |
-| ~~P4~~ | ~~G4 拆 handler / F1 webclient / F2 context~~ | — | **F2 收窄版已完成**（chatRequestState，09-05）；G4 随其渐进推进；F1 降级"暂不做"（收益已被工厂化蚕食，有具体重复痛点再抽） |
+| ~~P4~~ | ~~G4 拆 handler / F1 webclient / F2 context~~ | — | **F2 收窄版已完成**（chatRequestState，09-05）；**G4 第一步已完成**（09-05：toolCalling 全集 ~660 行迁出至 `tool_calling.go`，chat_handler 1248→780、shared 518→325，纯移动零逻辑变更，ARCHITECTURE §5.2 已注记）；F1 降级"暂不做"（收益已被工厂化蚕食，有具体重复痛点再抽） |
 
 **明确不做**：G2 chat 限频/Pool 信号量（与「速度快」及拟真人拍板冲突）；workbuddy 融合；双活多副本；turnstile/so 抽象层；启用元宝。
 （补充自 ARCHITECTURE_AUDIT §9）：不把 ChatGPT 塞进 Provider 接口；不写 turnstile/so 优雅抽象层；不引依赖注入框架；typings 不换官方 SDK；不一次性重写 handler；不强求 10 家客户端 100% 统一（Gemini RPC/Grok WS/Mimo ASR/Doubao 模板是结构性异类）；暂不做指标/追踪体系；测试覆盖率分层设定（toolcall 85%、客户端靠 live 测试）。
