@@ -35,9 +35,11 @@ const cmdT = (c, method, params, ms = 20000) =>
 //   kind=local   读 localStorage(键按序试)
 //   kind=cookies Network.getAllCookies 过滤域,按 assemble() 组装行
 //   (grok 格式特殊:每行 uid|cookie串,uid = x-userid cookie 值)
-// deepseek 移除(2026-09-05 实测):NUC Chrome 的 deepseek localStorage
-// userToken 为无效游客票(上游 invalid token;有效票 64B 在原文件人工管理),
-// 待 deepseek 真实登录态入 NUC Chrome 且键名/有效性可校验后再评估加回。
+// deepseek 移除(2026-09-05 二次确认):NUC Chrome 的 deepseek 为**游客会话**
+// (页面可对话但未登录,localStorage userToken 92B 单段非 JWT,上游 invalid
+// token;刷新后不变,cookie 无认证项)。**重新启用条件**:在 NUC Chrome 登录
+// deepseek 账号后,确认 userToken 变为多段 JWT 或长度变化,再加回并 live 验证。
+// 有效票(64B)在部署区原值,人工管理。
 const SITES = [
   { name: "minimax", url: "https://agent.minimaxi.com/", kind: "local", keys: ["_token"], file: "minimax_tokens.txt", jwt: true },
   { name: "mimo", url: "https://aistudio.xiaomimimo.com/", kind: "cookies", domain: /xiaomimimo|xiaomi/i, require: "xiaomichatbot_ph", file: "mimo_tokens.txt",
