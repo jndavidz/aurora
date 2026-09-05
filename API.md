@@ -301,6 +301,20 @@ data: {"type":"response.completed","response":{...,"usage":{...}}}
 
 ## 模型列表
 
+`GET /v1/models` 每次请求 ChatGPT 的 `/backend-api/models`，将上游 `models[].slug` 映射为 OpenAI 格式的 `data[].id`，按上游顺序去重并忽略空 slug，不再返回硬编码模型列表。
+
+- 使用服务密钥时，从账号池选择可用的登录账号（free 优先，其次 puid）；匿名 UUID 账号不支持此接口。
+- 外部 access_token 沿用 `ENABLE_EXTERNAL_TOKEN` 配置；工作区可通过 `ChatGPT-Account-ID` 指定。配置了服务密钥时，外部 token 的请求头为 `Authorization: Bearer 服务密钥 access_token`。
+- 列表取决于本次选中的账号、订阅和工作区，账号池轮询可能返回不同列表。
+- `object` 为 `model`，`owned_by` 为 `openai`；上游不提供创建时间，因此 `created` 固定为 `0`（未知）。
+- 上游 HTTP 错误返回对应错误状态；网络异常或无效响应返回 `502`，没有登录账号返回 `401`。不会用旧静态列表兜底。
+
+响应示例（模型 ID 仅为示意）：
+
+```json
+{"object":"list","data":[{"id":"upstream-model-slug","object":"model","created":0,"owned_by":"openai"}]}
+```
+
 ```bash
 curl --location 'http://你的服务器ip:8080/v1/models' \
 --header 'Authorization: Bearer access_token'
