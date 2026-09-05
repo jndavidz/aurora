@@ -140,7 +140,7 @@ Phase 0 已修 11 处清单（防重复修）：prooftoken diffLen 上界、api/
 
 - 剩余 >30% 不动作；30%~10% 触发保活（refresh 优先）；≤10% 保活+告警；已失效告警+摘除转兜底
 - credential-keeper 四件套：**probe**（每 6h，随时）/ **act**（refresh 随时、CDP 型 22:00–24:00、人工型只告警）/ **publish**（scp 推 NAS）/ **alert**（日志+webhook，去重）
-  - **push 修正版（09-05，事故后重做）**：`scripts/keeper/push-tokens-from-pc.sh` 在 **PC（WSL）**运行，本地 `.runtime/tokens/`（keepalive 代取 + 人工重抓落点）→ NAS 部署区直推（幂等/scp -O）。⚠ 首版"NAS 同步区→部署区"方向错误已撤销——Drive 排除 `.runtime` 隐藏目录，同步区是死水；**doubao 明确排除**（权威在 NUC doubao-hook）。DSM 定时任务无需注册；DeepSeek/Grok/千问重抓后手动跑一次即可
+  - **push 终态（09-05）**：NUC `token-harvester` 每日 08:15 提取 5 站推部署区（DeepSeek/Grok/千问重抓后即自动同步,**无需手动步骤**）+ `minimax-checkin.timer` 09:00 签到;PC 侧脚本中间态已撤销（登录态统一 NUC 后无源可用）。⚠ 教训:首版"NAS 同步区→部署区"方向错误（Drive 排除 `.runtime`,同步区死水）曾覆盖部署区 5 文件;群晖 sshd SFTP 不兼容需 `scp -O`
 - 回写通路选型：scp + 热加载 ✅（推荐）；POST /admin ⚠️；NFS 谨慎（群晖 ACL 前科）
 - **热加载现状（09-05 E3 全量完成）**：deepseekweb（`NextToken` 内 mtime 检查+整池重读）、minimax/mimo（provider 层 `webClient` mtime 变更重建 client）均已支持；
   GLM/Kimi 靠 refresh 续期自愈。keeper publish 实装后对所有通道即时生效，无需重启
