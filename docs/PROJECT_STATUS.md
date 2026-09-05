@@ -94,6 +94,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | ~~G1 push 修正版~~ | superseded:中间态 `push-tokens-from-pc.sh`（PC→NAS）随"登录态统一 NUC"架构撤销;事故与教训保留在 git 历史（`7080e2d`→撤销→`49db7ea` 终态）。群晖 sshd SFTP 不兼容需 `scp -O` |
 | G3 前置 golden | so/turnstile VM 零测试 → `golden_test.go` ×2（09-05）：微型字节码锁定核心 opcode 语义（赋值/拷贝/加法拼接/xor/base64/JSON/删元素/子队列）+ 端到端 success 字节级快照 + P0-4 无限循环终止哨兵。首轮失败即澄清关键语义：**操作类 opcode 参数均为寄存器引用，字面值须先 op2 入寄存器**。真实 dx 样本待 live 抓取后可叠加全流程快照 |
 | G4 第一步 | `internal/handler/tool_calling.go`（09-05）：toolCalling 全集（chatRequestState + 双入口 + 共享收集器 + looksLike* 分类器 + 输出辅助）自 chat_handler.go/shared.go 原样迁出，纯移动零逻辑变更。handler 内chat 路径文件收敛为：chat_handler（入口编排）/ tool_calling（工具调用）/ shared（请求基础设施） |
+| G4 第二步 | `internal/handler/image_edit.go`(09-05):图片编辑/变体路径(Edits/Variations/runImageEditFlow + 图像源解析群)自 image_handler.go 原样迁出,989→308 + 706,纯移动零逻辑变更。**toolcall 覆盖率实测 86.4%(AUDIT 目标 85% 达标)**,低覆盖点均为小函数无热点缺口 |
 
 ---
 
