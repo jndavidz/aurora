@@ -8,6 +8,7 @@
 > - `REMAINING_OPT_2026-09-04.md`（未完成优化清单）
 >
 > 归档的是**已被取代的规划/核对类**文档（结论已浓缩进本文，部分状态已过时）。
+> MCP 方案文档已移回 [MCP_INTEGRATION_2026-09-01.md](MCP_INTEGRATION_2026-09-01.md)（暂不执行，独立保留）。
 > 仍保留在 docs/ 的：各通道 `*.md`（活协议文档）、`NUC_RESOURCE_ANALYSIS_2026-08-31.md`
 >（音频隔离实测数据基线，长期有效）、`PI_AGENT_DEBUG.md`（pi 路由适配活运维知识，
 > router.go:115 引用）、`ARCHITECTURE_AUDIT_2026-08-31.md`（1712 行全量审计，查阅用）。
@@ -21,7 +22,7 @@
 | # | 约束 | 影响 |
 |---|---|---|
 | 定位 | **纯对话网页版大模型反代**（2026-09-04 拍板） | 不与 workbuddy 项目融合；全部融合类规划终止 |
-| S1 | 编程/agent 重点投入 ChatGPT | `<tool_call>` 协议可靠性优先；不接 MCP |
+| S1 | 编程/agent 重点投入 ChatGPT | `<tool_call>` 协议可靠性优先；不接 MCP（核实与方案见 [MCP_INTEGRATION_2026-09-01.md](MCP_INTEGRATION_2026-09-01.md)，**暂不执行**：本地 MCP 不可行/agent mode 不调用/Plus 只读；默认路线 A=MCP 留客户端） |
 | S2 | 国内模型重点保 chat | `-coding` 变体封存不加码；C1 灰度验收看 chat 通过率 |
 | 拟真人边界 | **仅限测试动作，禁止写进生产代码** | 正常使用即真人节奏；代码限频/抖动=加延迟+机器特征 |
 | 音频红线 | NUC 首要职责是 LMS 音频 | 需浏览器的动作排 22:00–24:00；资源隔离已实测生效 |
@@ -164,7 +165,9 @@ NAS(10.10.10.2) aurora 容器 :65432 ──┬── NUC(10.10.10.3) Chrome CDP:
 
 - **回滚开关**：`AURORA_LEGACY_IDENTITY=1`（C1 四家 TLS → Go 原生）
 - **豆包凭据链**：页面 UI 对话 → doubao-hook（Network 事件）捕获 → 推 NAS tokens → 桥 capture 同步会话状态
-- **坑清单**（8/31 实踩，沿用）：CDP 键盘需 bringToFront；SSH 远端 `$var` 要转义；`wc -l` 判空用 `[ -s ]`；chown 借 alpine 容器；ps RSS 虚高看 cgroup
+- **坑清单**（8/31 实踩，沿用）：CDP 键盘需 bringToFront（失焦时 Enter 不进编辑器）；SSH 远端 `$var` 要转义（`\$f`）；`wc -l` 判空用 `[ -s ]`；chown 借 alpine 容器（`65532:65532`，tokens-state 属主）；ps RSS 虚高看 cgroup `memory.current`；LMS playerid 是 `00:00:00:00:00:00` 非 MAC
+- **渲染定稿**：Xvfb 1280×720×24 + Chrome `--disable-gpu` + `--num-raster-threads=4`（软件渲染下"鼠标顺网页慢"的修复）
+- **续期余量**：GLM refreshSkew=10min（access ~2h）/ Kimi=3min（access ~15min）；GLM 池 162 天 / Kimi 池 72 天（A3 实测）
 
 ---
 
