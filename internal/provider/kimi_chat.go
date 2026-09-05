@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/kimiweb"
 	"aurora/typings/official"
 	"aurora/util"
@@ -44,7 +45,7 @@ func (d *Kimi) searchTools() []kimiweb.Tool {
 func (d *Kimi) chatResponses(c *gin.Context, m *kimiModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 
@@ -145,7 +146,7 @@ func kimiRoleLabel(role string) string {
 func (d *Kimi) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -194,7 +195,7 @@ func (d *Kimi) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 func (d *Kimi) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -207,7 +208,7 @@ func (d *Kimi) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPI
 		fullReasoning += delta.Reasoning
 	})
 	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, fullReasoning, countInputChars(req), util.CountToken(fullText), util.CountToken(fullReasoning), 0, 0, req.Model)
@@ -218,7 +219,7 @@ func (d *Kimi) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPI
 func (d *Kimi) chatCompletions(c *gin.Context, m *kimiModel, req *official.APIRequest) {
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	text := kimiFlattenMessages(req, true) // chat 变体剥离 tools
@@ -279,7 +280,7 @@ func kimiFlattenAPIMessages(sb *strings.Builder, messages []official.APIMessage,
 func (d *Kimi) chatCompletionsStream(c *gin.Context, req *official.APIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -324,7 +325,7 @@ func (d *Kimi) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 func (d *Kimi) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *kimiweb.Client, streamReq kimiweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -337,7 +338,7 @@ func (d *Kimi) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest
 		fullReasoning += delta.Reasoning
 	})
 	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, fullReasoning, countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/kimiweb"
 	"aurora/typings/official"
@@ -113,7 +114,7 @@ func (d *Kimi) CredentialHealth() CredentialHealth {
 func (d *Kimi) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == kimiVariantChat {
@@ -127,7 +128,7 @@ func (d *Kimi) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Kimi) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == kimiVariantChat {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -157,7 +158,7 @@ func (d *ChatgptCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIR
 	prompt := geminiCodingPromptFromResponses(req, d.codingEnvPrompt(req.Tools))
 	fullText, calls, err := d.runCodingWithRetry(req.Model, prompt, req.Tools)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	d.emitCodingResponses(c, req, fullText, calls)
@@ -171,7 +172,7 @@ func (d *ChatgptCDP) codingCompletions(c *gin.Context, req *official.APIRequest)
 	prompt := geminiCodingPromptFromAPI(req, d.codingEnvPrompt(req.Tools))
 	fullText, calls, err := d.runCodingWithRetry(req.Model, prompt, req.Tools)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	d.emitCodingCompletions(c, req, fullText, calls)
@@ -287,12 +288,7 @@ func (d *ChatgptCDP) codingEnvPrompt(tools []official.Tool) string { return "" }
 // 对称;其余透传基类 —— coding variant 走 codingResponses 整包协议,chat 变体走桥)。
 func (d *ChatgptCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	if req != nil && req.Model == "gpt-coding" && len(req.Tools) == 0 {
-		c.JSON(400, gin.H{"error": gin.H{
-			"message": "coding 模型(gpt-coding)需要携带 tools 参数",
-			"type":    "invalid_request_error",
-			"param":   "tools",
-			"code":    "missing_tools",
-		}})
+		apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型(gpt-coding)需要携带 tools 参数", apierrors.Param("tools"), "missing_tools")
 		return
 	}
 	// coding variant 在子类层接管(同 ChatCompletions 注释)
@@ -310,12 +306,7 @@ func (d *ChatgptCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest
 func (d *ChatgptCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	if req != nil && req.Model == "gpt-coding" {
 		if len(req.Tools) == 0 {
-			c.JSON(400, gin.H{"error": gin.H{
-				"message": "coding 模型(gpt-coding)需要携带 tools 参数",
-				"type":    "invalid_request_error",
-				"param":   "tools",
-				"code":    "missing_tools",
-			}})
+			apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型(gpt-coding)需要携带 tools 参数", apierrors.Param("tools"), "missing_tools")
 			return
 		}
 	}

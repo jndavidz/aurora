@@ -17,7 +17,7 @@ func TestParseGeminiModel(t *testing.T) {
 	}{
 		{"gemini-3-flash", geminiVariantChat, false},
 		{"gemini-3-flash-coding", geminiVariantCoding, false},
-		{"gpt-5-chat", "", true},     // 非 gemini 命名 → nil
+		{"gpt-5-chat", "", true}, // 非 gemini 命名 → nil
 		{"gemini-2-pro-coding", geminiVariantCoding, false},
 	}
 	for _, c := range cases {

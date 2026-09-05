@@ -3,6 +3,7 @@ package provider
 import (
 	"net/http"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/geminweb"
 	"aurora/typings/official"
 	"aurora/util"
@@ -18,7 +19,7 @@ import (
 func (d *Gemini) chatResponses(c *gin.Context, m *geminiModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "gemini web client unavailable: missing GEMINI_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "gemini web client unavailable: missing GEMINI_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	prompt := flattenChatInput(req, true) // chat 变体剥离 tools
@@ -63,7 +64,7 @@ func (d *Gemini) chatResponsesNonStream(c *gin.Context, req *official.ResponsesA
 	var fullText string
 	res := client.Complete(streamReq, func(delta geminweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
@@ -74,7 +75,7 @@ func (d *Gemini) chatResponsesNonStream(c *gin.Context, req *official.ResponsesA
 func (d *Gemini) chatCompletions(c *gin.Context, m *geminiModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "gemini web client unavailable: missing GEMINI_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "gemini web client unavailable: missing GEMINI_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	prompt := flattenChatInputAPI(req)
@@ -123,7 +124,7 @@ func (d *Gemini) chatCompletionsNonStream(c *gin.Context, req *official.APIReque
 	var fullText string
 	res := client.Complete(streamReq, func(delta geminweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, "", countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)

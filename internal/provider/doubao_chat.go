@@ -3,6 +3,7 @@ package provider
 import (
 	"net/http"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/doubaoweb"
 	"aurora/typings/official"
 	"aurora/util"
@@ -16,7 +17,7 @@ import (
 func (d *Doubao) chatResponses(c *gin.Context, m *doubaoModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "doubao web client unavailable: missing DOUBAO_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "doubao web client unavailable: missing DOUBAO_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	messages := doubaoMessagesFromResponses(req, true) // chat 剥离工具
@@ -97,7 +98,7 @@ func (d *Doubao) chatResponsesNonStream(c *gin.Context, req *official.ResponsesA
 	var fullText string
 	res := client.Complete(streamReq, func(delta doubaoweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
@@ -108,7 +109,7 @@ func (d *Doubao) chatResponsesNonStream(c *gin.Context, req *official.ResponsesA
 func (d *Doubao) chatCompletions(c *gin.Context, m *doubaoModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "doubao web client unavailable: missing DOUBAO_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "doubao web client unavailable: missing DOUBAO_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	messages := doubaoMessagesFromAPI(req)
@@ -184,7 +185,7 @@ func (d *Doubao) chatCompletionsNonStream(c *gin.Context, req *official.APIReque
 	var fullText string
 	res := client.Complete(streamReq, func(delta doubaoweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, "", countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)

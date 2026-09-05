@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/grokweb"
 	"aurora/typings/official"
 	"aurora/util"
@@ -21,7 +22,7 @@ import (
 func (d *Grok) chatResponses(c *gin.Context, m *grokModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "grok web client unavailable: missing GROK_COOKIES?"})
+		apierrors.JSONError(c, 502, "api_error", "grok web client unavailable: missing GROK_COOKIES?", nil, "upstream_error")
 		return
 	}
 	prompt := flattenChatInput(req, true) // chat 变体剥离 tools
@@ -104,7 +105,7 @@ func (d *Grok) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPI
 	res := client.Complete(streamReq, func(delta grokweb.Delta) { fullText += delta.Text })
 	fullText, reasoning := splitGrokThinking(fullText)
 	if res.Err != "" && fullText == "" && reasoning == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, reasoning, countInputChars(req), util.CountToken(fullText), util.CountToken(reasoning), 0, 0, req.Model)
@@ -115,7 +116,7 @@ func (d *Grok) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPI
 func (d *Grok) chatCompletions(c *gin.Context, m *grokModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "grok web client unavailable: missing GROK_COOKIES?"})
+		apierrors.JSONError(c, 502, "api_error", "grok web client unavailable: missing GROK_COOKIES?", nil, "upstream_error")
 		return
 	}
 	prompt := flattenChatInputAPI(req)
@@ -174,7 +175,7 @@ func (d *Grok) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest
 	res := client.Complete(streamReq, func(delta grokweb.Delta) { fullText += delta.Text })
 	clean, reasoning := splitGrokThinking(fullText)
 	if res.Err != "" && clean == "" && reasoning == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(clean, reasoning, countMessagesChars(req.Messages), util.CountToken(clean), req.Model, "", nil)

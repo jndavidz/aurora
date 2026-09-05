@@ -19,8 +19,8 @@ func TestParseGlmModel(t *testing.T) {
 		{"glm-flash", glmVariantChat, "speed", false},
 		{"glm-5.2-coding", glmVariantCoding, "", false},
 		// {"glm-5-coding", ...}: 2026-09-04 白名单放宽为 glm- 前缀,coding 变体可解析
-		{"glm-5.2", "", "", true},      // 无变体后缀 → nil
-		{"gpt-5-chat", "", "", true},   // 非 glm 命名 → nil
+		{"glm-5.2", "", "", true},    // 无变体后缀 → nil
+		{"gpt-5-chat", "", "", true}, // 非 glm 命名 → nil
 		{"glm-5.2-coding-x", "", "", true},
 	}
 	for _, c := range cases {

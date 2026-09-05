@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/mimoweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -21,7 +22,7 @@ const mimoModelCode = "mimo-v2.5-pro"
 func (d *Mimo) chatResponses(c *gin.Context, m *mimoModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "mimo web client unavailable: missing MIMO_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "mimo web client unavailable: missing MIMO_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -68,7 +69,7 @@ func (d *Mimo) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPI
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
 	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
@@ -78,7 +79,7 @@ func (d *Mimo) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPI
 func (d *Mimo) chatCompletions(c *gin.Context, m *mimoModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "mimo web client unavailable: missing MIMO_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "mimo web client unavailable: missing MIMO_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -128,7 +129,7 @@ func (d *Mimo) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest
 	// 最终兜底:流式 cleaner 帧边界之外的 citation 残留整体剥一次
 	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, "", countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)
@@ -197,7 +198,7 @@ func (d *Mimo) codingResponses(c *gin.Context, m *mimoModel, req *official.Respo
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "mimo web client unavailable: missing MIMO_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "mimo web client unavailable: missing MIMO_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -282,7 +283,7 @@ func (d *Mimo) codingResponsesNonStream(c *gin.Context, req *official.ResponsesA
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
 	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)
@@ -304,7 +305,7 @@ func (d *Mimo) codingCompletions(c *gin.Context, m *mimoModel, req *official.API
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "mimo web client unavailable: missing MIMO_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "mimo web client unavailable: missing MIMO_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -389,7 +390,7 @@ func (d *Mimo) codingCompletionsNonStream(c *gin.Context, req *official.APIReque
 	res := client.Complete(token, streamReq, func(delta mimoweb.Delta) { fullText += delta.Text })
 	fullText = mimoweb.CleanCitations(fullText)
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)

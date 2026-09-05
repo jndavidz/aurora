@@ -18,7 +18,7 @@ func TestParseGrokModel(t *testing.T) {
 		{"grok-3", grokVariantChat, false},
 		{"grok-3-coding", grokVariantCoding, false},
 		{"grok-4-chat", "", true}, // 非 grok-3 家族 → nil(改名后无后缀=chat 的旧用例已无意义)
-		{"gpt-5-chat", "", true}, // 非 grok 命名 → nil
+		{"gpt-5-chat", "", true},  // 非 grok 命名 → nil
 		{"grok-4-coding", grokVariantCoding, false},
 	}
 	for _, c := range cases {

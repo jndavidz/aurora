@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/minimaxweb"
 	"aurora/typings/official"
@@ -126,7 +127,7 @@ func (d *Minimax) webClient() *minimaxweb.Client {
 func (d *Minimax) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == minimaxVariantChat {
@@ -140,7 +141,7 @@ func (d *Minimax) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Minimax) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == minimaxVariantChat {

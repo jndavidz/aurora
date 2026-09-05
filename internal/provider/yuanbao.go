@@ -3,6 +3,7 @@ package provider
 import (
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/yuanbaoweb"
 	"aurora/typings/official"
@@ -112,7 +113,7 @@ func (d *Yuanbao) webClient() *yuanbaoweb.Client {
 func (d *Yuanbao) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	switch m.Variant {
@@ -121,7 +122,7 @@ func (d *Yuanbao) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	case variantCoding:
 		d.yuanbaoCodingResponses(c, m, req)
 	default:
-		c.JSON(400, gin.H{"error": "unknown variant"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "unknown variant", nil, "invalid_request_error")
 	}
 }
 
@@ -129,7 +130,7 @@ func (d *Yuanbao) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Yuanbao) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	switch m.Variant {
@@ -138,6 +139,6 @@ func (d *Yuanbao) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	case variantCoding:
 		d.yuanbaoCodingCompletions(c, m, req)
 	default:
-		c.JSON(400, gin.H{"error": "unknown variant"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "unknown variant", nil, "invalid_request_error")
 	}
 }

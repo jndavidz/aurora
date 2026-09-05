@@ -66,7 +66,7 @@ func parseInputItem(it rawInputItem) responsesInputItem {
 		// arguments 会让模型在下一轮"失忆"(不知道自己调过什么工具/什么协议,
 		// 实测 2026-09-02 pi 多轮:轮2 声称"未提供 run_cmd"而胡乱拒答)。
 		inner, _ := json.Marshal(map[string]any{
-			"type": "tool_calls",
+			"type":       "tool_calls",
 			"tool_calls": map[string]any{"name": it.Name, "arguments": it.Arguments},
 		})
 		return responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner)}

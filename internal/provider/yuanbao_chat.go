@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/yuanbaoweb"
 	"aurora/typings/official"
 	"aurora/util"
@@ -71,7 +72,7 @@ func (d *Yuanbao) yuanbaoChatResponsesStream(c *gin.Context, m *yuanbaoModel, re
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -107,7 +108,7 @@ func (d *Yuanbao) yuanbaoChatResponsesNonStream(c *gin.Context, m *yuanbaoModel,
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -116,7 +117,7 @@ func (d *Yuanbao) yuanbaoChatResponsesNonStream(c *gin.Context, m *yuanbaoModel,
 		fullText += delta.Text
 	})
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
@@ -128,7 +129,7 @@ func (d *Yuanbao) yuanbaoChatCompletionsStream(c *gin.Context, m *yuanbaoModel, 
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -168,7 +169,7 @@ func (d *Yuanbao) yuanbaoChatCompletionsNonStream(c *gin.Context, m *yuanbaoMode
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -177,7 +178,7 @@ func (d *Yuanbao) yuanbaoChatCompletionsNonStream(c *gin.Context, m *yuanbaoMode
 		fullText += delta.Text
 	})
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, "", countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)

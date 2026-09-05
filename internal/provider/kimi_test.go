@@ -18,7 +18,7 @@ func TestParseKimiModel(t *testing.T) {
 		{"kimi", kimiVariantChat, false},
 		{"kimi-coding", kimiVariantCoding, false},
 		{"kimi-pro-chat", "", true}, // 非 kimi 家族(改名后无后缀=chat 的旧用例已无意义)
-		{"gpt-5-chat", "", true}, // 非 kimi 命名 → nil
+		{"gpt-5-chat", "", true},    // 非 kimi 命名 → nil
 		{"kimi-coding-x", "", true},
 	}
 	for _, c := range cases {

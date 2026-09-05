@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/toolcall"
 	"aurora/internal/yuanbaoweb"
 	"aurora/typings/official"
@@ -100,7 +101,7 @@ func (d *Yuanbao) yuanbaoCodingResponsesStream(c *gin.Context, m *yuanbaoModel, 
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -173,7 +174,7 @@ func (d *Yuanbao) yuanbaoCodingResponsesNonStream(c *gin.Context, m *yuanbaoMode
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -183,7 +184,7 @@ func (d *Yuanbao) yuanbaoCodingResponsesNonStream(c *gin.Context, m *yuanbaoMode
 		fullText += delta.Text
 	})
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	toolCalls := toolcall.RecoverFromText(fullText, req.Tools)
@@ -203,7 +204,7 @@ func (d *Yuanbao) yuanbaoCodingCompletionsStream(c *gin.Context, m *yuanbaoModel
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -280,7 +281,7 @@ func (d *Yuanbao) yuanbaoCodingCompletionsNonStream(c *gin.Context, m *yuanbaoMo
 	client := d.webClient()
 	resp, err := d.yuanbaoRequest(c, client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -290,7 +291,7 @@ func (d *Yuanbao) yuanbaoCodingCompletionsNonStream(c *gin.Context, m *yuanbaoMo
 		fullText += delta.Text
 	})
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	toolCalls := toolcall.RecoverFromText(fullText, req.Tools)

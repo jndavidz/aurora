@@ -3,6 +3,7 @@ package provider
 import (
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/doubaoweb"
 	"aurora/typings/official"
@@ -94,7 +95,7 @@ func (d *Doubao) webClient() *doubaoweb.Client {
 func (d *Doubao) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	d.chatResponses(c, m, req)
@@ -110,7 +111,7 @@ func (d *Doubao) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Doubao) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	d.chatCompletions(c, m, req)

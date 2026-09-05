@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/glmweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -22,7 +23,7 @@ func (d *Glm) codingResponses(c *gin.Context, m *glmModel, req *official.Respons
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	messages := glmCodingMessagesFromResponses(req)
@@ -82,7 +83,7 @@ func glmCodingMessagesFromResponses(req *official.ResponsesAPIRequest) []glmweb.
 func (d *Glm) codingResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := client.Complete(streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -170,7 +171,7 @@ func (d *Glm) codingResponsesStream(c *gin.Context, req *official.ResponsesAPIRe
 func (d *Glm) codingResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := client.Complete(streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -213,7 +214,7 @@ func (d *Glm) codingCompletions(c *gin.Context, m *glmModel, req *official.APIRe
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	messages := glmCodingMessagesFromAPI(req)
@@ -265,7 +266,7 @@ func glmCodingMessagesFromAPI(req *official.APIRequest) []glmweb.Message {
 func (d *Glm) codingCompletionsStream(c *gin.Context, req *official.APIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := client.Complete(streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -358,7 +359,7 @@ func (d *Glm) codingCompletionsStream(c *gin.Context, req *official.APIRequest, 
 func (d *Glm) codingCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := client.Complete(streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()

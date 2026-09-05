@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"aurora/internal/doubaoweb"
+	"aurora/internal/apierrors"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
 	"aurora/util"
@@ -27,7 +28,7 @@ import (
 func (d *Doubao) codingResponses(c *gin.Context, m *doubaoModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "doubao web client unavailable: missing DOUBAO_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "doubao web client unavailable: missing DOUBAO_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	prompt := doubaoCodingPromptFromResponses(req)
@@ -141,7 +142,7 @@ func (d *Doubao) codingResponsesNonStream(c *gin.Context, req *official.Response
 	var fullText string
 	res := client.Complete(streamReq, func(delta doubaoweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	toolCalls := toolcall.RecoverFromText(fullText, req.Tools)
@@ -160,7 +161,7 @@ func (d *Doubao) codingResponsesNonStream(c *gin.Context, req *official.Response
 func (d *Doubao) codingCompletions(c *gin.Context, m *doubaoModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "doubao web client unavailable: missing DOUBAO_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "doubao web client unavailable: missing DOUBAO_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	prompt := doubaoCodingPromptFromAPI(req)
@@ -270,7 +271,7 @@ func (d *Doubao) codingCompletionsNonStream(c *gin.Context, req *official.APIReq
 	var fullText string
 	res := client.Complete(streamReq, func(delta doubaoweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	toolCalls := toolcall.RecoverFromText(fullText, req.Tools)

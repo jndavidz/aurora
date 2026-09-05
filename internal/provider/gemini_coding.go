@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/geminweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -23,7 +24,7 @@ import (
 func (d *Gemini) codingResponses(c *gin.Context, m *geminiModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "gemini web client unavailable: missing GEMINI_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "gemini web client unavailable: missing GEMINI_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	prompt := geminiCodingPromptFromResponses(req, "")
@@ -151,7 +152,7 @@ func (d *Gemini) codingResponsesNonStream(c *gin.Context, req *official.Response
 	var fullText string
 	res := client.Complete(streamReq, func(delta geminweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)
@@ -173,7 +174,7 @@ func (d *Gemini) codingResponsesNonStream(c *gin.Context, req *official.Response
 func (d *Gemini) codingCompletions(c *gin.Context, m *geminiModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "gemini web client unavailable: missing GEMINI_ACCOUNTS?"})
+		apierrors.JSONError(c, 502, "api_error", "gemini web client unavailable: missing GEMINI_ACCOUNTS?", nil, "upstream_error")
 		return
 	}
 	prompt := geminiCodingPromptFromAPI(req, "")
@@ -295,7 +296,7 @@ func (d *Gemini) codingCompletionsNonStream(c *gin.Context, req *official.APIReq
 	var fullText string
 	res := client.Complete(streamReq, func(delta geminweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/deepseekweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -24,12 +25,12 @@ func (d *DeepSeek) codingResponses(c *gin.Context, m *deepseekModel, req *offici
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil {
-		c.JSON(502, gin.H{"error": "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
 	if token == "" {
-		c.JSON(502, gin.H{"error": "deepseek web token pool is empty"})
+		apierrors.JSONError(c, 502, "api_error", "deepseek web token pool is empty", nil, "upstream_error")
 		return
 	}
 
@@ -38,7 +39,7 @@ func (d *DeepSeek) codingResponses(c *gin.Context, m *deepseekModel, req *offici
 
 	sessionID, err := client.CreateSession(token)
 	if err != nil {
-		c.JSON(502, gin.H{"error": fmt.Sprintf("deepseek create session: %v", err)})
+		apierrors.JSONError(c, 502, "api_error", fmt.Sprintf("deepseek create session: %v", err), nil, "upstream_error")
 		return
 	}
 	defer client.DeleteSession(token, sessionID)
@@ -184,7 +185,7 @@ func deepSeekToolResultNudge(tags toolcall.TagSet) string {
 func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
 	resp, err := client.Complete(token, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -266,7 +267,7 @@ func (d *DeepSeek) codingStream(c *gin.Context, m *deepseekModel, req *official.
 func (d *DeepSeek) codingNonStream(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
 	resp, err := client.Complete(token, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -276,7 +277,7 @@ func (d *DeepSeek) codingNonStream(c *gin.Context, m *deepseekModel, req *offici
 		fullText += delta.Text
 	})
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 
@@ -303,12 +304,12 @@ func (d *DeepSeek) codingCompletions(c *gin.Context, m *deepseekModel, req *offi
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil {
-		c.JSON(502, gin.H{"error": "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
 	if token == "" {
-		c.JSON(502, gin.H{"error": "deepseek web token pool is empty"})
+		apierrors.JSONError(c, 502, "api_error", "deepseek web token pool is empty", nil, "upstream_error")
 		return
 	}
 
@@ -316,7 +317,7 @@ func (d *DeepSeek) codingCompletions(c *gin.Context, m *deepseekModel, req *offi
 
 	sessionID, err := client.CreateSession(token)
 	if err != nil {
-		c.JSON(502, gin.H{"error": fmt.Sprintf("deepseek create session: %v", err)})
+		apierrors.JSONError(c, 502, "api_error", fmt.Sprintf("deepseek create session: %v", err), nil, "upstream_error")
 		return
 	}
 	defer client.DeleteSession(token, sessionID)
@@ -339,7 +340,7 @@ func (d *DeepSeek) codingCompletions(c *gin.Context, m *deepseekModel, req *offi
 func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
 	resp, err := client.Complete(token, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -419,7 +420,7 @@ func (d *DeepSeek) codingCompletionsStream(c *gin.Context, m *deepseekModel, req
 func (d *DeepSeek) codingCompletionsNonStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
 	resp, err := client.Complete(token, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -429,7 +430,7 @@ func (d *DeepSeek) codingCompletionsNonStream(c *gin.Context, m *deepseekModel, 
 		fullText += delta.Text
 	})
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 

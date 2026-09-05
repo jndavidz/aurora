@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/grokweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -24,7 +25,7 @@ func (d *Grok) codingResponses(c *gin.Context, m *grokModel, req *official.Respo
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "grok web client unavailable: missing GROK_COOKIES?"})
+		apierrors.JSONError(c, 502, "api_error", "grok web client unavailable: missing GROK_COOKIES?", nil, "upstream_error")
 		return
 	}
 	prompt := grokCodingPromptFromResponses(req)
@@ -142,7 +143,7 @@ func (d *Grok) codingResponsesNonStream(c *gin.Context, req *official.ResponsesA
 	res := client.Complete(streamReq, func(delta grokweb.Delta) { fullText += delta.Text })
 	clean, reasoning := splitGrokThinking(fullText)
 	if res.Err != "" && clean == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)
@@ -165,7 +166,7 @@ func (d *Grok) codingCompletions(c *gin.Context, m *grokModel, req *official.API
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasAccount() {
-		c.JSON(502, gin.H{"error": "grok web client unavailable: missing GROK_COOKIES?"})
+		apierrors.JSONError(c, 502, "api_error", "grok web client unavailable: missing GROK_COOKIES?", nil, "upstream_error")
 		return
 	}
 	prompt := grokCodingPromptFromAPI(req)
@@ -277,7 +278,7 @@ func (d *Grok) codingCompletionsNonStream(c *gin.Context, req *official.APIReque
 	res := client.Complete(streamReq, func(delta grokweb.Delta) { fullText += delta.Text })
 	clean, reasoning := splitGrokThinking(fullText)
 	if res.Err != "" && clean == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)

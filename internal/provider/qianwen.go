@@ -3,6 +3,7 @@ package provider
 import (
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/qianwenweb"
 	"aurora/typings/official"
@@ -73,7 +74,7 @@ func (d *Qianwen) webClient() *qianwenweb.Client {
 // Responses 处理 /v1/responses。
 func (d *Qianwen) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	if _, ok := d.byID[req.Model]; !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	d.qianwenChatResponses(c, req)
@@ -82,7 +83,7 @@ func (d *Qianwen) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 // ChatCompletions 处理 /v1/chat/completions。
 func (d *Qianwen) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	if _, ok := d.byID[req.Model]; !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	d.qianwenChatCompletions(c, req)

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/grokweb"
 	"aurora/typings/official"
@@ -101,7 +102,7 @@ func (d *Grok) webClient() *grokweb.Client {
 func (d *Grok) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == grokVariantChat {
@@ -115,7 +116,7 @@ func (d *Grok) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Grok) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == grokVariantChat {

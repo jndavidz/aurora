@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -349,7 +350,7 @@ func messagesFromItems(items []responsesInputItem, instructions string) []map[st
 func (d *GeminiCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	variant, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if variant == "coding" {
@@ -362,12 +363,12 @@ func (d *GeminiCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 		"stream":   req.Stream,
 	})
 	if err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 400, "invalid_request_error", err.Error(), nil, "invalid_request_error")
 		return
 	}
 	resp, err := d.post(body)
 	if err != nil {
-		c.JSON(502, gin.H{"error": "gemini cdp bridge unreachable: " + err.Error()})
+		apierrors.JSONError(c, 502, "api_error", "gemini cdp bridge unreachable: "+err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -410,7 +411,7 @@ func (d *GeminiCDP) relayStream(c *gin.Context, resp *http.Response) {
 func (d *GeminiCDP) relayJSON(c *gin.Context, resp *http.Response) {
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	c.Writer.Header().Set("Content-Type", "application/json")
@@ -447,7 +448,7 @@ type bridgeCompletion struct {
 func (d *GeminiCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	variant, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if variant == "coding" {
@@ -456,7 +457,7 @@ func (d *GeminiCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest)
 	}
 	msgs := messagesFromItems(responsesInputItems(req.Input), rawResponsesText(req.Instructions))
 	if len(msgs) == 0 {
-		c.JSON(400, gin.H{"error": "no input"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "no input", nil, "invalid_request_error")
 		return
 	}
 	if req.Stream {
@@ -533,22 +534,22 @@ func (d *GeminiCDP) responsesNonStream(c *gin.Context, req *official.ResponsesAP
 	body, _ := json.Marshal(map[string]any{"model": req.Model, "messages": msgs, "stream": false})
 	resp, err := d.post(body)
 	if err != nil {
-		c.JSON(502, gin.H{"error": "gemini cdp bridge unreachable: " + err.Error()})
+		apierrors.JSONError(c, 502, "api_error", "gemini cdp bridge unreachable: "+err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		c.JSON(502, gin.H{"error": fmt.Sprintf("gemini cdp bridge http %d: %s", resp.StatusCode, truncateStr(string(data), 300))})
+		apierrors.JSONError(c, 502, "api_error", fmt.Sprintf("gemini cdp bridge http %d: %s", resp.StatusCode, truncateStr(string(data), 300)), nil, "upstream_error")
 		return
 	}
 	var comp bridgeCompletion
 	if err := json.Unmarshal(data, &comp); err != nil {
-		c.JSON(502, gin.H{"error": "bad bridge response: " + err.Error()})
+		apierrors.JSONError(c, 502, "api_error", "bad bridge response: "+err.Error(), nil, "upstream_error")
 		return
 	}
 	if comp.Error != nil {
-		c.JSON(502, gin.H{"error": comp.Error.Message})
+		apierrors.JSONError(c, 502, "api_error", comp.Error.Message, nil, "upstream_error")
 		return
 	}
 	fullText := ""
@@ -556,7 +557,7 @@ func (d *GeminiCDP) responsesNonStream(c *gin.Context, req *official.ResponsesAP
 		fullText = comp.Choices[0].Message.Content
 	}
 	if fullText == "" {
-		c.JSON(502, gin.H{"error": "empty reply from gemini cdp bridge"})
+		apierrors.JSONError(c, 502, "api_error", "empty reply from gemini cdp bridge", nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
@@ -652,7 +653,7 @@ func (d *GeminiCDP) codingResponsesStream(c *gin.Context, req *official.Response
 func (d *GeminiCDP) codingResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, prompt string) {
 	fullText, err := d.completePrompt(req.Model, prompt)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)
@@ -754,7 +755,7 @@ func (d *GeminiCDP) codingCompletionsStream(c *gin.Context, req *official.APIReq
 func (d *GeminiCDP) codingCompletionsNonStream(c *gin.Context, req *official.APIRequest, prompt string) {
 	fullText, err := d.completePrompt(req.Model, prompt)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/minimaxweb"
 	"aurora/internal/toolcall"
 	"aurora/typings/official"
@@ -27,7 +28,7 @@ func minimaxChatPromptAPI(req *official.APIRequest) string {
 func (d *Minimax) chatResponses(c *gin.Context, m *minimaxModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -71,7 +72,7 @@ func (d *Minimax) chatResponsesNonStream(c *gin.Context, req *official.Responses
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta minimaxweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
@@ -81,7 +82,7 @@ func (d *Minimax) chatResponsesNonStream(c *gin.Context, req *official.Responses
 func (d *Minimax) chatCompletions(c *gin.Context, m *minimaxModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -129,7 +130,7 @@ func (d *Minimax) chatCompletionsNonStream(c *gin.Context, req *official.APIRequ
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta minimaxweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, "", countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)
@@ -198,7 +199,7 @@ func (d *Minimax) codingResponses(c *gin.Context, m *minimaxModel, req *official
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -282,7 +283,7 @@ func (d *Minimax) codingResponsesNonStream(c *gin.Context, req *official.Respons
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta minimaxweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)
@@ -304,7 +305,7 @@ func (d *Minimax) codingCompletions(c *gin.Context, m *minimaxModel, req *offici
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	client := d.webClient()
 	if client == nil || !client.HasToken() {
-		c.JSON(502, gin.H{"error": "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?"})
+		apierrors.JSONError(c, 502, "api_error", "minimax web client unavailable: missing MINIMAX_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
 	token := client.NextToken()
@@ -388,7 +389,7 @@ func (d *Minimax) codingCompletionsNonStream(c *gin.Context, req *official.APIRe
 	var fullText string
 	res := client.Complete(token, streamReq, func(delta minimaxweb.Delta) { fullText += delta.Text })
 	if res.Err != "" && fullText == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	parser := toolcall.NewFenceParser(req.Tools)

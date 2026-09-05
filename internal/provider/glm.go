@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/glmweb"
 	"aurora/typings/official"
@@ -38,7 +39,7 @@ type Glm struct {
 
 // defaultGlmModels 是 GLM_MODELS 未配置时的默认目录。
 var defaultGlmModels = []string{
-	"glm-flash",             // GLM-5.3-FLASH 快速挡(2026-09-04 用户拍板,5.2 已升级)
+	"glm-flash", // GLM-5.3-FLASH 快速挡(2026-09-04 用户拍板,5.2 已升级)
 	"glm-5.2-coding",
 }
 
@@ -123,7 +124,7 @@ func (d *Glm) CredentialHealth() CredentialHealth {
 func (d *Glm) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == glmVariantChat {
@@ -137,7 +138,7 @@ func (d *Glm) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Glm) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == glmVariantChat {

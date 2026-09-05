@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/mimoweb"
 	"aurora/typings/official"
@@ -133,11 +134,11 @@ func (d *Mimo) AsrText(fileName string, audio []byte) (string, error) {
 func (d *Mimo) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == mimoVariantASR {
-		c.JSON(400, gin.H{"error": "mimo-v2.5-asr 请使用 /v1/audio/transcriptions 接口"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "mimo-v2.5-asr 请使用 /v1/audio/transcriptions 接口", nil, "invalid_request_error")
 		return
 	}
 	if m.Variant == mimoVariantChat {
@@ -151,11 +152,11 @@ func (d *Mimo) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 func (d *Mimo) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	if m.Variant == mimoVariantASR {
-		c.JSON(400, gin.H{"error": "mimo-v2.5-asr 请使用 /v1/audio/transcriptions 接口"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "mimo-v2.5-asr 请使用 /v1/audio/transcriptions 接口", nil, "invalid_request_error")
 		return
 	}
 	if m.Variant == mimoVariantChat {

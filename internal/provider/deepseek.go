@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/deepseekweb"
 	"aurora/typings/official"
@@ -124,7 +125,7 @@ func (d *DeepSeek) Responses(c *gin.Context, req *official.ResponsesAPIRequest) 
 	m, ok := d.byID[req.Model]
 	if !ok {
 		// 不应发生:Handles 已拦截。
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	switch m.Variant {
@@ -133,7 +134,7 @@ func (d *DeepSeek) Responses(c *gin.Context, req *official.ResponsesAPIRequest) 
 	case variantCoding:
 		d.codingResponses(c, m, req)
 	default:
-		c.JSON(400, gin.H{"error": "unknown variant"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "unknown variant", nil, "invalid_request_error")
 	}
 }
 
@@ -141,7 +142,7 @@ func (d *DeepSeek) Responses(c *gin.Context, req *official.ResponsesAPIRequest) 
 func (d *DeepSeek) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	m, ok := d.byID[req.Model]
 	if !ok {
-		c.JSON(404, gin.H{"error": "model not found"})
+		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
 		return
 	}
 	switch m.Variant {
@@ -150,6 +151,6 @@ func (d *DeepSeek) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	case variantCoding:
 		d.codingCompletions(c, m, req)
 	default:
-		c.JSON(400, gin.H{"error": "unknown variant"})
+		apierrors.JSONError(c, 400, "invalid_request_error", "unknown variant", nil, "invalid_request_error")
 	}
 }

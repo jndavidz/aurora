@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"aurora/internal/apierrors"
 	"aurora/internal/glmweb"
 	"aurora/typings/official"
 	"aurora/util"
@@ -25,14 +26,14 @@ const glmRefreshSkew = 10 * time.Minute
 func (d *Glm) chatResponses(c *gin.Context, m *glmModel, req *official.ResponsesAPIRequest) {
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 
 	messages := glmMessagesFromResponses(req, true) // chat 变体剥离 tools
 	streamReq := glmweb.CompletionRequest{
 		Messages:     messages,
-		ChatMode:     m.Mode, // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
+		ChatMode:     m.Mode,             // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
 		IsNetworking: d.cfg.GlmWebSearch, // N4(2026-09-04):默认关闭(提速);GLM_WEB_SEARCH=1 开启
 	}
 	if req.Stream {
@@ -106,7 +107,7 @@ func glmMessagesFromResponses(req *official.ResponsesAPIRequest, stripTools bool
 func (d *Glm) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -151,7 +152,7 @@ func (d *Glm) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequ
 func (d *Glm) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -161,7 +162,7 @@ func (d *Glm) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIR
 		fullReasoning += delta.Reasoning
 	})
 	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewResponsesResponse(fullText, fullReasoning, countInputChars(req), util.CountToken(fullText), util.CountToken(fullReasoning), 0, 0, req.Model)
@@ -172,13 +173,13 @@ func (d *Glm) chatResponsesNonStream(c *gin.Context, req *official.ResponsesAPIR
 func (d *Glm) chatCompletions(c *gin.Context, m *glmModel, req *official.APIRequest) {
 	client := d.webClient()
 	if err := d.ensureToken(client); err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	messages := glmMessagesFromAPI(req)
 	streamReq := glmweb.CompletionRequest{
 		Messages:     messages,
-		ChatMode:     m.Mode, // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
+		ChatMode:     m.Mode,             // "speed"(快速,默认)|"thinking"(思考),由模型 id 挡位决定
 		IsNetworking: d.cfg.GlmWebSearch, // N4(2026-09-04):默认关闭(提速);GLM_WEB_SEARCH=1 开启
 	}
 	if req.Stream {
@@ -210,7 +211,7 @@ func glmMessagesFromAPI(req *official.APIRequest) []glmweb.Message {
 func (d *Glm) chatCompletionsStream(c *gin.Context, req *official.APIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -252,7 +253,7 @@ func (d *Glm) chatCompletionsStream(c *gin.Context, req *official.APIRequest, cl
 func (d *Glm) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest, client *glmweb.Client, streamReq glmweb.CompletionRequest) {
 	resp, err := d.completeWithAuth(client, streamReq)
 	if err != nil {
-		c.JSON(502, gin.H{"error": err.Error()})
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
 	defer resp.Body.Close()
@@ -262,7 +263,7 @@ func (d *Glm) chatCompletionsNonStream(c *gin.Context, req *official.APIRequest,
 		fullReasoning += delta.Reasoning
 	})
 	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		c.JSON(502, gin.H{"error": res.Err})
+		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
 		return
 	}
 	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, fullReasoning, countMessagesChars(req.Messages), util.CountToken(fullText), req.Model, "", nil)
