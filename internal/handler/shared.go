@@ -3,8 +3,10 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -32,7 +34,6 @@ func respondError(c *gin.Context, status int, err error) {
 // resolveAccount 从请求 Authorization header 解析账号
 // 替代旧的 secretFromAuthorization + accessTokenFromRefreshToken
 // 返回 (account, http_status, error)
-
 func resolveAccount(c *gin.Context, pool *accounts.Pool, cfg *config.Config, needsPaid bool) (*accounts.Account, int, error) {
 	authHeader := c.GetHeader("Authorization")
 
@@ -142,7 +143,6 @@ func resolveAccount(c *gin.Context, pool *accounts.Pool, cfg *config.Config, nee
 //
 // 对齐 initialize/handlers.go:postConversationGptClientOrder
 // pool 参数用于在 sentinel 401 时标记账号不可用
-
 func conversationClientOrder(client **bogdanfinn.TlsClient, account *accounts.Account, translatedRequest chatgpt_types.ChatGPTRequest, proxyUrl string, stream bool, state *chatgpt.ChatClientState, pool *accounts.Pool) (*http.Response, *websocket.Conn, *chatgpt.TurnStile, int, error) {
 	if state != nil {
 		state.ApplyToRequest(&translatedRequest)
@@ -189,7 +189,6 @@ func conversationClientOrder(client **bogdanfinn.TlsClient, account *accounts.Ac
 }
 
 // setupClientWithProxy 创建带代理的 std client
-
 func setupClientWithProxy(proxyUrl string) *bogdanfinn.TlsClient {
 	client := bogdanfinn.NewStdClient()
 	if proxyUrl != "" {
@@ -199,7 +198,6 @@ func setupClientWithProxy(proxyUrl string) *bogdanfinn.TlsClient {
 }
 
 // websocketProxyFunc 为 WebSocket 连接配置代理（从原 request.go 复制）
-
 func websocketProxyFunc(proxy string) (func(*fhttp.Request) (*url.URL, error), error) {
 	if proxy == "" {
 		return fhttp.ProxyFromEnvironment, nil
@@ -212,7 +210,6 @@ func websocketProxyFunc(proxy string) (func(*fhttp.Request) (*url.URL, error), e
 }
 
 // original_requestHasFiles 检查请求消息中是否包含文件引用
-
 func original_requestHasFiles(request officialtypes.APIRequest) bool {
 	for _, message := range request.Messages {
 		if len(message.Files()) > 0 {
@@ -223,7 +220,6 @@ func original_requestHasFiles(request officialtypes.APIRequest) bool {
 }
 
 // toolCallingEnabled 根据 Config + Tools 列表判定是否启用工具调用模拟。
-
 func toolCallingEnabled(tools []officialtypes.Tool, cfg *config.Config) bool {
 	if cfg != nil && !cfg.ToolCallingEnabled {
 		return false
@@ -232,7 +228,6 @@ func toolCallingEnabled(tools []officialtypes.Tool, cfg *config.Config) bool {
 }
 
 // countMessagesTokens 统计消息的 token 数
-
 func countMessagesTokens(messages []officialtypes.APIMessage) int {
 	total := 0
 	for _, message := range messages {
@@ -242,7 +237,6 @@ func countMessagesTokens(messages []officialtypes.APIMessage) int {
 }
 
 // writeChatCompletionStreamDone 写入流式结束标记
-
 func writeChatCompletionStreamDone(c *gin.Context, stopSent bool, model string, conversationID string) {
 	if !stopSent {
 		finalLine := officialtypes.StopChunkWithConversation("stop", model, conversationID)
@@ -254,6 +248,205 @@ func writeChatCompletionStreamDone(c *gin.Context, stopSent bool, model string, 
 }
 
 // looksLikeSandboxRefusal 检测模型是否声称自己处于隔离环境/无法访问工具。
+func looksLikeSandboxRefusal(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	markers := []string{
+		"/mnt/data", "/workspace", "/home/oai", "filesystem isolado", "ambiente isolado",
+		"root linux", "linux/container", "container atual", "não tem acesso ao diret",
+		"nao tem acesso ao diret", "não está montado", "nao esta montado",
+		"não foi montado", "nao foi montado", "não existe neste ambiente",
+		"nao existe neste ambiente", "não pode continuar neste ambiente",
+		"não é possível ler", "nao e possivel ler",
+		"não foi possível abrir", "nao foi possivel abrir",
+		"não foi possível executar", "nao foi possivel executar",
+		"falha na interface de execução", "falha no parsing",
+		"inferência baseada na estrutura", "inferencia baseada na estrutura",
+		"baseada apenas na estrutura",
+		// 中文拒绝模式(实测常见:模型声称"没有工具接口/无法访问")
+		"没有可用的", "我当前会话", "我目前没有", "当前会话中", "无法访问",
+		"我无法读取", "无法读取", "不能读取", "没有提供", "无法实际",
+		"未提供这些", "工具列表里未提供", "工具接口",
+		// 英文拒绝模式
+		"i cannot access", "i can't access", "i cannot read", "i can't read",
+		"don't have access", "do not have access", "no access to", "cannot access",
+		"not available in this", "no such tool", "tool is not available",
+		// 沙箱幻觉新变体(实测:模型编造 '/caas_toolbox' 沙箱路径,声称
+		// "当前工作目录:/" —— 实际 bash 工具在用户项目工作区执行)
+		"caas_toolbox", "当前工作目录：`/`", "当前工作目录: `/`",
+		"当前实际挂载的文件系统", "挂载的文件系统中没有",
+	}
+	for _, m := range markers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeRequestingUserContent 检测模型"向用户索要文件/内容/路径/上传/粘贴"
+// 式的停顿文本。这类回复不是任务完成,而是模型放弃工具调用——它明明可以
+// 用 read/bash 工具自己读,却让用户把文件内容"提供"过来(实测原文:
+// "请把源码内容继续提供(或让我能读取工作区文件),我就继续。")。
+// 命中时应继续重试,而不是被"工具结果后散文=完成"的启发式放行。
+func looksLikeRequestingUserContent(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	markers := []string{
+		// 中文:索要文件/内容/路径/上传/粘贴
+		"请提供", "请你提供", "请把", "请上传", "上传给", "粘贴", "发给我",
+		"让我能读取", "让我读取", "无法读取工作区", "需要你提供", "需要您提供",
+		"把源码", "把代码", "把文件内容", "把内容", "告诉我路径", "告诉我文件",
+		"直接上传", "请补充", "请给出", "你方便的话",
+		// "请继续提供源码读取结果后…" 这类变体(实测原文)
+		"请继续提供", "继续提供", "提供源码", "提供文件", "提供内容",
+		"读取结果后", "拿到源码", "等你提供", "等待你",
+		// 英文:请求用户提供内容
+		"please provide", "please share", "please paste", "please upload",
+		"please send", "can you provide", "can you share", "could you provide",
+		"could you share", "paste the file", "upload the file", "share the file", "send me the file",
+		"give me access to", "attach the file", "provide me with",
+	}
+	for _, m := range markers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikePrematureStop 检测模型"中途停顿"文本:没有 tool_call,却输出
+// 进度报告/后续计划/继续承诺(实测原文:读完两个文件后输出
+// "我已经读完 manifest.json、background.js 前半部分…当前已确认核心架构"
+// 就停下,等用户发"继续";或反复输出"我会按以下顺序通读…读完后整理")。
+// 这类回复不是完成,应重试逼它立刻继续调工具,而不是放行。
+func looksLikePrematureStop(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	// 明确的"部分完成/还没完成"信号
+	partial := []string{
+		"前半部分", "还没读完", "还没有读完", "尚未读完", "还没通读", "没有通读",
+		"还没拿到", "还没有拿到", "尚未拿到", "还没读取", "还没有读取", "还没看",
+		"没有拿到正文", "只看到", "只读取", "只拿到", "只有文件列表", "只有目录",
+		"先到这里", "暂时先",
+	}
+	// 明确的"将来才做"计划/继续承诺信号
+	future := []string{
+		"我继续", "我会继续", "我将继续", "继续通读", "继续读取", "继续阅读",
+		"继续分析", "继续完成", "会继续", "再继续", "按以下顺序", "按这个顺序",
+		"我会按", "读完后", "等读完", "之后我", "之后再", "让我继续", "待我",
+		"等我", "我先读", "先读取", "我再读", "继续补充", "继续深入",
+	}
+	enFuture := []string{
+		"i will continue", "i'll continue", "continue reading", "continue to read",
+		"let me continue", "to be continued", "next i will", "will now continue",
+		"will continue reading", "i will read", "i'll read", "will continue",
+	}
+	for _, m := range partial {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	for _, m := range future {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	for _, m := range enFuture {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeEnvironmentExcuse 检测模型"推诿环境"文本:拿到了工具输出(如 ls 的
+// 相对文件列表),却不自己 pwd/按相对路径读取,反而声称环境/项目目录不可用,
+// 让用户"重新连接/打开项目环境/挂载"(实测原文:"当前可用的源码读取环境中
+// 没有找到对应的 ai-roundtable 项目目录…请重新连接/打开该项目环境后,我会
+// 直接读取…")。这类回复不是完成,应重试逼它用工具定位并读取。
+func looksLikeEnvironmentExcuse(text string) bool {
+	if text == "" {
+		return false
+	}
+	t := strings.ToLower(text)
+	markers := []string{
+		// 中文:让用户重新连接/打开/挂载/加载环境或项目
+		"请重新连接", "请重新打开", "重新连接/打开", "重新连接或打开",
+		"打开该项目环境", "打开项目环境", "打开这个环境", "加载该项目",
+		"重新加载", "需要挂载", "请挂载", "挂载项目", "挂载目录",
+		"找不到该项目", "没有找到该项目", "未找到该项目", "无法找到项目",
+		"没找到项目", "项目目录不可用", "无法定位项目", "无法访问项目",
+		"环境不可用", "环境不存在", "环境未挂载", "读取环境中没有",
+		"环境中没有找到", "没有找到对应的", "环境后才能", "环境后,我会",
+		// 英文
+		"please reconnect", "please reopen", "reconnect the", "reopen the",
+		"mount the", "could not locate", "cannot locate", "project not found",
+		"environment is not", "environment not available", "environment unavailable",
+	}
+	for _, m := range markers {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidToolReply 判断一段文本是否适合作为工具模式的最终答案:
+// 空文本、停顿(进度报告/计划)、索要内容、环境推诿、沙箱拒绝都不算。
+// 用于重试耗尽后的最终答案选择——防止把模型的"绕开工具"文本当答案返回。
+func isValidToolReply(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	return !looksLikeSandboxRefusal(t) && !looksLikeRequestingUserContent(t) &&
+		!looksLikePrematureStop(t) && !looksLikeEnvironmentExcuse(t)
+}
+
+// sanitizeRefusalHistory 把历史里模型之前"绕开工具"的回复(停顿/索要内容/
+// 环境推诿/沙箱幻觉/拒绝)替换为中性占位符。
+// 原因:这些文本作为 assistant 消息留在会话历史里,每轮重发给上游,会
+// 锚定模型重复同样的拒绝行为(实测:历史里堆积 15 条"无法访问 Windows
+// 路径 / Linux 文件系统 /"等拒绝文本后,模型每轮都重复同样的说辞,
+// nudge 再强也压不过历史里的自我强化)。
+func sanitizeRefusalHistory(messages []officialtypes.APIMessage) {
+	const placeholder = "(上一轮模型回复未调用工具,已被服务端替换为占位符,请忽略其内容并继续使用工具完成任务。)"
+	for i := range messages {
+		m := &messages[i]
+		if m.Role != "assistant" || m.HasToolCalls() {
+			continue // 带 tool_calls 的 assistant 消息是正常调用记录,保留
+		}
+		text := m.Content.Text()
+		if text == "" {
+			continue
+		}
+		if !isValidToolReply(text) {
+			m.Content = officialtypes.MessageContent{TextValue: placeholder}
+		}
+	}
+}
+
+// appendToolDebugLog 把每次工具解析的输入文本和解析结果写入日志文件。
+// 带时间戳与耗时,便于关联 aurora_run.log 与定位慢请求。
+func appendToolDebugLog(path string, attempt int, elapsed time.Duration, text string, calls []officialtypes.ToolCall) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	callsJSON, _ := json.Marshal(calls)
+	ts := time.Now().Format("2006-01-02 15:04:05.000")
+	fmt.Fprintf(f, "\n=== %s attempt %d (%.0fms) ===\ntext: %s\ncalls: %s\n", ts, attempt, float64(elapsed.Milliseconds()), text, string(callsJSON))
+}
+
+// ── Responses 流式事件构造器 ──
 
 func responsesCreatedEvent(respID, model string) string {
 	evt := map[string]interface{}{
