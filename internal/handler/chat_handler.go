@@ -162,7 +162,14 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 
 	// 工具调用提前分支
 	if toolsEnabled {
-		h.handleToolCalling(c, &original_request, &client, account, &clientState, &reqModel, &uid, &proxyUrl, &input_tokens)
+		h.handleToolCalling(c, &original_request, account, &chatRequestState{
+			client:      client,
+			clientState: clientState,
+			reqModel:    reqModel,
+			uid:         uid,
+			proxyUrl:    proxyUrl,
+			inputTokens: input_tokens,
+		})
 		return
 	}
 
@@ -389,7 +396,14 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 
 	// ChatGPT 工具调用(coding):带 tools 的请求走文本协议工具调用,输出 Responses 事件。
 	if toolCallingEnabled(original_request.Tools, h.cfg) {
-		h.responsesToolCalling(c, &original_request, account, client, clientState, reqModel, uid, proxyUrl, input_tokens)
+		h.responsesToolCalling(c, &original_request, account, &chatRequestState{
+			client:      client,
+			clientState: clientState,
+			reqModel:    reqModel,
+			uid:         uid,
+			proxyUrl:    proxyUrl,
+			inputTokens: input_tokens,
+		})
 		return
 	}
 
@@ -641,7 +655,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 // 上游非流式收集全文 + REFUSAL_RETRIES 重试 + 拒绝分类器 + RecoverFromText 兜底,
 // 解析出工具调用后按 Responses 事件(流式)或 JSON(非流式)输出。
 // 修复:原流式路径无重试,模型偶发绕开工具直接纯文本回答即"偶发不触发"。
-func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, client *bogdanfinn.TlsClient, clientState *chatgpt.ChatClientState, reqModel, uid, proxyUrl string, inputTokens int) {
+func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, st *chatRequestState) {
 	if account == nil || !account.Type.Satisfies(accounts.CapToolCalling) {
 		c.JSON(403, gin.H{"error": "Tool calling requires a logged-in ChatGPT account."})
 		return
@@ -663,7 +677,7 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Header().Set("X-Accel-Buffering", "no")
 		flusher, _ = c.Writer.(http.Flusher)
-		c.Writer.WriteString("event: response.created\ndata: " + responsesCreatedEvent(respID, reqModel) + "\n\n")
+		c.Writer.WriteString("event: response.created\ndata: " + responsesCreatedEvent(respID, st.reqModel) + "\n\n")
 		c.Writer.WriteString("event: response.output_item.added\ndata: " + responsesOutputItemAddedEvent(0, messageItemID, "message") + "\n\n")
 		if flusher != nil {
 			c.Writer.WriteHeader(200)
@@ -671,7 +685,7 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 		}
 	}
 
-	out, terr := h.toolCallingRetry(c, originalRequest, &client, account, &clientState, &reqModel, &uid, &proxyUrl, &inputTokens)
+	out, terr := h.toolCallingRetry(c, originalRequest, account, st)
 	if terr != nil {
 		if streamRequested {
 			// header 已写 200,只能发 response.failed 事件。
@@ -693,7 +707,7 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 		// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
 		c.Writer.WriteString("event: response.output_item.done\ndata: " + responsesOutputItemDoneEvent(0, messageItemID, "message", out.text) + "\n\n")
 
-		responsesResponse := officialtypes.NewResponsesResponse(out.text, "", inputTokens, outputTokens, 0, 0, 0, reqModel)
+		responsesResponse := officialtypes.NewResponsesResponse(out.text, "", st.inputTokens, outputTokens, 0, 0, 0, st.reqModel)
 		for i, tc := range out.calls {
 			idx := i + 1
 			fcID := "fc_" + uuid.NewString()
@@ -715,7 +729,7 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 		return
 	}
 
-	outResp := officialtypes.NewResponsesResponse(out.text, "", inputTokens, outputTokens, 0, 0, 0, reqModel)
+	outResp := officialtypes.NewResponsesResponse(out.text, "", st.inputTokens, outputTokens, 0, 0, 0, st.reqModel)
 	for _, tc := range out.calls {
 		outResp.Output = append(outResp.Output, officialtypes.ResponsesOutputItem{
 			ID: "fc_" + uuid.NewString(), Type: "function_call", Status: "completed",
@@ -829,6 +843,21 @@ func (h *ChatHandler) Files(c *gin.Context) {
 	c.JSON(200, uploaded)
 }
 
+// chatRequestState 聚合一次 ChatGPT 请求在 handler 内流转的请求级上下文。
+// F2 收窄版(2026-09-05):替代 toolCalling 系列函数的 6 指针输出参数
+// (client/clientState/reqModel/uid/proxyUrl/inputTokens)——原先全部按指针
+// 传递,但其中仅 clientState 在 toolCallingRetry 内会被重新赋值(按会话复用
+// 或重建),其余为纯输入。struct 化后"哪些是 in-out"由字段使用显式化,
+// 调用方统一从 st 读最终值。
+type chatRequestState struct {
+	client      *bogdanfinn.TlsClient
+	clientState *chatgpt.ChatClientState
+	reqModel    string
+	uid         string
+	proxyUrl    string
+	inputTokens int
+}
+
 // toolCallingOutcome 是 toolCallingRetry 带重试收集的最终结果。
 type toolCallingOutcome struct {
 	text           string
@@ -854,7 +883,7 @@ type toolCallingError struct {
 //   - 上游哑火检测(连续空回复停手)+ 502 兜底(no_valid_reply)
 //
 // 返回 (outcome, nil) 成功;(nil, err) 失败(调用方负责输出错误)。
-func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *officialtypes.APIRequest, client **bogdanfinn.TlsClient, account *accounts.Account, clientState **chatgpt.ChatClientState, reqModel *string, uid *string, proxyUrl *string, inputTokens *int) (*toolCallingOutcome, *toolCallingError) {
+func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, st *chatRequestState) (*toolCallingOutcome, *toolCallingError) {
 	h.codingLimiter.Wait() // 仅 coding 限频(每次客户端请求一次),chat 不限
 	tools := originalRequest.Tools
 	maxRefusalRetries := h.cfg.RefusalRetries
@@ -886,15 +915,15 @@ func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *official
 		}
 	}
 
-	baseTranslated := chatgptrequestconverter.ConvertAPIRequest(*originalRequest, account, *proxyUrl, *client)
+	baseTranslated := chatgptrequestconverter.ConvertAPIRequest(*originalRequest, account, st.proxyUrl, st.client)
 	if baseTranslated.ConversationID != "" {
-		*clientState = h.sessions.Get(baseTranslated.ConversationID)
+		st.clientState = h.sessions.Get(baseTranslated.ConversationID)
 	}
-	if *clientState == nil {
-		*clientState = chatgpt.NewChatClientStateForAccount(account)
+	if st.clientState == nil {
+		st.clientState = chatgpt.NewChatClientStateForAccount(account)
 	}
-	(*clientState).ConversationID = baseTranslated.ConversationID
-	(*clientState).ParentMessageID = baseTranslated.ParentMessageID
+	st.clientState.ConversationID = baseTranslated.ConversationID
+	st.clientState.ParentMessageID = baseTranslated.ParentMessageID
 
 	var lastToolCalls []officialtypes.ToolCall
 	var lastText string
@@ -949,7 +978,7 @@ func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *official
 			translated.AddMessage("user", retrySuffix)
 		}
 
-		response, wsConn, _, status, err := conversationClientOrder(client, account, translated, *proxyUrl, false, *clientState, h.accountPool)
+		response, wsConn, _, status, err := conversationClientOrder(&st.client, account, translated, st.proxyUrl, false, st.clientState, h.accountPool)
 		if err != nil {
 			return nil, &toolCallingError{
 				status: status,
@@ -958,11 +987,11 @@ func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *official
 				msg:    err.Error(),
 			}
 		}
-		result := chatgpt.HandlerDetailedWithOptions(c, response, *client, account, *uid, translated, false, *reqModel, chatgpt.HandlerDetailedOptions{
+		result := chatgpt.HandlerDetailedWithOptions(c, response, st.client, account, st.uid, translated, false, st.reqModel, chatgpt.HandlerDetailedOptions{
 			Websocket:        wsConn,
-			ClientState:      *clientState,
+			ClientState:      st.clientState,
 			ArtifactDelivery: originalRequest.ArtifactDelivery,
-			ProxyURL:         *proxyUrl,
+			ProxyURL:         st.proxyUrl,
 		})
 		response.Body.Close()
 
@@ -972,9 +1001,9 @@ func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *official
 		}
 		lastConversationID = result.ConversationID
 		lastSentinel = result.Sentinel
-		(*clientState).NoteTurnResult(result.ConversationID, result.ParentMessageID)
+		st.clientState.NoteTurnResult(result.ConversationID, result.ParentMessageID)
 		if result.ConversationID != "" {
-			h.sessions.Register(result.ConversationID, *clientState)
+			h.sessions.Register(result.ConversationID, st.clientState)
 		}
 
 		// 解析 <tool_call>{...}</tool_call>
@@ -1092,13 +1121,13 @@ func (h *ChatHandler) toolCallingRetry(c *gin.Context, originalRequest *official
 
 // handleToolCalling 工具调用模式的主流程(chat/completions)。
 // 重试/兜底逻辑在 toolCallingRetry,此处只负责输出。
-func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, client **bogdanfinn.TlsClient, account *accounts.Account, clientState **chatgpt.ChatClientState, reqModel *string, uid *string, proxyUrl *string, inputTokens *int) {
+func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officialtypes.APIRequest, account *accounts.Account, st *chatRequestState) {
 	if account == nil || !account.Type.Satisfies(accounts.CapToolCalling) {
 		c.JSON(403, gin.H{"error": "Tool calling requires a logged-in ChatGPT account."})
 		return
 	}
 
-	out, terr := h.toolCallingRetry(c, originalRequest, client, account, clientState, reqModel, uid, proxyUrl, inputTokens)
+	out, terr := h.toolCallingRetry(c, originalRequest, account, st)
 	if terr != nil {
 		apierrors.JSONError(c, terr.status, terr.typ, terr.msg, nil, terr.code)
 		return
@@ -1107,20 +1136,20 @@ func (h *ChatHandler) handleToolCalling(c *gin.Context, originalRequest *officia
 	if originalRequest.Stream {
 		// 客户端要求流式:统一输出标准 SSE(工具调用或纯文本都兼容 OpenAI 协议)
 		outputTokens := util.CountToken(out.text)
-		h.writeToolCallingStream(c, *reqModel, out.text, out.calls, out.conversationID,
-			*inputTokens, outputTokens, originalRequest.StreamOptions != nil && originalRequest.StreamOptions.IncludeUsage)
+		h.writeToolCallingStream(c, st.reqModel, out.text, out.calls, out.conversationID,
+			st.inputTokens, outputTokens, originalRequest.StreamOptions != nil && originalRequest.StreamOptions.IncludeUsage)
 		return
 	}
 	if len(out.calls) > 0 {
 		c.JSON(200, officialtypes.NewChatCompletionWithToolCalls(
 			out.text, "", out.calls,
-			*inputTokens, util.CountToken(out.text),
-			*reqModel, out.conversationID, out.sentinel,
+			st.inputTokens, util.CountToken(out.text),
+			st.reqModel, out.conversationID, out.sentinel,
 		))
 		return
 	}
 	outputTokens := util.CountToken(out.text)
-	c.JSON(200, officialtypes.NewChatCompletionWithMetadata(out.text, *inputTokens, outputTokens, *reqModel, out.conversationID, out.sentinel))
+	c.JSON(200, officialtypes.NewChatCompletionWithMetadata(out.text, st.inputTokens, outputTokens, st.reqModel, out.conversationID, out.sentinel))
 }
 
 // writeToolCallingStream 把工具调用/文本结果以标准 OpenAI SSE 流式协议写出。
