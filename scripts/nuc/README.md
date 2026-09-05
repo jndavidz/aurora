@@ -14,6 +14,9 @@ NUC(nuc-hifi,10.10.10.3)上所有 systemd 单元与运维脚本的**权威副本
 | `aurora-bridge.service` | `/etc/systemd/system/aurora-bridge.service` | 桥常驻;BRIDGE_HOST=0.0.0.0 / IDLE_TIMEOUT_MIN=0 |
 | `credential-keeper.service` | `/etc/systemd/system/credential-keeper.service` | D4 凭证探测(oneshot;SuccessExitStatus=1) |
 | `credential-keeper.timer` | `/etc/systemd/system/credential-keeper.timer` | 每日 06:30+rand30min |
+| `token-harvester.mjs` | `/opt/credential-keeper/token-harvester.mjs` | **G1 统一凭证提取器(2026-09-05)**:CDP 从本机 Chrome 读各站 localStorage/cookie,md5 幂等推 NAS 部署区;站点 minimax/mimo/qianwen/grok(豆包冻结/GLM·Kimi 自愈/DeepSeek 游客票均排除);凭证不入日志 |
+| `token-harvester.service` | `/etc/systemd/system/token-harvester.service` | 提取器 oneshot |
+| `token-harvester.timer` | `/etc/systemd/system/token-harvester.timer` | 每日 07:00+rand30min(Persistent 补跑) |
 | `audio-aware-ml.sh` | `/usr/local/bin/audio-aware-ml.sh` | 播放感知的 ML cpuset 降级(10s 轮询) |
 | `pin-audio-irq.sh` | `/usr/local/bin/pin-audio-irq.sh` | 音频 IRQ 绑核(oneshot,动态找 IRQ 号) |
 | `squeezelite-affinity.conf` | `/etc/systemd/system/squeezelite.service.d/affinity.conf` | squeezelite CPUAffinity=0 + Nice=-10 |
@@ -32,9 +35,10 @@ ssh root@10.10.10.3 'systemctl daemon-reload'
 - `/root/vnc-password.txt`(600,VNC 密码)
 - `/opt/chrome-cdp/profile/`(登录态)、`/opt/aurora-bridge/.runtime/`(桥会话令牌)
 
-## 同步状态基线(2026-08-31)
+## 同步状态基线(2026-09-05)
 
-以上文件均从 NUC 实拉入库;后续任何 NUC systemd/脚本改动**先改本目录**。
+以上文件均从 NUC 实拉入库或本次新建已同步部署(harvester 三件套已上线并注册 timer);
+后续任何 NUC systemd/脚本改动**先改本目录**。
 
 ## NUC 文档与脚本全图(2026-08-31 起,防两仓散乱)
 

@@ -65,7 +65,7 @@
 |---|---|---|
 | 代码唯一源头 | PC `D:\repos\aurora`(git,local-toolfix 分支) | 开发/版本管理在此,改完 push 再换机 |
 | NAS 部署副本 | `/volume2/docker/aurora` | docker build 构建上下文,**非 Drive 同步区**,不含凭证,每次部署由 deploy.sh 清空重建 |
-| 凭证 | `/volume2/docker/aurora/tokens/` | 从同步区 `/volume2/dev/apps/aurora/.runtime/tokens/` 拷入的独立副本,只读挂载 |
+| 凭证 | `/volume2/docker/aurora/tokens/` | 首次部署从同步区拷入的独立副本,只读挂载;**运行期更新通路(2026-09-05 起)**:NUC token-harvester 每日提取推入 + PC keepalive scp(备份)+ NUC doubao-hook,配合容器内 E3 热加载免重启生效。同步区 `/volume2/dev/.../.runtime/` 是 Drive 排除的死水,不作更新源 |
 
 > ⚠️ 不要把代码放 `/volume2/dev`(Drive 同步根),否则镜像回 PC `D:\dev` 污染非代码区。
 > ⚠️ token 用独立副本目录而非直接挂同步区:避免 Drive 同步重置 ACL 导致容器内 nonroot 读不到(参考 kugou 同坑)。
