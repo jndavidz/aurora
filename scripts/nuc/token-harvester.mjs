@@ -35,12 +35,11 @@ const cmdT = (c, method, params, ms = 20000) =>
 //   kind=local   读 localStorage(键按序试)
 //   kind=cookies Network.getAllCookies 过滤域,按 assemble() 组装行
 //   (grok 格式特殊:每行 uid|cookie串,uid = x-userid cookie 值)
-// deepseek 移除(2026-09-05 二次确认):NUC Chrome 的 deepseek 为**游客会话**
-// (页面可对话但未登录,localStorage userToken 92B 单段非 JWT,上游 invalid
-// token;刷新后不变,cookie 无认证项)。**重新启用条件**:在 NUC Chrome 登录
-// deepseek 账号后,确认 userToken 变为多段 JWT 或长度变化,再加回并 live 验证。
-// 有效票(64B)在部署区原值,人工管理。
+// deepseek(2026-09-05 三次修正):网页版改版——localStorage userToken 现存
+// JSON 包裹 {"value":"<64字符token>","__version":"1"},裸发整个字符串即上游
+// invalid token(前两轮"游客票"误判实为未解包)。jsonField: "value" 解包。
 const SITES = [
+  { name: "deepseek", url: "https://chat.deepseek.com/", kind: "local", keys: ["userToken"], file: "deepseek_tokens.txt", jsonField: "value" },
   { name: "minimax", url: "https://agent.minimaxi.com/", kind: "local", keys: ["_token"], file: "minimax_tokens.txt", jwt: true },
   { name: "mimo", url: "https://aistudio.xiaomimimo.com/", kind: "cookies", domain: /xiaomimimo|xiaomi/i, require: "xiaomichatbot_ph", file: "mimo_tokens.txt",
     assemble: (rel) => rel.map((x) => `${x.name}=${x.value}`).join("; ") },
@@ -113,6 +112,16 @@ async function harvestSite(site) {
     if (site.kind === "local") {
       value = await readLocal(c, site.keys);
       if (!value || value.length < 20) throw new Error("no token in localStorage");
+      // 2026-09-05 deepseek 改版兼容:userToken 存 JSON 包裹({"value":...}),
+      // 解包取真 token;裸字符串(旧版)原样使用
+      if (site.jsonField) {
+        try {
+          const parsed = JSON.parse(value);
+          if (parsed && typeof parsed[site.jsonField] === "string" && parsed[site.jsonField]) {
+            value = parsed[site.jsonField];
+          }
+        } catch { /* 非 JSON(旧版裸 token):原样 */ }
+      }
       if (site.jwt && !validJWT(value)) throw new Error("token expired/invalid JWT");
     } else {
       const gr = await cmdT(c, "Network.getAllCookies");
