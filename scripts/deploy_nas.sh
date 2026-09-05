@@ -59,9 +59,11 @@ $LOCAL_DOCKER save "$IMAGE" | $SSH "$DOCKER load" \
   || { echo "✗ 镜像推送失败"; exit 1; }
 echo "   镜像已 load 到 NAS"
 
-echo -e "\033[36m==> 3/5 准备 NAS 部署目录(compose + tokens + publish 脚本)\033[0m"
-# 只传 compose + keeper publish 脚本(源码已编进镜像,无需整包传);清空旧部署源码(保留 tokens/logs/tokens-state)
-tar -czf - docker-compose.nas.yml -C scripts/keeper publish-tokens.sh \
+echo -e "\033[36m==> 3/5 准备 NAS 部署目录(compose + tokens)\033[0m"
+# 只传 compose 文件(源码已编进镜像,无需整包传);清空旧部署源码(保留 tokens/logs/tokens-state)
+# 注:token 更新走 PC 侧 scripts/keeper/push-tokens-from-pc.sh(WSL)与 NUC doubao-hook,
+#     不随 deploy 下发(2026-09-05 修正:原"同步区→部署区"脚本前提不成立,同步区是死水)
+tar -czf - docker-compose.nas.yml \
   | $SSH "
 set -e
 mkdir -p $DEPLOY_DIR/tokens $DEPLOY_DIR/logs $DEPLOY_DIR/tokens-state
@@ -85,10 +87,8 @@ done
 $DOCKER run --rm -v $DEPLOY_DIR/tokens-state:/fix alpine:3.20 chown -R 65532:65532 /fix 2>/dev/null \
   || echo '  ⚠ tokens-state 属主修复失败,池文件回写可能 Permission denied'
 chmod 755 $DEPLOY_DIR/tokens-state 2>/dev/null || true
-# 解压 compose + publish 脚本(G1/E3 闭环:同步区 token → 部署区 → 热加载生效)
+# 解压 compose
 tar -xzf -
-# publish 脚本就位到部署区根并加执行位
-[ -f publish-tokens.sh ] && chmod 755 publish-tokens.sh
 # compose 文件就位
 [ -f docker-compose.nas.yml ] && mv -f docker-compose.nas.yml docker-compose.yml
 echo '  已就位到 $DEPLOY_DIR'

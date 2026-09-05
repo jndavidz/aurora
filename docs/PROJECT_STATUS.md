@@ -89,7 +89,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | P1-35 修复 | doubaoweb/geminweb `nextAccount` unlock→sleep→relock 竞态：改为锁内预标记 `lastUsed=now+wait`（wait>0）或 now（wait≤0），并发 goroutine 无法再绕过限频 |
 | E3 凭证热加载 | deepseekweb `NextToken` 每次先 stat token 文件，mtime 变化即整池重读（keep-last-good：读失败/空文件沿用旧池）；顺带修掉 cursor 无锁竞态（`sync.Mutex`）。minimax/mimo 同日补齐：provider 层 `webClient` 记录 tokenMod，mtime 变更置空重建。keeper scp 重推文件后进程内即时生效，无需重启。测试：deepseekweb `hotreload_test.go`（含 -race）+ provider `hotreload_test.go` |
 | F2 收窄版 | `chatRequestState` struct 替代 toolCalling 系列 6 指针输出参数（`fba5b63`）。澄清语义：仅 clientState 是 in-out，其余纯输入。零业务逻辑变更，S1 核心路径后续改动的复利点。G4 的"拆 handler"以此为起点自然推进 |
-| G1 publish 最小版 | `scripts/keeper/publish-tokens.sh`（`7080e2d`）：同步区 → 部署区 token 同步（幂等/原子覆盖/空文件保留/JSON 防呆），配合 E3 实现"PC 补票 → 容器内即时生效"闭环。GLM/Kimi 排除（tokens-state 进程自愈）。NAS 实测通过。act（CDP 自动重抓）维持留空：现有 probe+alert+人工响应已构成实际闭环 |
+| G1 push 修正版 | ~~publish-tokens.sh（同步区→部署区）~~ **方向错误已撤销**（`7080e2d`→事故→撤销）：误以为 NAS 同步区是 PC 更新镜像，实际 **Drive `black_prefix="."` 排除 `.runtime` 隐藏目录，同步区是死水快照**——首轮运行把部署区 5 文件（minimax/mimo/access/session/doubao）覆盖为旧版。发现后从 PC 权威源（keepalive 落点）恢复，md5 全对齐 + live 验证正常。修正版 `scripts/keeper/push-tokens-from-pc.sh`：**PC（WSL）→ NAS 部署区**直推（幂等/scp -O/排除 doubao——权威在 NUC hook），覆盖真实缝隙：DeepSeek/Grok/千问人工重抓后免手动 scp。教训：群晖 sshd 的 SFTP 子系统不兼容需 `scp -O`；doubao 模板当前为 PC 旧快照，待解冻时 hook 捕获自动修正 |
 | G3 前置 golden | so/turnstile VM 零测试 → `golden_test.go` ×2（09-05）：微型字节码锁定核心 opcode 语义（赋值/拷贝/加法拼接/xor/base64/JSON/删元素/子队列）+ 端到端 success 字节级快照 + P0-4 无限循环终止哨兵。首轮失败即澄清关键语义：**操作类 opcode 参数均为寄存器引用，字面值须先 op2 入寄存器**。真实 dx 样本待 live 抓取后可叠加全流程快照 |
 | G4 第一步 | `internal/handler/tool_calling.go`（09-05）：toolCalling 全集（chatRequestState + 双入口 + 共享收集器 + looksLike* 分类器 + 输出辅助）自 chat_handler.go/shared.go 原样迁出，纯移动零逻辑变更。handler 内chat 路径文件收敛为：chat_handler（入口编排）/ tool_calling（工具调用）/ shared（请求基础设施） |
 
@@ -139,7 +139,7 @@ Phase 0 已修 11 处清单（防重复修）：prooftoken diffLen 上界、api/
 
 - 剩余 >30% 不动作；30%~10% 触发保活（refresh 优先）；≤10% 保活+告警；已失效告警+摘除转兜底
 - credential-keeper 四件套：**probe**（每 6h，随时）/ **act**（refresh 随时、CDP 型 22:00–24:00、人工型只告警）/ **publish**（scp 推 NAS）/ **alert**（日志+webhook，去重）
-  - **publish 最小版已实装（09-05）**：`scripts/keeper/publish-tokens.sh` 部署于 NAS 部署区，Drive 同步区 token → 部署区 rsync 式同步（幂等/原子覆盖/空文件保留/JSON 防呆），配合 E3 热加载实现"PC 补票 → 容器内即时生效"闭环。GLM/Kimi 明确排除（tokens-state 进程自愈，防旧文件覆盖新池）。调度：DSM 任务计划建议每 15 分钟（群晖不读用户 crontab，需 root 注册 /etc/crontab）
+  - **push 修正版（09-05，事故后重做）**：`scripts/keeper/push-tokens-from-pc.sh` 在 **PC（WSL）**运行，本地 `.runtime/tokens/`（keepalive 代取 + 人工重抓落点）→ NAS 部署区直推（幂等/scp -O）。⚠ 首版"NAS 同步区→部署区"方向错误已撤销——Drive 排除 `.runtime` 隐藏目录，同步区是死水；**doubao 明确排除**（权威在 NUC doubao-hook）。DSM 定时任务无需注册；DeepSeek/Grok/千问重抓后手动跑一次即可
 - 回写通路选型：scp + 热加载 ✅（推荐）；POST /admin ⚠️；NFS 谨慎（群晖 ACL 前科）
 - **热加载现状（09-05 E3 全量完成）**：deepseekweb（`NextToken` 内 mtime 检查+整池重读）、minimax/mimo（provider 层 `webClient` mtime 变更重建 client）均已支持；
   GLM/Kimi 靠 refresh 续期自愈。keeper publish 实装后对所有通道即时生效，无需重启
@@ -203,4 +203,4 @@ NAS(10.10.10.2) aurora 容器 :65432 ──┬── NUC(10.10.10.3) Chrome CDP:
 | 09-04 | workbuddy 融合取消（定位收敛纯对话反代）；拟真人仅限测试；C1 四家 TLS 部署；E1/E2/G2 落地；豆包走桥（路线1） |
 | 09-05 | 模型 id 全量小写 `-` 化部署；豆包滑块→登出→限频，**冷冻** |
 | 09-05（下午） | E2 收口 + 遗留缺陷清零（P0-13/P1-4/P1-7/P1-35）+ C2/C3/N3 反检测加固；指纹参数外置为 `SENTINEL_SDK_VERSION`/`OAI_BUILD_NUMBER` |
-| 09-05（晚） | F2 收窄版（chatRequestState）；G1 publish 最小版；G3 前置 golden（so/turnstile VM 语义快照）——四项大重构中可安全推进部分全部落地，F1 降级暂不做 |
+| 09-05（晚） | F2 收窄版（chatRequestState）；G1 publish 方向事故→撤销→修正为 PC 侧 push（Drive 排除 `.runtime` 的教训入库）；G3 前置 golden（so/turnstile VM 语义快照）；G4 第一步（toolCalling 拆分） |
