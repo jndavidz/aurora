@@ -48,7 +48,7 @@
 | 项 | 提交 | 说明 |
 |---|---|---|
 | E1 错误分类状态机 | `3003f86` | `ClassifyFailure`（纯状态码）+ `Pool.ReportResult`（冷却/回池）+ Acquire 跳过冷却 |
-| E2 apierrors 双写修复 | `3003f86` | `MissingParam` 单次写入 + 回归测试；**handler 60 处收口仍待做** |
+| E2 apierrors 双写修复 | `3003f86` | `MissingParam` 单次写入 + 回归测试;**handler+provider 全部收口已完成**(09-05:handler 50+ 处 + provider 155 处/29 文件,502→api_error、404→model_not_found,OpenAI 标准对象格式) |
 | G2 provider 熔断 | `2fbe50d` | `ProviderBreaker`（3 次≥500 摘除 60s 半开恢复）；Resolve 跳过熔断；handler defer 记录 |
 | N1 测试修复 | `2c91bb3` | provider 包 3 个失败（97181ee 格式变更遗留） |
 | N4 GLM 搜索开关 | `bab60f0` | `GLM_WEB_SEARCH`（默认关） |
