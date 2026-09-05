@@ -28,8 +28,10 @@ type minimaxModel struct {
 type Minimax struct {
 	cfg    *config.Config
 	client *minimaxweb.Client
-	models []Model
-	byID   map[string]*minimaxModel
+	// E3(2026-09-05)凭证热加载:记录 token 文件 mtime,变化即重建 client
+	tokenMod time.Time
+	models   []Model
+	byID     map[string]*minimaxModel
 	// coding 限频(chat 不限)
 	limiter *CodingLimiter
 }
@@ -84,7 +86,16 @@ func (d *Minimax) Handles(model string) bool {
 }
 
 // webClient 惰性构造客户端(token 池来自文件,每行一个 JWT)。
+// E3:每次调用先检查 token 文件 mtime,变化即置空重建(keeper scp 重推 JWT
+// 后进程内生效;重建丢弃 TLS 连接池,推送频率低可接受)。stat 失败(文件暂时
+// 不可见)沿用旧池。d.client/d.tokenMod 无锁 —— 与其他 provider 一致,并发
+// 双构造仅为良性浪费。
 func (d *Minimax) webClient() *minimaxweb.Client {
+	if d.client != nil {
+		if fi, err := os.Stat(d.cfg.MinimaxWebTokens); err == nil && !fi.ModTime().Equal(d.tokenMod) {
+			d.client = nil
+		}
+	}
 	if d.client == nil {
 		data, err := os.ReadFile(d.cfg.MinimaxWebTokens)
 		if err != nil {
@@ -104,6 +115,9 @@ func (d *Minimax) webClient() *minimaxweb.Client {
 			agentID = minimaxweb.DefaultAgentID
 		}
 		d.client = minimaxweb.NewClient(tokens, agentID, d.cfg.MinimaxDeviceID, d.cfg.MinimaxUserID)
+		if fi, statErr := os.Stat(d.cfg.MinimaxWebTokens); statErr == nil {
+			d.tokenMod = fi.ModTime()
+		}
 	}
 	return d.client
 }

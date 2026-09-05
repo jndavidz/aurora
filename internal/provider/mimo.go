@@ -29,8 +29,10 @@ type mimoModel struct {
 type Mimo struct {
 	cfg    *config.Config
 	client *mimoweb.Client
-	models []Model
-	byID   map[string]*mimoModel
+	// E3(2026-09-05)凭证热加载:记录 token 文件 mtime,变化即重建 client
+	tokenMod time.Time
+	models   []Model
+	byID     map[string]*mimoModel
 	// coding 限频(chat 不限)
 	limiter *CodingLimiter
 }
@@ -87,7 +89,14 @@ func (d *Mimo) Handles(model string) bool {
 }
 
 // webClient 惰性构造客户端(token 池来自文件,每行一个 xiaomichatbot_ph)。
+// E3:每次调用先检查 token 文件 mtime,变化即置空重建(keeper scp 重推后
+// 进程内生效)。stat 失败沿用旧池;无锁与其他 provider 一致(良性竞态)。
 func (d *Mimo) webClient() *mimoweb.Client {
+	if d.client != nil {
+		if fi, err := os.Stat(d.cfg.MimoWebTokens); err == nil && !fi.ModTime().Equal(d.tokenMod) {
+			d.client = nil
+		}
+	}
 	if d.client == nil {
 		data, err := os.ReadFile(d.cfg.MimoWebTokens)
 		if err != nil {
@@ -103,6 +112,9 @@ func (d *Mimo) webClient() *mimoweb.Client {
 			return nil
 		}
 		d.client = mimoweb.NewClient(tokens)
+		if fi, statErr := os.Stat(d.cfg.MimoWebTokens); statErr == nil {
+			d.tokenMod = fi.ModTime()
+		}
 	}
 	return d.client
 }

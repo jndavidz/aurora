@@ -87,7 +87,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | P1-4 修复 | grokweb 主读循环每帧刷新 120s ReadDeadline，半开 TCP 不再永久挂起 goroutine/fd |
 | P1-7 修复 | qianwenweb 差值输出校验 HasPrefix（同 P1-6 glmweb 模式），上游重排引用时整体替换而非重复输出 |
 | P1-35 修复 | doubaoweb/geminweb `nextAccount` unlock→sleep→relock 竞态：改为锁内预标记 `lastUsed=now+wait`（wait>0）或 now（wait≤0），并发 goroutine 无法再绕过限频 |
-| E3 凭证热加载 | deepseekweb `NextToken` 每次先 stat token 文件，mtime 变化即整池重读（keep-last-good：读失败/空文件沿用旧池）；顺带修掉 cursor 无锁竞态（`sync.Mutex`）。keeper scp 重推文件后进程内即时生效，无需重启。测试：`hotreload_test.go`（热加载/keep-last-good/并发 race 三用例） |
+| E3 凭证热加载 | deepseekweb `NextToken` 每次先 stat token 文件，mtime 变化即整池重读（keep-last-good：读失败/空文件沿用旧池）；顺带修掉 cursor 无锁竞态（`sync.Mutex`）。minimax/mimo 同日补齐：provider 层 `webClient` 记录 tokenMod，mtime 变更置空重建。keeper scp 重推文件后进程内即时生效，无需重启。测试：deepseekweb `hotreload_test.go`（含 -race）+ provider `hotreload_test.go` |
 
 ---
 
@@ -136,9 +136,8 @@ Phase 0 已修 11 处清单（防重复修）：prooftoken diffLen 上界、api/
 - 剩余 >30% 不动作；30%~10% 触发保活（refresh 优先）；≤10% 保活+告警；已失效告警+摘除转兜底
 - credential-keeper 四件套：**probe**（每 6h，随时）/ **act**（refresh 随时、CDP 型 22:00–24:00、人工型只告警）/ **publish**（scp 推 NAS）/ **alert**（日志+webhook，去重）
 - 回写通路选型：scp + 热加载 ✅（推荐）；POST /admin ⚠️；NFS 谨慎（群晖 ACL 前科）
-- **热加载现状（09-05 E3）**：deepseekweb 已支持（`NextToken` 内 mtime 检查+整池重读）；GLM/Kimi 靠 refresh 续期自愈；
-  **minimax/mimo 同为静态池（构造一次后缓存）但暂未加热加载**——keeper 原型 act/publish 留空，无实际受益者，
-  待 keeper 实装 publish 时按 deepseekweb 模式补齐（provider 层 webClient 记录 tokenFile+lastMod，mtime 变更重建 client 即可）
+- **热加载现状（09-05 E3 全量完成）**：deepseekweb（`NextToken` 内 mtime 检查+整池重读）、minimax/mimo（provider 层 `webClient` mtime 变更重建 client）均已支持；
+  GLM/Kimi 靠 refresh 续期自愈。keeper publish 实装后对所有通道即时生效，无需重启
 - 失败退避 1min→5min→30min；需浏览器的重试排次日窗口，不当夜反复
 
 ### 3.4 toolcall 双协议活知识（AUDIT §6.5）
