@@ -16,6 +16,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"aurora/httpclient/factory"
 )
@@ -32,6 +34,15 @@ type Client struct {
 	client  factory.Client
 	tokens  []string
 	cursor  int
+
+	// E3(2026-09-05)凭证热加载:GLM/Kimi 靠 refresh 续期自愈,deepseek 的
+	// userToken 是静态的,keeper scp 重推 tokens 文件后必须重读文件才生效。
+	// NextToken 每次先 stat 文件,mtime 变化即整池重读(keep-last-good:
+	// stat/读文件失败沿用旧池)。mu 同时保护 tokens/cursor/lastMod
+	// (cursor 原本无锁,handler 并发下本就有竞态,顺带修掉)。
+	tokenFile string
+	lastMod   time.Time
+	mu        sync.Mutex
 }
 
 // NewClient 构造客户端。tokenFile 为空时 tokens 为空(由调用方逐 token 传入)。
@@ -46,6 +57,7 @@ func NewClient(baseURL, tokenFile, proxyURL string) (*Client, error) {
 			Upgradable: true,                // 保留:AURORA_LEGACY_IDENTITY=1 可回退 Go 原生
 			ProxyURL:   proxyURL,            // 代理语义由工厂内化(clone DefaultTransport + 注入)
 		}),
+		tokenFile: tokenFile,
 	}
 	if tokenFile != "" {
 		tokens, err := loadTokens(tokenFile)
@@ -53,18 +65,47 @@ func NewClient(baseURL, tokenFile, proxyURL string) (*Client, error) {
 			return nil, err
 		}
 		c.tokens = tokens
+		if fi, statErr := os.Stat(tokenFile); statErr == nil {
+			c.lastMod = fi.ModTime()
+		}
 	}
 	return c, nil
 }
 
 // NextToken 轮询取下一个 token;池空时返回空串。
+// 每次调用先检查 token 文件 mtime,变化即热加载(E3)。
 func (c *Client) NextToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reloadIfChangedLocked()
 	if len(c.tokens) == 0 {
 		return ""
 	}
 	t := c.tokens[c.cursor%len(c.tokens)]
 	c.cursor++
 	return t
+}
+
+// reloadIfChangedLocked 检查 tokenFile mtime,变化则整池重读。
+// 调用方必须已持有 c.mu。任何错误保持旧池不动(keep-last-good)。
+func (c *Client) reloadIfChangedLocked() {
+	if c.tokenFile == "" {
+		return
+	}
+	fi, err := os.Stat(c.tokenFile)
+	if err != nil {
+		return // 文件暂时不可见(keeper 原子替换窗口等):沿用旧池
+	}
+	if fi.ModTime().Equal(c.lastMod) {
+		return
+	}
+	tokens, err := loadTokens(c.tokenFile)
+	if err != nil || len(tokens) == 0 {
+		return // 读失败/读到空:沿用旧池,下次请求再试
+	}
+	c.tokens = tokens
+	c.cursor = 0
+	c.lastMod = fi.ModTime()
 }
 
 func loadTokens(path string) ([]string, error) {
