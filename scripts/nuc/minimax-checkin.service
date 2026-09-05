@@ -1,0 +1,12 @@
+[Unit]
+Description=MiniMax daily checkin (signin/claim via API, uses harvester state token)
+After=network-online.target token-harvester.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node /opt/credential-keeper/minimax-checkin.mjs
+# 退出码:0=签到成功或已签过;1=失败(次日重试,claim 接口本身幂等)
+
+[Install]
+WantedBy=multi-user.target

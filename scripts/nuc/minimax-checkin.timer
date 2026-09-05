@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily MiniMax checkin (09:00 + rand 30min, after token-harvester 08:15)
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+RandomizedDelaySec=1800
+Persistent=true
+Unit=minimax-checkin.service
+
+[Install]
+WantedBy=timers.target

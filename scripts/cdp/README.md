@@ -26,7 +26,7 @@
 | `grab-{doubao-js,kimi,mimo}.mjs` | 抓取各站前端 JS / 页面资源 |
 | `doubao-hook.mjs` / `test-…` 之外的豆包辅助 | 豆包站点辅助 |
 | `refresh-tokens.mjs` | 唤醒 Chrome 从页面代取凭证（见 `docs/CREDENTIALS.md`；**2026-09-05 起被 NUC token-harvester 接管,降级为备份链路**） |
-| `minimax-checkin.mjs` | MiniMax 签到 |
+| `minimax-checkin.mjs` | MiniMax 签到(**2026-09-05 起由 NUC minimax-checkin.timer 接管,此份为源**;权威副本 scripts/nuc/) |
 | `gemini-replay.mjs` / `start-gemini.ps1` / `show-gemini.ps1` | Gemini 请求回放 / 前台启动 / 唤出窗口 |
 
 ## 一次性实验（archive/，勿引用）

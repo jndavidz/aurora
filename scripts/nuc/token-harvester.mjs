@@ -16,6 +16,8 @@
 import http from "node:http";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 const { cdp } = await import(new URL("./cdp-helper.mjs", import.meta.url).href);
 
@@ -157,6 +159,18 @@ function pushToken(file, content) {
   execSync(`ssh -o BatchMode=yes ${NAS} "chmod 644 '${remote}'"`, { timeout: 15000 });
 }
 
+// 本地 state 落盘:供同机后续任务使用(如 minimax-checkin 签到读当日 token),
+// 免得签到再去 NAS 拉。state 属 600,与凭证红线一致。
+const STATE_DIR = new URL("./state/", import.meta.url).pathname;
+function saveState(file, content) {
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STATE_DIR, file), content + "\n", { mode: 0o600 });
+  } catch (e) {
+    console.log(`[harvest] state write failed for ${file}: ${e.message}`);
+  }
+}
+
 console.log("[harvest]", new Date().toISOString(), "start");
 let okAll = true;
 for (const site of SITES) {
@@ -164,10 +178,12 @@ for (const site of SITES) {
     const value = await harvestSite(site);
     const md5 = createHash("md5").update(value + "\n").digest("hex");
     if (md5 === remoteMd5(site.file)) {
+      saveState(site.file, value); // 幂等也要保证 state 最新(签到读它)
       console.log(`[harvest] ${site.name}: unchanged(幂等跳过)`);
       continue;
     }
     pushToken(site.file, value);
+    saveState(site.file, value);
     console.log(`[harvest] ${site.name}: OK len=${value.length} → ${site.file}(已推 NAS,E3 热加载生效)`);
   } catch (e) {
     okAll = false;

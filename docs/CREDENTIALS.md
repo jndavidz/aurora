@@ -26,7 +26,7 @@
 | **Gemini**(CDP 桥) | Google 登录 cookie(profile) | Chrome profile 磁盘 | **~399 天滚动**(实测 2026-08-14 抓,至 2027-09-18) | **真浏览器全自动**:桥每次请求自捕获刷新会话令牌;30 分钟无活动休眠、请求自动唤醒;崩溃后恢复标签页令牌仍在;异常失效时"页面发一条消息"自愈;PC 每周保活任务见文末 |
 | | 会话令牌 at/SNlM6e/f.sid | `.runtime/bridge/gemini_session.json` | 会话级(随页面实例轮换) | 同上 |
 | **Claude**(CDP 桥) | 登录 cookie | Chrome profile 磁盘 | **~28 天滚动**(实测 2026-08-14,至 2026-09-11) | 全自动:模板/客户端头每次请求自刷新;**无会话令牌**;5h+7d 双限额实时监控与预警;PC 每周保活任务见文末 |
-| **MiniMax** | token(JWT) | `minimax_tokens.txt` | **~38 天**(实测 exp) | **PC 周保活代取** + **每日自动签到**(`minimax-checkin.mjs` 并入每日任务,400~1000 积分/天,30 天有效,持续补充 Token Plan 配额);JWT 38 天/登录 cookie 最长 60 天,到期前预警,需人工重新登录 |
+| **MiniMax** | token(JWT) | `minimax_tokens.txt` | **~38 天**(实测 exp) | **NUC harvester 每日提取** + **每日签到迁 NUC**(`minimax-checkin.timer` 09:00+rand30min,harvester 后用当日新票,实测 day4 +1000 积分);JWT 38 天/登录 cookie 最长 60 天,到期前预警,需人工重新登录 |
 | **Mimo** | Cookie 串(ph/serviceToken/userId) | `mimo_tokens.txt` | **~30 天固定,不滚动**(实测 2026-08-14 抓,至 2026-09-13) | **PC 周保活代取**:cookie 固定 30 天,代取只省手动抓取;到期前预警,仍需每月人工登录一次 |
 | **豆包** | cookie + URL 参数 + body 会话模板 | `doubao_accounts.json` | **2026-08-23 改版:completion 已无 `a_bogus` 签名**(URL/headers/cookie 均无,页面请求无签名 200) | **自动捕获(2026-08-23)**:`doubao-hook.mjs`(keeper 集成)在页面注入 fetch hook,捕获每次真实 completion 请求(query+body)自动更新模板;aurora 每次请求重读、只替换 prompt —— 无签名、无时效问题,模板永远当前版本。逆向记录:`bdms.frontierSign` 只出 X-Bogus(16)不足以过业务层;抖音开源算法 makeABogus(180)不稳定;页面已取消签名 |
 | ~~元宝~~ | — | — | — | **已关停**(2026-08-14 风控冻结) |
@@ -69,9 +69,9 @@
   (平时零开销);**≥ 7 天**才随机延迟 0~15.5h 后执行 —— 实际时刻每天不同,
   落在 08:30~24:00 之间,不固定;成功才回写状态,失败或当天 PC 关机,
   次日自动补跑。
-- **2026-09-05 状态**:MiniMax/Mimo 代取与 scp 推送已由 NUC harvester 接管
-  (每日,更及时);本任务对这两站成为**冗余备份**(md5 幂等,不冲突)。
-  gemini/claude 问候保活(keepalive-node.mjs)面向 PC 备份桥,维持。
+- **2026-09-05 状态**:任务计划已由用户删除。MiniMax/Mimo 代取与 scp 推送由
+  NUC harvester 接管;MiniMax 签到也已迁 NUC(minimax-checkin.timer 09:00)。
+  本节降级为历史记录(gemini/claude PC 备份桥会话保留于 `.runtime/bridge/`)。
 - 执行动作(三步,全部成功才回写状态,失败次日重试):
   1. `scripts/cdp/refresh-tokens.mjs`:唤醒 Chrome,从页面代取 **MiniMax**(
      `localStorage._token`)/ **Mimo**(登录 cookie)凭证,回写本地 token 文件

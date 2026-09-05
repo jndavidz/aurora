@@ -16,7 +16,10 @@ NUC(nuc-hifi,10.10.10.3)上所有 systemd 单元与运维脚本的**权威副本
 | `credential-keeper.timer` | `/etc/systemd/system/credential-keeper.timer` | 每日 06:30+rand30min |
 | `token-harvester.mjs` | `/opt/credential-keeper/token-harvester.mjs` | **G1 统一凭证提取器(2026-09-05)**:CDP 从本机 Chrome 读各站 localStorage/cookie,md5 幂等推 NAS 部署区;站点 minimax/mimo/qianwen/grok(豆包冻结/GLM·Kimi 自愈/DeepSeek 游客票均排除);凭证不入日志 |
 | `token-harvester.service` | `/etc/systemd/system/token-harvester.service` | 提取器 oneshot |
-| `token-harvester.timer` | `/etc/systemd/system/token-harvester.timer` | 每日 07:00+rand30min(Persistent 补跑) |
+| `token-harvester.timer` | `/etc/systemd/system/token-harvester.timer` | 每日 08:15+rand30min(对齐 NUC 开机,Persistent 补跑) |
+| `minimax-checkin.mjs` | `/opt/credential-keeper/minimax-checkin.mjs` | MiniMax 每日签到(纯 Node API,签名体系同对话;token 读 harvester state) |
+| `minimax-checkin.service` | `/etc/systemd/system/minimax-checkin.service` | 签到 oneshot |
+| `minimax-checkin.timer` | `/etc/systemd/system/minimax-checkin.timer` | 每日 09:00+rand30min(harvester 之后,用当日新票) |
 | `audio-aware-ml.sh` | `/usr/local/bin/audio-aware-ml.sh` | 播放感知的 ML cpuset 降级(10s 轮询) |
 | `pin-audio-irq.sh` | `/usr/local/bin/pin-audio-irq.sh` | 音频 IRQ 绑核(oneshot,动态找 IRQ 号) |
 | `squeezelite-affinity.conf` | `/etc/systemd/system/squeezelite.service.d/affinity.conf` | squeezelite CPUAffinity=0 + Nice=-10 |
