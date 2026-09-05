@@ -108,9 +108,10 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 			}
 			for _, c := range part.Content {
 				switch c.Type {
-				case "think":
+					case "think":
 					if c.Think != "" {
-						think = c.Think
+						// 同 text:分片字面 \n 归一(与结束帧真换行表示对齐)
+						think = strings.ReplaceAll(c.Think, "\\n", "\n")
 					}
 				case "text":
 					if c.Text != "" {
@@ -126,6 +127,11 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 		}
 		// 搜索引用标记过滤(全量重发模式下直接清洗累计文本,差值自然干净)
 		text = turnSearchRe.ReplaceAllString(text, "")
+		// 换行归一(2026-09-05):GLM 上游流式分片里的换行是【字面 \n】两字符,
+		// 而结束帧重发的完整文本用真换行 —— 两种表示不一致会让 HasPrefix 失效,
+		// 结束帧全文被当成增量再发一遍(客户端看到末尾重复+字面 \n)。
+		// 帧级归一后两阶段前缀关系成立,重复消失。
+		text = strings.ReplaceAll(text, "\\n", "\n")
 		// 差值输出增量(全量重发,只发新增部分)。
 		// P1-6(2026-09-05):校验 HasPrefix——上游重写/回滚已输出段落时(如联网搜索
 		// 重排引用),累计文本不再是 lastText 的延长,TrimPrefix 会把整段当增量重复
@@ -139,7 +145,7 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 		} else if think != lastReasoning {
 			res.Reasoning = think
 			lastReasoning = think
-			onDelta(Delta{Reasoning: "\\n" + think})
+			onDelta(Delta{Reasoning: "\n" + think}) // 真换行分隔(流式无法撤回已发,重发全文兜底)
 		}
 		if strings.HasPrefix(text, lastText) {
 			if d := strings.TrimPrefix(text, lastText); d != "" {
@@ -150,7 +156,7 @@ func ConsumeStream(r io.Reader, onDelta func(Delta)) StreamResult {
 		} else if text != lastText {
 			res.Text = text
 			lastText = text
-			onDelta(Delta{Text: "\\n" + text})
+			onDelta(Delta{Text: "\n" + text}) // 真换行分隔
 		}
 		// 原生 tool_calls:全量重发,仅在内容变化时上报(去重)。
 		if nativeTC != nil && !nativeTC.IsFinish() {

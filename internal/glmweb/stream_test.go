@@ -110,3 +110,44 @@ func TestConsumeStreamEmpty(t *testing.T) {
 		t.Fatal("Err = empty, want empty stream error")
 	}
 }
+
+// TestConsumeStreamLiteralNewlineDedup 两阶段去重:GLM 上游流式分片里换行是
+// 字面 \n 两字符,结束帧重发完整文本用真换行 —— 两种表示不一致曾让 HasPrefix
+// 失效,结束帧全文被当增量重发(线上:末尾整段重复 + 字面 \n 直通客户端)。
+// 帧级归一后两阶段前缀关系成立,重复消失。
+func TestConsumeStreamLiteralNewlineDedup(t *testing.T) {
+	// 帧内 \\n(JSON 转义后)= 字面 \n 两字符(上游分片形态);
+	// 帧 4 的 \n(JSON 转义后)= 真换行(结束帧完整文本形态)。
+	sse := `data: {"id":"1","parts":[{"role":"assistant","content":[{"type":"text","text":"您好!"}]}]}
+
+data: {"id":"2","parts":[{"role":"assistant","content":[{"type":"text","text":"您好!\\n我是"}]}]}
+
+data: {"id":"3","parts":[{"role":"assistant","content":[{"type":"text","text":"您好!\\n我是智谱助手。"}]}]}
+
+data: {"id":"4","parts":[{"role":"assistant","content":[{"type":"text","text":"您好!\n我是智谱助手。"}]}]}
+
+data: [DONE]
+`
+	var texts []string
+	res := ConsumeStream(strings.NewReader(sse), func(d Delta) {
+		if d.Text != "" {
+			texts = append(texts, d.Text)
+		}
+	})
+	if !res.Finished {
+		t.Fatal("Finished = false, want true")
+	}
+	joined := strings.Join(texts, "")
+	want := "您好!\n我是智谱助手。"
+	if joined != want {
+		t.Fatalf("拼接输出 = %q, want %q", joined, want)
+	}
+	// 字面 \n 不得直通客户端
+	if strings.Contains(joined, "\\n") {
+		t.Fatalf("输出含字面 \\n:%q", joined)
+	}
+	// 结束帧(帧 4)与归一后的累计全等 → 差值为空,不产生重复 delta
+	if len(texts) != 3 {
+		t.Fatalf("delta count = %d, want 3(帧4 应幂等无增量): %q", len(texts), texts)
+	}
+}
