@@ -26,7 +26,7 @@ import (
 // 复用 GeminiCDP 的全部转发/桥池熔断/自动唤醒/限频逻辑(仅模型目录与名字不同)。
 // 桥地址默认复用 GEMINI_CDP_URL(同一桥服务多 provider)。
 //
-// 模型:gpt-5-6 / gpt-5-6-mini(用户直接以这两个 id 请求;aurora 原样转给桥,
+// 模型:gpt-5.6 / gpt-5.6-mini(用户直接以这两个 id 请求;aurora 原样转给桥,
 // 桥侧 chatgpt adapter 以 "gpt-" 前缀特判)。内部以 "-chat" 后缀注册以满足基类
 // newCdpBase 的后缀约定,对外(/v1/models)与转发时剥除该后缀。
 type ChatgptCDP struct {
@@ -39,7 +39,9 @@ type ChatgptCDP struct {
 // FenceParser 解析 <tool_call> → 标准 OpenAI tool_calls。
 // 可行性实测见 docs/CHATGPT_TOOL_BRIDGE.md(网页模型遵守协议、DOM 提取保真、
 // 规则 6 压制网页原生 Python 工具)。
-var defaultChatgptCDPModels = []string{"gpt-5-6-chat", "gpt-5-6-mini-chat", "gpt-coding"}
+// "auto" 是 ChatGPT 默认模型(用户不指定具体 gpt 时走它),同样经桥转发;
+// 因不带 gpt- 前缀,不走 newCdpBase 的 prefix 过滤,在 Handles/Models 里特判。
+var defaultChatgptCDPModels = []string{"gpt-5.6-chat", "gpt-5.6-mini-chat", "gpt-coding"}
 
 // NewChatgptCDP 构造 ChatGPT CDP 桥 provider。桥地址默认复用 GEMINI_CDP_URL
 // (同一桥服务多 provider),也可用 CHATGPT_CDP_URL 单独指定。
@@ -51,18 +53,26 @@ func NewChatgptCDP(cfg *config.Config) *ChatgptCDP {
 	models := defaultChatgptCDPModels
 	if !cfg.CodingEnabled {
 		// coding 封存(2026-09-02):gpt-coding 不注册,/v1/models 不暴露
-		models = []string{"gpt-5-6-chat", "gpt-5-6-mini-chat"}
+		models = []string{"gpt-5.6-chat", "gpt-5.6-mini-chat"}
 	}
 	base := newCdpBase(cfg, urlList, models, "gpt-", "openai",
 		NewCodingLimiter(2*time.Second, 2*time.Second)) // ChatGPT 免费账号周限额,基础 2s
+	// auto 是 ChatGPT 默认模型(用户不指定具体 gpt 时走它),同样经桥转发;
+	// 因不带 gpt- 前缀,newCdpBase 的 prefix 过滤会挡掉,这里手动注册进 byID/models,
+	// 使 Handles / ChatCompletions / Responses 统一按 chat 变体走桥(auto 是对话模型)。
+	base.byID[chatgptAutoModel] = "chat"
+	base.models = append(base.models, Model{ID: chatgptAutoModel, OwnedBy: "openai", Caps: []Capability{CapWebSearch, CapReasoning}})
 	return &ChatgptCDP{base}
 }
 
-// Name 覆盖嵌入的 GeminiCDP.Name()。
-func (d *ChatgptCDP) Name() string { return "openai" }
+// chatgptAutoModel 是 ChatGPT 默认模型标识,桥侧原生支持(清洗逻辑含 auto)。
+const chatgptAutoModel = "auto"
 
-// Handles 同时接受 "gpt-5-6" 与内部 "gpt-5-6-chat" 形态。
+// Handles 同时接受 "gpt-5.6" 与内部 "gpt-5.6-chat" 形态,以及 "auto"(ChatGPT 默认)。
 func (d *ChatgptCDP) Handles(model string) bool {
+	if model == chatgptAutoModel {
+		return true
+	}
 	if _, ok := d.byID[model]; ok {
 		return true
 	}
@@ -71,6 +81,9 @@ func (d *ChatgptCDP) Handles(model string) bool {
 	}
 	return false
 }
+
+// Name 覆盖嵌入的 GeminiCDP.Name()。
+func (d *ChatgptCDP) Name() string { return "openai" }
 
 // Models 对外暴露不带 -chat 后缀的真实模型 id。
 func (d *ChatgptCDP) Models() []Model {
@@ -168,7 +181,7 @@ func (d *ChatgptCDP) codingCompletions(c *gin.Context, req *official.APIRequest)
 func (d *ChatgptCDP) emitCodingCompletions(c *gin.Context, req *official.APIRequest, fullText string, calls []official.ToolCall) {
 	model := req.Model
 	if model == "" {
-		model = "gpt-5-6"
+		model = "gpt-5.6"
 	}
 	cleanText := toolcall.StripFencedBlocks(fullText)
 	if !req.Stream {

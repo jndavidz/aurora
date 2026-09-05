@@ -11,13 +11,13 @@ import (
 // 未映射的模型返回 ""(调用方不输出 friendly_name 字段)。
 var friendlyModelNames = map[string]string{
 	"auto":              "Auto",
-	"gpt-5-6":           "GPT-5.6",
-	"gpt-5-6-mini":      "GPT-5.6 Mini",
+	"gpt-5.6":           "GPT-5.6",
+	"gpt-5.6-mini":      "GPT-5.6 Mini",
 	"deepseek-v4-flash": "DeepSeek V4 Flash",
 	"deepseek-v4-pro":   "DeepSeek V4 Pro",
 	"glm-flash":         "GLM-5.3 Flash",
 	"kimi":              "Kimi",
-	"Qwen3.8-Max":       "Qwen3.8 Max",
+	"qwen-3.8-max":       "Qwen3.8 Max",
 	"doubao":            "豆包",
 	"gemini-3-flash":    "Gemini 3 Flash",
 	"claude-sonnet-5":   "Claude Sonnet 5",

@@ -265,7 +265,7 @@ curl --location 'http://你的服务器ip:8080/v1/models' \
 --header 'Authorization: Bearer access_token'
 ```
 
-返回聚合目录：ChatGPT（按 NUC 桥实测 slug：`auto` / `gpt-5-6` / `gpt-5-6-mini`）+ 各 provider 模型（带 `capabilities` 能力标注）。
+返回聚合目录：ChatGPT（按 NUC 桥实测 slug：`auto` / `gpt-5.6` / `gpt-5.6-mini`）+ 各 provider 模型（带 `capabilities` 能力标注）。
 
 实际可用模型以该端点返回为准；provider 仅在对应 token 池/桥地址配置时才注册。
 

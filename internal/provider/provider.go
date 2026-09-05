@@ -165,6 +165,20 @@ func normalizeModelID(s string) string {
 	return string(b)
 }
 
+// upstreamSlug 是"aurora 对外暴露 id → 上游真实 slug"的唯一映射点。
+// 大多数 provider 上游不认 model 字段(走内部模板/assistant_id),或上游 slug
+// 与暴露 id 完全一致(如 deepseek),无需映射。仅当 provider 把 model 直接透传
+// 上游、且上游大小写/格式敏感时才需在此登记(目前仅千问)。
+// 未知 id 原样返回(保底,正常不会走到)。
+func upstreamSlug(exposedID string) string {
+	switch exposedID {
+	case "qwen-3.8-max":
+		return "Qwen3.8-Max" // 千问上游大小写敏感,只认 Qwen3.8-Max
+	default:
+		return exposedID
+	}
+}
+
 // Breaker 暴露熔断器(供 handler 记录成败与观测)。
 func (r *Registry) Breaker() *ProviderBreaker { return r.breaker }
 

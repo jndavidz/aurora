@@ -23,11 +23,11 @@ func isCodingModelName(model string) bool {
 }
 
 // normalizeCodingModel 检测 ChatGPT 的 -coding 变体:
-//   - gpt-coding → (gpt-5-6, true):改写为真实 slug 透传上游,强制工具调用
+//   - gpt-coding → (gpt-5.6, true):改写为真实 slug 透传上游,强制工具调用
 //   - 其他 → (原 id, false):不改写
 func normalizeCodingModel(model string) (string, bool) {
 	if model == "gpt-coding" {
-		return "gpt-5-6", true
+		return "gpt-5.6", true
 	}
 	return model, false
 }
@@ -55,16 +55,16 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 	// 模型 id 在请求时原样透传上游,列表只保留真实存在的 slug。
 	// 来源:2026-09-02 经 NUC Chrome(CDP 9222)已登录 chatgpt.com 标签页
 	//       直接调用 /backend-api/models 实测,保留 5.6 家族 + Auto:
-	//         slug=gpt-5-6       title=GPT-5.6 Luna        ← 当前默认最强模型
-	//         slug=gpt-5-6-mini  title=GPT-5.6 Luna (Mini) ← 同 GPT-5.6 Luna 家族
+	//         slug=gpt-5.6       title=GPT-5.6 Luna        ← 当前默认最强模型
+	//         slug=gpt-5.6-mini  title=GPT-5.6 Luna (Mini) ← 同 GPT-5.6 Luna 家族
 	//         slug=auto          title=Auto
 	// (GPT-5.5 / 5.3 Mini 等经用户确认不在映射内,故不暴露。)
-	// gpt-coding 是 -coding 别名(非真实 slug):请求时改写为 gpt-5-6 并强制工具调用,
+	// gpt-coding 是 -coding 别名(非真实 slug):请求时改写为 gpt-5.6 并强制工具调用,
 	//         标注 function_call 能力;其本身不出现在 ChatGPT 网页模型选择器里,故单列于后。
 	models := []string{
 		"auto",
-		"gpt-5-6",
-		"gpt-5-6-mini",
+		"gpt-5.6",
+		"gpt-5.6-mini",
 	}
 	// -coding 变体别名(强制工具调用),单独追加,不计入网页选择器 slug。
 	codingAlias := "gpt-coding"
@@ -83,7 +83,7 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 		resModelList = append(resModelList, entry)
 	}
 
-	// 追加 -coding 别名(gpt-coding → gpt-5-6 透传上游,强制工具调用)。
+	// 追加 -coding 别名(gpt-coding → gpt-5.6 透传上游,强制工具调用)。
 	// coding 封存(2026-09-02):开关关闭时不暴露(见 config.CodingEnabled)。
 	if h.codingEnabled {
 	if _, coding := normalizeCodingModel(codingAlias); coding {
@@ -118,7 +118,7 @@ func (h *ModelsHandler) ListModels(c *gin.Context) {
 	}
 
 	// 去重:同 ID 保留带能力标注的更完整条目(ChatgptCDP 经 registry 聚合后
-	// 可能与手写列表重复出现 gpt-5-6 / gpt-5-6-mini)。
+	// 可能与手写列表重复出现 gpt-5.6 / gpt-5.6-mini)。
 	deduped := make([]ResData, 0, len(resModelList))
 	seenIdx := make(map[string]int)
 	for _, mdl := range resModelList {

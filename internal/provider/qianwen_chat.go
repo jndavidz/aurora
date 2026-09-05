@@ -16,7 +16,7 @@ import (
 // 千问网页 API 不支持工具调用,纯对话:全量历史 + 每轮新会话(first_turn)。
 func (d *Qianwen) qianwenChatResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	streamReq := qianwenweb.ChatRequest{
-		Model:    req.Model,
+		Model:    upstreamSlug(req.Model),
 		Messages: qianwenMessagesFromResponses(req),
 	}
 	if req.Stream {
@@ -163,7 +163,7 @@ func (d *Qianwen) qianwenChatResponsesNonStream(c *gin.Context, req *official.Re
 // qianwenChatCompletions 处理千问(/v1/chat/completions)。
 func (d *Qianwen) qianwenChatCompletions(c *gin.Context, req *official.APIRequest) {
 	streamReq := qianwenweb.ChatRequest{
-		Model:    req.Model,
+		Model:    upstreamSlug(req.Model),
 		Messages: qianwenMessagesFromAPI(req),
 	}
 	if req.Stream {

@@ -65,8 +65,8 @@ func TestRegistryResolve(t *testing.T) {
 	if p := r.Resolve("auto"); p != nil {
 		t.Fatalf("Resolve(auto) = %v, want nil (default ChatGPT)", p.Name())
 	}
-	if p := r.Resolve("gpt-5-6"); p != nil {
-		t.Fatalf("Resolve(gpt-5-6) = %v, want nil", p.Name())
+	if p := r.Resolve("gpt-5.6"); p != nil {
+		t.Fatalf("Resolve(gpt-5.6) = %v, want nil", p.Name())
 	}
 	if len(r.Models()) != 4 {
 		t.Errorf("Models() = %d entries, want 4", len(r.Models()))

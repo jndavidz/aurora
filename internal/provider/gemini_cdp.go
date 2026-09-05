@@ -93,14 +93,16 @@ func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, pref
 			continue
 		}
 		switch {
-		case id == strings.TrimSuffix(id, "-chat") && !strings.HasSuffix(id, "-coding"):
-			// 2026-09-04 改名后 chat 变体无 -chat 后缀:非 -coding 即 chat
+		case strings.HasSuffix(id, "-coding"):
+			// coding 变体(工具调用):-coding 后缀独立分支,优先判定。
+			d.byID[id] = "coding"
+			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapFunctionCall, CapReasoning}})
+		default:
+			// chat 变体:带或不带 -chat 后缀均视为 chat(gpt-5.6-chat 内部注册名、
+			// gemini-3-flash 等对外名均走此分支)。
 			d.byID[id] = "chat"
 			// 注意:不标 vision —— CDP 桥只传文本,图片会丢弃;识图通道见 docs/MEDIA.md
 			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapWebSearch, CapReasoning}})
-		case strings.HasSuffix(id, "-coding"):
-			d.byID[id] = "coding"
-			d.models = append(d.models, Model{ID: id, OwnedBy: ownedBy, Caps: []Capability{CapFunctionCall, CapReasoning}})
 		}
 	}
 	return d

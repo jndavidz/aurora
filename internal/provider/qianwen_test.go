@@ -15,7 +15,7 @@ func TestIsQianwenModel(t *testing.T) {
 		id   string
 		want bool
 	}{
-		{"Qwen3.8-Max", true},
+		{"qwen-3.8-max", true},
 		{"Qwen3.7", true},
 		{"qwen3.6-Flash", true}, // 大小写不敏感
 		{"gpt-5-chat", false},
@@ -36,7 +36,7 @@ func TestNewQianwenDefaultModels(t *testing.T) {
 	if len(d.Models()) != len(defaultQianwenModels) {
 		t.Fatalf("Models() = %d, want %d", len(d.Models()), len(defaultQianwenModels))
 	}
-	if !d.Handles("Qwen3.8-Max") {
+	if !d.Handles("qwen-3.8-max") {
 		t.Fatal("default model not handled")
 	}
 	if d.Handles("Qwen9.9-Max") {
@@ -44,7 +44,7 @@ func TestNewQianwenDefaultModels(t *testing.T) {
 	}
 
 	// 自定义模型目录(非 Qwen 前缀被跳过)
-	d2 := NewQianwen(&config.Config{QianwenWebTokens: "t", QianwenModels: []string{"Qwen3.8-Max", "gpt-5-chat", "Qwen3.7"}})
+	d2 := NewQianwen(&config.Config{QianwenWebTokens: "t", QianwenModels: []string{"qwen-3.8-max", "gpt-5-chat", "Qwen3.7"}})
 	if len(d2.Models()) != 2 {
 		t.Fatalf("custom Models() = %d, want 2 (gpt-5-chat skipped)", len(d2.Models()))
 	}
@@ -56,7 +56,7 @@ func TestNewQianwenDefaultModels(t *testing.T) {
 // chat 硬规则:即使客户端带 tools,千问 messages 也绝不能含工具信息。
 func TestQianwenMessagesFromResponsesNoToolInjection(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "Qwen3.8-Max",
+		Model: "qwen-3.8-max",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"列出文件"}]}
 		]`),
@@ -83,7 +83,7 @@ func TestQianwenMessagesFromResponsesNoToolInjection(t *testing.T) {
 // chat 变体:function_call/function_call_output item 跳过。
 func TestQianwenMessagesFromResponsesSkipsToolItems(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "Qwen3.8-Max",
+		Model: "qwen-3.8-max",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":"读一下"},
 			{"type":"function_call","call_id":"c1","name":"read","arguments":"{\"path\":\"a.txt\"}"},
@@ -107,7 +107,7 @@ func TestQianwenMessagesFromResponsesSkipsToolItems(t *testing.T) {
 // assistant 消息不带 ori_query;user 消息带。
 func TestQianwenMessagesRoleMeta(t *testing.T) {
 	req := &official.ResponsesAPIRequest{
-		Model: "Qwen3.8-Max",
+		Model: "qwen-3.8-max",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":"你好"},
 			{"type":"message","role":"assistant","content":"你好,我是千问"},

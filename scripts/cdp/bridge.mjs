@@ -810,8 +810,10 @@ async function executeHunyuan(entry, prompt, onDelta) {
 
 const chatgpt = {
   name: "chatgpt",
-  // 特判 gpt-5-6 / gpt-5-6-mini(aurora 把这两个模型原样转给桥)
+  // 特判 gpt-5.6 / gpt-5.6-mini(aurora 把这两个模型原样转给桥)
   prefix: "gpt-",
+  // auto 是 ChatGPT 默认模型(无 gpt- 前缀),手动列入别名使其路由到本 adapter
+  aliases: ["auto"],
   pageMatch: "chatgpt.com",
   homeUrl: "https://chatgpt.com/",
   // 无 capture 钩子(UI 驱动模式:页面自己完成反自动化握手,无需令牌模板)
@@ -820,8 +822,9 @@ const chatgpt = {
   ready: () => true,
 
   models: [
-    { id: "gpt-5-6", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning", "vision"] },
-    { id: "gpt-5-6-mini", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning"] },
+    { id: "gpt-5.6", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning", "vision"] },
+    { id: "gpt-5.6-mini", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning"] },
+    { id: "auto", object: "model", owned_by: "openai", capabilities: ["web_search", "reasoning"] },
   ],
 
   flatten(messages) {
@@ -849,6 +852,7 @@ const chatgpt = {
 const doubao = {
   name: "doubao",
   prefix: "doubao-",
+  aliases: ["doubao"], // 暴露 id 无后缀(2026-09-04 改名),需显式别名匹配
   pageMatch: "doubao.com",
   homeUrl: "https://www.doubao.com/chat/",
   capture: (req) => applyDoubaoCapture(req),
@@ -935,7 +939,7 @@ const doubao = {
 const adapters = [gemini, claude, hunyuan, chatgpt, doubao];
 
 function resolveAdapter(model) {
-  return adapters.find((a) => model.startsWith(a.prefix)) || null;
+  return adapters.find((a) => model.startsWith(a.prefix) || (a.aliases && a.aliases.includes(model))) || null;
 }
 
 // ─── 限频队列(串行 + >=2.1s 间隔) ────────────────────────────────
@@ -1118,14 +1122,14 @@ async function executeChatgptUI(entry, prompt, onDelta) {
 
   // 首轮直接在当前对话里发;若静默失败(旧对话上下文污染/限频导致服务端不回复),
   // 自愈:导航开新对话重发一次(实测新对话稳定,旧对话偶发静默失败)。
-  // 仅对话类模型(gpt-5-6 / gpt-5-6-mini / auto)启用结构化卡片清洗;gpt-coding 等
+  // 仅对话类模型(gpt-5.6 / gpt-5.6-mini / auto)启用结构化卡片清洗;gpt-coding 等
   // 编程通道原样保留代码/链接/artifact,不做任何清洗(避免误删代码运行结果里的
   // 复制按钮、引用链接等 UI 元素)。
   const doClean = chatgptShouldClean();
   if (!doClean) {
     // coding 通道:每请求导航新对话。页面历史会累积(含此前失败的拒绝样本),
     // 模型看到历史里"assistant 从不调用工具"的模式会被锚定继续拒绝(实测 pi
-    // 重发同任务即复现);新对话彻底清零。对话通道(gpt-5-6)保留页面上下文不动。
+    // 重发同任务即复现);新对话彻底清零。对话通道(gpt-5.6)保留页面上下文不动。
     try {
       await c.cmd("Page.navigate", { url: chatgpt.homeUrl });
       await sleep(9000);
@@ -1158,12 +1162,12 @@ async function executeChatgptUI(entry, prompt, onDelta) {
   return self;
 }
 
-// chatgptShouldClean:对话类模型(gpt-5-6 / gpt-5-6-mini / auto / auto-*)启用卡片清洗;
+// chatgptShouldClean:对话类模型(gpt-5.6 / gpt-5.6-mini / auto / auto-*)启用卡片清洗;
 // gpt-coding 等编程通道不清洗(保留代码块/链接/artifact)。model 可能带 -chat 后缀。
 function chatgptShouldClean() {
   const m = (chatgpt._model || "").toLowerCase();
   if (/coding/.test(m)) return false; // gpt-coding / gpt-coding-chat → 不清洗
-  return true;                        // gpt-5-6 / gpt-5-6-mini / auto → 清洗
+  return true;                        // gpt-5.6 / gpt-5.6-mini / auto → 清洗
 }
 
 // chatgptSendOnce:在已就绪的 page 连接上注入 prompt + 轮询读回复。
@@ -1628,7 +1632,7 @@ async function handleChat(res, body) {
     sendJSON(res, 400, { error: { message: "unknown model: " + model, type: "invalid_request_error" } });
     return;
   }
-  // ChatGPT 浏览器通道:记录本次请求的模型(gpt-5-6 / gpt-5-6-mini),executeChatgpt 用它覆盖模板 model
+  // ChatGPT 浏览器通道:记录本次请求的模型(gpt-5.6 / gpt-5.6-mini),executeChatgpt 用它覆盖模板 model
   if (adapter.name === "chatgpt") adapter.setModel(model);
   // 回显给调用方的 model 名要去掉桥内部用的 -chat 后缀(aurora 侧加的标识)
   const outModel = adapter.name === "chatgpt" ? model.replace(/-chat$/, "") : model;
