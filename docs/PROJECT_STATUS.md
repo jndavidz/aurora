@@ -135,6 +135,7 @@ Phase 0 已修 11 处清单（防重复修）：prooftoken diffLen 上界、api/
 
 - 剩余 >30% 不动作；30%~10% 触发保活（refresh 优先）；≤10% 保活+告警；已失效告警+摘除转兜底
 - credential-keeper 四件套：**probe**（每 6h，随时）/ **act**（refresh 随时、CDP 型 22:00–24:00、人工型只告警）/ **publish**（scp 推 NAS）/ **alert**（日志+webhook，去重）
+  - **publish 最小版已实装（09-05）**：`scripts/keeper/publish-tokens.sh` 部署于 NAS 部署区，Drive 同步区 token → 部署区 rsync 式同步（幂等/原子覆盖/空文件保留/JSON 防呆），配合 E3 热加载实现"PC 补票 → 容器内即时生效"闭环。GLM/Kimi 明确排除（tokens-state 进程自愈，防旧文件覆盖新池）。调度：DSM 任务计划建议每 15 分钟（群晖不读用户 crontab，需 root 注册 /etc/crontab）
 - 回写通路选型：scp + 热加载 ✅（推荐）；POST /admin ⚠️；NFS 谨慎（群晖 ACL 前科）
 - **热加载现状（09-05 E3 全量完成）**：deepseekweb（`NextToken` 内 mtime 检查+整池重读）、minimax/mimo（provider 层 `webClient` mtime 变更重建 client）均已支持；
   GLM/Kimi 靠 refresh 续期自愈。keeper publish 实装后对所有通道即时生效，无需重启
