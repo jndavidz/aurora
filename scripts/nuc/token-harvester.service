@@ -1,0 +1,12 @@
+[Unit]
+Description=Token harvester (extract site credentials from NUC Chrome via CDP, push NAS)
+After=network-online.target chrome-cdp.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node /opt/credential-keeper/token-harvester.mjs
+# 凭证红线:本服务日志只含 OK/FAIL 与长度,不含凭证内容
+
+[Install]
+WantedBy=multi-user.target

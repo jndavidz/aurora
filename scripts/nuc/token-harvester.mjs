@@ -1,0 +1,167 @@
+// token-harvester.mjs — NUC 统一凭证提取器(G1 act/publish,2026-09-05)
+//
+// 架构事实(2026-09-05 确认):各模型登录态权威在 NUC Chrome
+// (/opt/chrome-cdp/profile)。本脚本经 CDP(127.0.0.1:9222)从页面
+// localStorage / cookie 提取最新凭证,推 NAS 部署区,配合 aurora E3
+// 热加载免重启生效。
+//
+// 站点范围(有意排除,勿随手加回):
+//   - 豆包:通道冻结(2026-09-05 拍板),doubao-hook 捕获通路保留但不运行
+//   - GLM/Kimi:容器读 tokens-state(rw)进程 refresh 自愈,文件推送无效
+//   - Gemini/Claude/ChatGPT:桥/池体系,不经 token 文件
+//   grok:登录态已确认在 NUC Chrome(2026-09-05 用户确认),已纳入
+//
+// 幂等:提取值与 NAS 部署区现值 md5 对比,变化才推。
+// 凭证红线:日志只记 OK/FAIL + 长度/天数,绝不打印凭证内容。
+import http from "node:http";
+import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
+
+const { cdp } = await import(new URL("./cdp-helper.mjs", import.meta.url).href);
+
+const CDP_PORT = 9222;
+const NAS = "zxsadmin@10.10.10.2";
+const DST = "/volume2/docker/aurora/tokens";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// cdp.cmd 超时包装(零依赖 cdp-helper 无超时,getAllCookies 挂起会卡死整轮)
+const cmdT = (c, method, params, ms = 20000) =>
+  Promise.race([
+    c.cmd(method, params),
+    new Promise((_, rej) => setTimeout(() => rej(new Error(`${method} timeout ${ms}ms`)), ms)),
+  ]);
+
+// 每站提取规则:
+//   kind=local   读 localStorage(键按序试)
+//   kind=cookies Network.getAllCookies 过滤域,按 assemble() 组装行
+//   (grok 格式特殊:每行 uid|cookie串,uid = x-userid cookie 值)
+// deepseek 移除(2026-09-05 实测):NUC Chrome 的 deepseek localStorage
+// userToken 为无效游客票(上游 invalid token;有效票 64B 在原文件人工管理),
+// 待 deepseek 真实登录态入 NUC Chrome 且键名/有效性可校验后再评估加回。
+const SITES = [
+  { name: "minimax", url: "https://agent.minimaxi.com/", kind: "local", keys: ["_token"], file: "minimax_tokens.txt", jwt: true },
+  { name: "mimo", url: "https://aistudio.xiaomimimo.com/", kind: "cookies", domain: /xiaomimimo|xiaomi/i, require: "xiaomichatbot_ph", file: "mimo_tokens.txt",
+    assemble: (rel) => rel.map((x) => `${x.name}=${x.value}`).join("; ") },
+  { name: "qianwen", url: "https://www.qianwen.com/", kind: "cookies", domain: /qianwen/i, require: "tongyi_sso_ticket", file: "qianwen_tokens.txt",
+    assemble: (rel) => rel.map((x) => `${x.name}=${x.value}`).join("; ") },
+  { name: "grok", url: "https://grok.com/", kind: "cookies", domain: /grok\.com/i, require: "sso", file: "grok_cookies.txt",
+    assemble: (rel) => {
+      const uid = rel.find((x) => x.name === "x-userid");
+      const cookie = rel.map((x) => `${x.name}=${x.value}`).join("; ");
+      return (uid ? uid.value : "") + "|" + cookie;
+    } },
+];
+
+function httpReq(port, method, p) {
+  return new Promise((resolve, reject) => {
+    const r = http.request({ host: "127.0.0.1", port, path: p, method }, (res) => {
+      let d = "";
+      res.on("data", (c) => (d += c));
+      res.on("end", () => resolve({ status: res.statusCode, body: d }));
+    });
+    r.on("error", reject);
+    r.end();
+  });
+}
+
+// 找/开站点标签(CDP 恢复标签页时轮询;PUT /json/new 对齐新 Chrome)
+async function ensurePage(url) {
+  for (let i = 0; i < 25; i++) {
+    try {
+      const targets = JSON.parse((await httpReq(CDP_PORT, "GET", "/json")).body);
+      const t = targets.find((x) => x.type === "page" && x.url.startsWith(url));
+      if (t) return t;
+    } catch { }
+    await sleep(2000);
+  }
+  const r = await httpReq(CDP_PORT, "PUT", "/json/new?" + encodeURIComponent(url));
+  const t = JSON.parse(r.body);
+  await sleep(8000); // 等页面加载 + localStorage 写入
+  return t;
+}
+
+async function readLocal(c, keys) {
+  for (const k of keys) {
+    try {
+      const r = await cmdT(c, "Runtime.evaluate", {
+        expression: `localStorage.getItem(${JSON.stringify(k)})`,
+        returnByValue: true,
+      });
+      const v = r.result && r.result.result && r.result.result.value;
+      if (v) return String(v);
+    } catch { }
+  }
+  return null;
+}
+
+function validJWT(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
+    return !payload.exp || payload.exp * 1000 > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+async function harvestSite(site) {
+  const t = await ensurePage(site.url);
+  const c = await cdp(t.webSocketDebuggerUrl);
+  try {
+    let value = null;
+    if (site.kind === "local") {
+      value = await readLocal(c, site.keys);
+      if (!value || value.length < 20) throw new Error("no token in localStorage");
+      if (site.jwt && !validJWT(value)) throw new Error("token expired/invalid JWT");
+    } else {
+      const gr = await cmdT(c, "Network.getAllCookies");
+      const all = gr.result.cookies || [];
+      const rel = all.filter((ck) => site.domain.test(ck.domain));
+      const req = rel.find((x) => x.name === site.require);
+      if (!req || !req.value) throw new Error(`no ${site.require} cookie (logged out?)`);
+      value = site.assemble(rel);
+    }
+    return value;
+  } finally {
+    c.close();
+  }
+}
+
+function remoteMd5(file) {
+  try {
+    const out = execSync(`ssh -o BatchMode=yes ${NAS} "md5sum '${DST}/${file}' 2>/dev/null | cut -d' ' -f1"`, { encoding: "utf8", timeout: 20000 });
+    return out.trim();
+  } catch {
+    return "";
+  }
+}
+
+function pushToken(file, content) {
+  const remote = `${DST}/${file}`;
+  // cat | ssh 直写(对齐 doubao-hook 通路);管道规避群晖 SFTP 兼容问题
+  execSync(`cat | ssh -o BatchMode=yes ${NAS} "cat > '${remote}'"`, {
+    input: content + "\n",
+    timeout: 20000,
+    shell: "/bin/bash",
+  });
+  execSync(`ssh -o BatchMode=yes ${NAS} "chmod 644 '${remote}'"`, { timeout: 15000 });
+}
+
+console.log("[harvest]", new Date().toISOString(), "start");
+let okAll = true;
+for (const site of SITES) {
+  try {
+    const value = await harvestSite(site);
+    const md5 = createHash("md5").update(value + "\n").digest("hex");
+    if (md5 === remoteMd5(site.file)) {
+      console.log(`[harvest] ${site.name}: unchanged(幂等跳过)`);
+      continue;
+    }
+    pushToken(site.file, value);
+    console.log(`[harvest] ${site.name}: OK len=${value.length} → ${site.file}(已推 NAS,E3 热加载生效)`);
+  } catch (e) {
+    okAll = false;
+    console.log(`[harvest] ${site.name}: FAIL ${e.message}`);
+  }
+}
+console.log("[harvest]", new Date().toISOString(), "done");
+process.exit(okAll ? 0 : 1);
