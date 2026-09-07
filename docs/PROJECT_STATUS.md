@@ -87,6 +87,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | P0-13 修复 | kimiweb 帧 `make([]byte, length)` 加 8MB 上界（对齐 glmweb 8MB/deepseekweb 4MB），防上游异常大帧内存耗尽 |
 | P1-4 修复 | grokweb 主读循环每帧刷新 120s ReadDeadline，半开 TCP 不再永久挂起 goroutine/fd |
 | P1-7 修复 | qianwenweb 差值输出校验 HasPrefix（同 P1-6 glmweb 模式），上游重排引用时整体替换而非重复输出 |
+| glmweb 流式清洗 | **用户实测发现**(09-05)：glm-flash 长回答末尾整段重复 + 字面 `\n` 直通客户端。经真实 SSE 探针+重放定位：差值"整体替换"分支(Go 源 `"\\n"`=字面反斜杠+n 前缀+全文)是字面符来源；上游两阶段换行表示不一致(碎片字面 `\n` / 结束帧真换行)让 HasPrefix 失效是触发条件。修复=帧级归一(碎片字面 `\n`→真换行)+ 字面前缀改真换行；重放验证字面 `\n`=0、live 复测无重复（`8581404`） |
 | P1-35 修复 | doubaoweb/geminweb `nextAccount` unlock→sleep→relock 竞态：改为锁内预标记 `lastUsed=now+wait`（wait>0）或 now（wait≤0），并发 goroutine 无法再绕过限频 |
 | E3 凭证热加载 | deepseekweb `NextToken` 每次先 stat token 文件，mtime 变化即整池重读（keep-last-good：读失败/空文件沿用旧池）；顺带修掉 cursor 无锁竞态（`sync.Mutex`）。minimax/mimo 同日补齐：provider 层 `webClient` 记录 tokenMod，mtime 变更置空重建。keeper scp 重推文件后进程内即时生效，无需重启。测试：deepseekweb `hotreload_test.go`（含 -race）+ provider `hotreload_test.go` |
 | F2 收窄版 | `chatRequestState` struct 替代 toolCalling 系列 6 指针输出参数（`fba5b63`）。澄清语义：仅 clientState 是 in-out，其余纯输入。零业务逻辑变更，S1 核心路径后续改动的复利点。G4 的"拆 handler"以此为起点自然推进 |
@@ -125,6 +126,7 @@ glm-flash  kimi  qwen-3.8-max  doubao  grok-3
 | P0-13 | `kimiweb/stream.go:175` | `make([]byte, length)`，length 上游可控 uint32 无上限 | **已修**（8MB 上界，09-05 下午） |
 | P1-4 | `grokweb/client.go:163` | 主读循环无 ReadDeadline → 半开 TCP 泄漏 goroutine/fd | **已修**（120s 每帧刷新，09-05 下午） |
 | P1-6 | `glmweb/stream.go:130,135` | TrimPrefix 差值不校验 HasPrefix → 整段重复输出 | 已修（`f10eb1a`，glm-flash 偶发重复回复根因） |
+| — | `glmweb/stream.go` 差值整体替换分支 | HasPrefix 失败分支硬编码字面 `\n` 前缀+重发全文(字面符每触发一次注入一个；上游两阶段换行表示不一致致 HasPrefix 恒失效) | **已修**（`8581404`，帧级归一 + 真换行前缀；用户实测发现） |
 | P1-7 | `qianwenweb/stream.go:88` | 同 P1-6 | **已修**（09-05 下午，HasPrefix 校验+整体替换） |
 | P1-35 | `doubaoweb/client.go:126`/`geminweb/client.go:124` | nextAccount 解锁后 sleep 再重加锁 → 限频被绕过 | **已修**（锁内预标记 lastUsed=now+wait，09-05 下午） |
 | 其余 P0-2/3/4/5/6/7/12 | so.go 递归清寄存器、并发写 map、runQueue 无上限、browserfp 未判空、api/router init 双重初始化 | **Phase 0 已修**（52 文件 +521/-316，见 audit §7 注记）——动手前先核对 | 已修 |
