@@ -24,7 +24,10 @@ _scratch/
 *.py
 *.json
 *.exe
-docs/
+# docs 顶层 md 自 2026-09-08 入库(双机同步);archive 归档维持排除
+!docs/
+!docs/*.md
+docs/archive/
 *.js
 .superpowers/
 *.html

@@ -32,7 +32,7 @@ Aurora 是「网页端 → OpenAI 兼容 API」网关(Go):对外暴露 `/v1/chat
 
 - 真实凭证只在 `.runtime/tokens/`、`tokens/*.json`:这些值不进 git、不进聊天记录。
 - 网页逆向有结构性封号风险:账号池只用可丢弃小号,主号不入池,并发控制在 ≈账号数/2。
-- `.gitignore` 排除了 `docs/`、`*.json`、`*.txt`:文档与 token 改动只存本地,commit 天然不含它们。
+- `.gitignore` 排除 `*.json`/`*.txt`/`*.py`/`*.js`/`*.html` 与 `docs/archive/`:token 与产物改动只存本地;**docs 顶层 md 自 2026-09-08 起入库**(双机同步,新增文档直接写、commit 自带)。
 
 ## 浏览器抓取 / CDP(scripts/cdp/,零依赖)
 
