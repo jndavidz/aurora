@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily harvest report (09:45, after checkin 09:00+rand30)
+
+[Timer]
+OnCalendar=*-*-* 09:45:00
+RandomizedDelaySec=600
+Persistent=true
+Unit=harvest-report.service
+
+[Install]
+WantedBy=timers.target

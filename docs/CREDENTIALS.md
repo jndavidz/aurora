@@ -50,6 +50,8 @@ Grok(usage_limit_reached 需重登)、千问高频(受 x5sec 20 分钟时效支�
   `/opt/credential-keeper/state/`(600)供签到等后续任务使用;`cdp.cmd` 20s 超时防挂起。
 - **凭证红线**:日志只记 OK/FAIL + 长度,绝不打印凭证内容。
 - **手动触发**:`ssh root@10.10.10.3 'node /opt/credential-keeper/token-harvester.mjs'`
+- **每日报告**:`harvest-report.timer` 09:45 汇总当天 harvester + checkin 结果到 journal
+  (`ssh root@10.10.10.3 'journalctl -u harvest-report -n 5 --no-pager'`);有缺口时 exit 1
 
 ## NUC MiniMax 签到
 

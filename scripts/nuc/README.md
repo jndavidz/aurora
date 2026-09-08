@@ -20,6 +20,9 @@ NUC(nuc-hifi,10.10.10.3)上所有 systemd 单元与运维脚本的**权威副本
 | `minimax-checkin.mjs` | `/opt/credential-keeper/minimax-checkin.mjs` | MiniMax 每日签到(纯 Node API,签名体系同对话;token 读 harvester state) |
 | `minimax-checkin.service` | `/etc/systemd/system/minimax-checkin.service` | 签到 oneshot |
 | `minimax-checkin.timer` | `/etc/systemd/system/minimax-checkin.timer` | 每日 09:00+rand30min(harvester 之后,用当日新票) |
+| `harvest-report.sh` | `/usr/local/bin/harvest-report.sh` | 每日凭证任务汇总:读当天 journal 汇总 harvester(推送/幂等/失败)+ checkin 积分,输出一行摘要+明细;有缺口 exit 1 |
+| `harvest-report.service` | `/etc/systemd/system/harvest-report.service` | 汇总 oneshot |
+| `harvest-report.timer` | `/etc/systemd/system/harvest-report.timer` | 每日 09:45+rand10min(checkin 之后) |
 | `audio-aware-ml.sh` | `/usr/local/bin/audio-aware-ml.sh` | 播放感知的 ML cpuset 降级(10s 轮询) |
 | `pin-audio-irq.sh` | `/usr/local/bin/pin-audio-irq.sh` | 音频 IRQ 绑核(oneshot,动态找 IRQ 号) |
 | `squeezelite-affinity.conf` | `/etc/systemd/system/squeezelite.service.d/affinity.conf` | squeezelite CPUAffinity=0 + Nice=-10 |

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily harvest report (summarize token-harvester + minimax-checkin results)
+After=minimax-checkin.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/harvest-report.sh
+
+[Install]
+WantedBy=multi-user.target
