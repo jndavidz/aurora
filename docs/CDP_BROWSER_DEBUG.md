@@ -10,12 +10,18 @@
 | 通道 | 浏览器 | 端口 | 定位 | 启停 |
 |---|---|---|---|---|
 | **1. Chrome for Testing**(默认) | `D:\PortableApps\_net\Chrome for Testing\chrome.exe`(152.0.7977.42) | 9222 | 无强风控站点的通用抓取;独立 profile,与日常浏览器隔离 | `bash scripts/cdp/start-chrome-cdp.sh {start\|stop\|status}` |
-| **2. Tabbit**(强风控/登录态) | Tabbit(用户日常在用) | 9223 | 强风控+需登录态站点(如 erji);复用用户真实登录态 | 快捷方式已永久带 `--remote-debugging-port=9223`(桌面+开始菜单+任务栏),无需启停 |
+| **2. Tabbit**(强风控/登录态) | 国内版 Tabbit(用户日常在用):`C:\Users\david\AppData\Local\Tabbit Browser\Application\Tabbit Browser.exe`;默认 profile `%LOCALAPPDATA%\Tabbit Browser\User Data` | 9223 | 强风控+需登录态站点(如 erji);复用用户真实登录态 | 快捷方式已永久带 `--remote-debugging-port=9223 --remote-allow-origins=*`(桌面+开始菜单+任务栏),无需启停 |
 | **3. NUC 桥用 Chrome** | nuc-hifi(10.10.10.3)上的 Chrome | 9222(NUC 本地) | aurora-bridge 的常驻执行浏览器;禁 GPU 软渲染+CPU 绑核 | `chrome-cdp.service`(配置权威:`scripts/nuc/`,改前先改仓库再 scp 同步) |
 
 通道 1/2 的抓取**统一在 Windows 侧跑**(`D:\PortableApps\_sys\node\node.exe`):WSL NAT 下 `127.0.0.1` 不可达 Windows 回环端口(Chrome 强制绑回环)。通道 3 在 NUC 上跑,由 bridge.mjs 常驻。
 
 操作 Tabbit(通道 2)纪律:①操作用户在用的浏览器前先告知影响 ②一律优先 `--new-tab`(不顶掉用户正在看的页面) ③若 CDP 失联,重跑快捷方式 lnk 追加命令即可。
+
+> **2026-09-20 变更**:国际版 Tabbit 已卸载,改用**国内版**。exe 与 profile 均在
+> `%LOCALAPPDATA%\Tabbit Browser\`(不再是 PortableApps 下)。三个快捷方式(桌面 /
+> `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar` / 开始菜单)
+> 已重新追加调试参数。**改快捷方式只对后续启动生效**——已运行的实例不带端口,需退出
+> 重开才恢复 CDP。备用:`D:\PortableApps\_sys\start-tabbit-debug.bat`(带端口启动)。
 
 ## 二、资产地图(东西都在哪)
 
