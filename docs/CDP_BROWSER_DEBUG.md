@@ -20,6 +20,10 @@
 > **2026-09-20 变更**:国际版 Tabbit 已卸载,改用**国内版**。exe 与 profile 均在
 > `%LOCALAPPDATA%\Tabbit Browser\`(不再是 PortableApps 下)。三个快捷方式(桌面 /
 > `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar` / 开始菜单)
+> **语音输入场景**：本通道（9223）已实测可用于 `Input.insertText` 中文注入 pi-web 输入框；
+> 但**麦克风权限 CDP 改不了**（`Browser.setPermission`/`grantPermissions` 均无效）。
+> 详见 [语音输入落地实录](D:\dev\docs\env\voice-input-deployment-log.md) §2.3–2.4。
+>
 > 已重新追加调试参数。**改快捷方式只对后续启动生效**——已运行的实例不带端口,需退出
 > 重开才恢复 CDP。备用:`D:\PortableApps\_sys\start-tabbit-debug.bat`(带端口启动)。
 
