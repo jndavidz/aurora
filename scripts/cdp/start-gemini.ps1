@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $CHROME  = 'D:\PortableApps\_net\Chrome for Testing\chrome.exe'
 $PROFILE = 'D:\PortableApps\_net\chrome-cdp\profile'
-$BRIDGE  = 'D:\repos\aurora\scripts\cdp\bridge.mjs'
+$BRIDGE  = 'D:\_work\repos\aurora\scripts\cdp\bridge.mjs'
 $CDP_PORT = 9222
 
 Write-Host '== Gemini CDP 通道按需启动 ==' -ForegroundColor Cyan

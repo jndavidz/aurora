@@ -1,7 +1,7 @@
 # NAS 部署 aurora 方案 — 群晖 DS416play
 
 > 更新时间: 2026-08-12(NAS 内存升级至 **8G** 后复核)
-> 关联文档: `D:\dev\apps\aurora\部署说明.md`(PC 端部署,本方案为其姊妹篇)
+> 关联文档: `D:\_work\dev\apps\aurora\部署说明.md`(PC 端部署,本方案为其姊妹篇)
 > 项目: https://github.com/aurora-develop/aurora (ChatGPT 网页端 → OpenAI 兼容 API 网关)
 
 ---
@@ -29,7 +29,7 @@
 | 内存 | **8G DDR3(2026-08 升级,原 1G)** |
 | 容器 | 已装 Docker / Container Manager(证据:`/volume2/@docker`、btrfs、kugou-api 容器经 docker-compose 跑过) |
 | 内网 | `10.10.10.2 nas.lan`(家庭 10.10.10.0/24;办公室经 WireGuard 10.99.0.x 可达) |
-| 同步 | `/volume2/dev` = `D:\dev` 的 Drive 同步镜像 → `apps/aurora/`、`apps/aurora/.runtime/tokens/` 已在 NAS 上 |
+| 同步 | `/volume2/dev` = `D:\_work\dev` 的 Drive 同步镜像 → `apps/aurora/`、`apps/aurora/.runtime/tokens/` 已在 NAS 上 |
 | DSM | 需 DSM 7.2+(Container Manager 前提);以实际套件中心为准 |
 
 ---
@@ -63,11 +63,11 @@
 
 | 角色 | 位置 | 说明 |
 |---|---|---|
-| 代码唯一源头 | PC `D:\repos\aurora`(git,local-toolfix 分支) | 开发/版本管理在此,改完 push 再换机 |
+| 代码唯一源头 | PC `D:\_work\repos\aurora`(git,local-toolfix 分支) | 开发/版本管理在此,改完 push 再换机 |
 | NAS 部署副本 | `/volume2/docker/aurora` | docker build 构建上下文,**非 Drive 同步区**,不含凭证,每次部署由 deploy.sh 清空重建 |
 | 凭证 | `/volume2/docker/aurora/tokens/` | 首次部署从同步区拷入的独立副本,只读挂载;**运行期更新通路(2026-09-05 起)**:NUC token-harvester 每日提取推入 + PC keepalive scp(备份)+ NUC doubao-hook,配合容器内 E3 热加载免重启生效。同步区 `/volume2/dev/.../.runtime/` 是 Drive 排除的死水,不作更新源 |
 
-> ⚠️ 不要把代码放 `/volume2/dev`(Drive 同步根),否则镜像回 PC `D:\dev` 污染非代码区。
+> ⚠️ 不要把代码放 `/volume2/dev`(Drive 同步根),否则镜像回 PC `D:\_work\dev` 污染非代码区。
 > ⚠️ token 用独立副本目录而非直接挂同步区:避免 Drive 同步重置 ACL 导致容器内 nonroot 读不到(参考 kugou 同坑)。
 
 ### 3.1 宿主环境需求(NAS 侧)
@@ -186,7 +186,7 @@ curl -s -H "Authorization: Bearer david" http://10.10.10.2:8080/v1/models
 ### 4.1 PC 上交叉编译
 
 ```bash
-cd D:\repos\aurora      # 或 D:\dev\src\aurora(local-toolfix 分支)
+cd D:\_work\repos\aurora      # 或 D:\_work\dev\src\aurora(local-toolfix 分支)
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o aurora-linux .
 ```
 
@@ -268,7 +268,7 @@ nohup ./aurora-linux >> .runtime/logs/aurora_run.log 2>&1 &
 
 ## 七、参考
 
-- PC 端部署: `D:\dev\apps\aurora\部署说明.md`(Drive 同步区,非本仓库)
-- 同类部署范式: `D:\repos\kugou_api\docs\nas-build-guide.md`(NAS 本地构建镜像 + deploy.sh 一键,本文档参照其结构)
+- PC 端部署: `D:\_work\dev\apps\aurora\部署说明.md`(Drive 同步区,非本仓库)
+- 同类部署范式: `D:\_work\repos\kugou_api\docs\nas-build-guide.md`(NAS 本地构建镜像 + deploy.sh 一键,本文档参照其结构)
 - 官方仓库: https://github.com/aurora-develop/aurora(README / docker-compose.yml / env.template)
-- 网络拓扑: `D:\dev\docs\网络IP结构.txt`(NAS = 10.10.10.2;家庭 10.10.10.0/24,WireGuard 10.99.0.0/24)
+- 网络拓扑: `D:\_work\dev\docs\网络IP结构.txt`(NAS = 10.10.10.2;家庭 10.10.10.0/24,WireGuard 10.99.0.0/24)

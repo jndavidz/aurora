@@ -8,7 +8,7 @@
 # 用法: powershell -File scripts/cdp/keepalive.ps1
 # 定时(Windows 任务计划,每周日 04:00,可自改):
 #   schtasks /Create /F /TN "aurora-cdp-keepalive" /SC WEEKLY /D SUN /ST 04:00 /RL LIMITED `
-#     /TR '""D:\PortableApps\_sys\node\node.exe" "D:\repos\aurora\scripts\cdp\keepalive-node.mjs""'
+#     /TR '""D:\PortableApps\_sys\node\node.exe" "D:\_work\repos\aurora\scripts\cdp\keepalive-node.mjs""'
 #   (推荐直接用 keepalive-node.mjs,纯 node 无编码坑;本 ps1 供手动运行)
 $ErrorActionPreference = 'Stop'
 

@@ -13,21 +13,21 @@
 #
 # 注册(管理员或普通用户均可用 /RL LIMITED):
 #   schtasks /Create /F /TN "aurora-cdp-keepalive" /SC DAILY /ST 08:30 /RL LIMITED `
-#     /TR 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "D:\repos\aurora\scripts\cdp\keepalive-daily.ps1"'
+#     /TR 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "D:\_work\repos\aurora\scripts\cdp\keepalive-daily.ps1"'
 $ErrorActionPreference = 'Continue'
 
-$log = 'D:\repos\aurora\.runtime\keepalive.log'
-$state = 'D:\repos\aurora\.runtime\keepalive-state.txt'
+$log = 'D:\_work\repos\aurora\.runtime\keepalive.log'
+$state = 'D:\_work\repos\aurora\.runtime\keepalive-state.txt'
 $node = 'D:\PortableApps\_sys\node\node.exe'
-$rf = 'D:\repos\aurora\scripts\cdp\refresh-tokens.mjs'
-$ka = 'D:\repos\aurora\scripts\cdp\keepalive-node.mjs'
-$tokens = 'D:\repos\aurora\.runtime\tokens'
+$rf = 'D:\_work\repos\aurora\scripts\cdp\refresh-tokens.mjs'
+$ka = 'D:\_work\repos\aurora\scripts\cdp\keepalive-node.mjs'
+$tokens = 'D:\_work\repos\aurora\.runtime\tokens'
 $scp = 'C:\Windows\System32\OpenSSH\scp.exe'
 
 $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 
 # 0. MiniMax 每日签到(每天执行,不受下方 7 天保活判断影响;签到积分补充 Token Plan 配额)
-$ck = 'D:\repos\aurora\scripts\cdp\minimax-checkin.mjs'
+$ck = 'D:\_work\repos\aurora\scripts\cdp\minimax-checkin.mjs'
 & $node $ck *>&1 | Out-File -Append -Encoding utf8 $log
 
 # 1. 距上次成功保活 < 7 天 → 今天不跑

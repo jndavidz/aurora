@@ -22,7 +22,7 @@
 > `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar` / 开始菜单)
 > **语音输入场景**：本通道（9223）已实测可用于 `Input.insertText` 中文注入 pi-web 输入框；
 > 但**麦克风权限 CDP 改不了**（`Browser.setPermission`/`grantPermissions` 均无效）。
-> 详见 [语音输入落地实录](D:\dev\docs\env\voice-input-deployment-log.md) §2.3–2.4。
+> 详见 [语音输入落地实录](D:\_work\dev\docs\env\voice-input-deployment-log.md) §2.3–2.4。
 >
 > 已重新追加调试参数。**改快捷方式只对后续启动生效**——已运行的实例不带端口,需退出
 > 重开才恢复 CDP。备用:`D:\PortableApps\_sys\start-tabbit-debug.bat`(带端口启动)。
@@ -34,8 +34,8 @@
 | 位置 | 内容 |
 |---|---|
 | `scripts/cdp/`(本仓库,**权威**) | 核心桥 `bridge.mjs`+`keeper.mjs`、保活、各 AI 站 `capture-*/grab-*`、`cdp-helper.mjs`(多仓库权威源)、`cdp-drive.mjs`(原版)、`start-chrome-cdp.sh`;分类索引见 `scripts/cdp/README.md` |
-| `D:\repos\open-xiaoai\scripts\cdp\` | 增强版 `cdp-drive.mjs`(--new-tab);`cdp-helper.mjs` 为同步副本 |
-| `D:\repos\soft-query\` | 浏览器插件 + CLI 批量查询;`cdp-helper.mjs` 为同步副本 |
+| `D:\_work\repos\open-xiaoai\scripts\cdp\` | 增强版 `cdp-drive.mjs`(--new-tab);`cdp-helper.mjs` 为同步副本 |
+| `D:\_work\repos\soft-query\` | 浏览器插件 + CLI 批量查询;`cdp-helper.mjs` 为同步副本 |
 | `musicdl/.state/cdp-*.mjs` | musicdl 的一次性 CDP 实验(该仓库 `.state/` 即实验区,已 gitignore) |
 
 **cdp-helper.mjs 防漂移规则**:只改 `scripts/cdp/cdp-helper.mjs`(权威源),再同步到 open-xiaoai 与 soft-query 两份副本(文件头均有标注)。

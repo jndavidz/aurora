@@ -12,7 +12,7 @@
 set -euo pipefail
 
 # ── 配置(按本机 AGENTS.md 网络拓扑)──────────────────────────
-NAS_HOST=zxsadmin@10.10.10.2          # SSH 免密,密钥 D:\dev\data\ssh\id_ed25519
+NAS_HOST=zxsadmin@10.10.10.2          # SSH 免密,密钥 D:\_work\dev\data\ssh\id_ed25519
 DEPLOY_DIR=/volume2/docker/aurora      # 部署目录(非 Drive 同步区)
 TOKEN_SRC=/volume2/dev/apps/aurora/.runtime/tokens  # Drive 同步过来的 token 源
 # NAS 上 docker 可执行文件(DSM 7.2 起 ContainerManager 取代 Docker 套件)

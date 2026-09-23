@@ -2,7 +2,7 @@
 //
 // 铁律:禁止强杀 Chrome(会导致"恢复异常关闭"横幅 → gemini 自动化失效)。
 // 本脚本走 CDP Browser.close(与 keeper idle 自动停止一致),从 WSL2 也可调用:
-//   /mnt/d/PortableApps/_sys/node/node.exe /mnt/d/repos/aurora/scripts/cdp/graceful-close.mjs
+//   /mnt/d/PortableApps/_sys/node/node.exe /mnt/d/_work/repos/aurora/scripts/cdp/graceful-close.mjs
 // 关闭后 keeper 的下一次 /wake 会重新拉起 Chrome。
 import http from "node:http";
 const { cdp } = await import(new URL("./cdp-helper.mjs", import.meta.url).href);

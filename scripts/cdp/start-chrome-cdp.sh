@@ -7,7 +7,7 @@
 #   - stop 用 WM_CLOSE(优雅), 不用 /F 强杀(避免"异常关闭"横幅导致自动化失效)
 #   - 自动清理单实例锁文件(强杀残留后必须)
 # 抓取(Windows 侧, 最稳):
-#   D:\PortableApps\_sys\node\node.exe D:\repos\aurora\scripts\cdp\cdp-drive.mjs <url> --out out.txt
+#   D:\PortableApps\_sys\node\node.exe D:\_work\repos\aurora\scripts\cdp\cdp-drive.mjs <url> --out out.txt
 set -u
 
 PORT="${2:-9222}"
