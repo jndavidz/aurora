@@ -34,9 +34,9 @@ type Config struct {
 	DeepSeekModels    []string // 暴露的模型目录(exposed id 列表)
 	DeepSeekProxy     string   // 网页通道出口代理(非美区,绕 WAF)
 	// DeepSeekWebSearch 控制 quick 档(-chat)是否带联网搜索。
-	// 默认关闭:网页搜索使首字延迟 +1~2s,而 API 客户端通常由自己侧调 search 工具;
-	// 需要网页代查的场景设 DEEPSEEK_WEB_SEARCH=1。
-	DeepSeekWebSearch bool // 默认 false
+	// 默认开启(2026-09-27):与官网行为对齐,时效性问题(如赛事奖牌榜)需网页代查;
+	// 纯对话低延迟场景可设 DEEPSEEK_WEB_SEARCH=0 关闭(首字延迟 +1~2s)。
+	DeepSeekWebSearch bool // 默认 true
 
 	// 智谱清言(chatglm.cn)网页逆向通道配置。
 	GlmWebBase   string   // 网页端 base,默认 https://chatglm.cn
@@ -155,7 +155,7 @@ func Load() Config {
 		DeepSeekWebTokens: os.Getenv("DEEPSEEK_WEB_TOKENS"),
 		DeepSeekModels:    splitCSV(os.Getenv("DEEPSEEK_MODELS")),
 		DeepSeekProxy:     os.Getenv("DEEPSEEK_PROXY"),
-		DeepSeekWebSearch: getBoolEnv("DEEPSEEK_WEB_SEARCH", false),
+		DeepSeekWebSearch: getBoolEnv("DEEPSEEK_WEB_SEARCH", true),
 
 		GlmWebBase:   getEnv("GLM_WEB_BASE", "https://chatglm.cn"),
 		GlmWebTokens: os.Getenv("GLM_WEB_TOKENS"),

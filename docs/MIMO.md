@@ -69,3 +69,10 @@ curl http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/jso
 curl http://127.0.0.1:8080/v1/audio/transcriptions \
   -F "file=@test.wav;type=audio/wav" -F "model=mimo-v2.5-asr"
 ```
+
+## 七、参考网站
+
+<https://github.com/Fly143/MiMo2API>
+
+<https://github.com/Water008/MiMo2API>
+<https://github.com/rong6/mimo-2api>

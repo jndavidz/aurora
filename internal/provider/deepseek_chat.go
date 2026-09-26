@@ -21,9 +21,9 @@ import (
 // 识图(快速模式)与联网搜索互斥(DeepSeek 网页行为)。
 
 // searchEnabled 返回 quick 档请求是否带联网搜索。
-// 默认关闭(DEEPSEEK_WEB_SEARCH=1 才开启):网页搜索使首字延迟 +1~2s,
-// 且带图时上游忽略搜索开关,故有图时恒为 false。
-// API 客户端需要联网的场景应由客户端侧自行调 search 工具,而非网页代查。
+// 默认开启(DEEPSEEK_WEB_SEARCH=0 关闭,2026-09-27 起):与官网行为对齐,
+// 时效性问题(如「最新奖牌榜」)需网页代查;代价是首字延迟 +1~2s。
+// 有图时恒为 false(带图时上游忽略搜索开关)。
 func (d *DeepSeek) searchEnabled(m *deepseekModel, hasImages bool) bool {
 	if hasImages {
 		return false // 识图与搜索互斥
