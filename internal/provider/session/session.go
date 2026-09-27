@@ -128,25 +128,32 @@ func cacheKey(clientKey, modelID string) string {
 func (p *Pool) Acquire(clientKey, modelID string) *lease {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
+	var victim *poolEntry
 	if e, ok := p.entries[ck]; ok {
 		if time.Since(e.lastUsed) <= p.cfg.TTL {
 			e.lastUsed = time.Now()
 			p.mu.Unlock()
 			return &lease{SessionID: e.sid, ParentMessageID: e.parentID, token: e.token, key: ck}
 		}
-		// TTL 过期:踢出旧条目(上游 session 由上游自行回收,不主动删——
-		// 删除调用本身也是一次非真人请求;降级语义见 ticket 03)。
+		// TTL 过期:摘出旧条目(条目已不在池内,无人能再取到)。
+		victim = e
 		delete(p.entries, ck)
 	}
 	p.mu.Unlock()
+	if victim != nil {
+		p.deleteUpstream(victim) // 用户拍板:淘汰顺手删,不悬挂;锁外执行
+	}
 	l := p.newLease(clientKey, modelID, "")
 	// 新开即占坑:容量满时先按 LRU 淘汰(含可能的本键 TTL 过期残留)。
 	// 淘汰挂在 acquire 而非 release:未 release 的在途租约不占池位,
 	// 同一 key 并发新开时后者 release 覆盖前者(最后写入胜)。
 	p.mu.Lock()
-	p.evictIfNeeded(ck)
+	evicted := p.evictIfNeeded(ck)
 	p.entries[ck] = &poolEntry{sid: l.SessionID, token: l.token, lastUsed: time.Now()}
 	p.mu.Unlock()
+	if evicted != nil {
+		p.deleteUpstream(evicted)
+	}
 	return l
 }
 
@@ -156,30 +163,38 @@ func (p *Pool) Acquire(clientKey, modelID string) *lease {
 func (p *Pool) AcquireNew(clientKey, modelID string) *lease {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
-	delete(p.entries, ck)
+	victim := p.removeEntryLocked(ck)
 	p.mu.Unlock()
+	if victim != nil {
+		p.deleteUpstream(victim)
+	}
 	return p.Acquire(clientKey, modelID)
 }
 
 // release 归还租约:池化条目供下轮续轮,并把本轮 response_message_id
 // 写回作下轮 parent。新会话引导路径的租约同样归还(本轮成功即入池)。
+// 容量满时 LRU 淘汰的旧条目同样摘出后锁外删上游。
 func (p *Pool) Release(l *lease, responseMessageID string) {
 	if l == nil {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.evictIfNeeded(l.key)
+	evicted := p.evictIfNeeded(l.key)
 	p.entries[l.key] = &poolEntry{sid: l.SessionID, token: l.token, parentID: responseMessageID, lastUsed: time.Now()}
+	p.mu.Unlock()
+	if evicted != nil {
+		p.deleteUpstream(evicted)
+	}
 }
 
-// evictIfNeeded 容量满时按 LRU 淘汰最旧条目。调用方需持锁。
-func (p *Pool) evictIfNeeded(key string) {
+// evictIfNeeded 容量满时按 LRU 淘汰最旧条目,返回被摘出的条目(可能为
+// nil,调用方锁外删上游)。不触上游、不阻塞在网络 I/O 上。调用方需持锁。
+func (p *Pool) evictIfNeeded(key string) *poolEntry {
 	if _, exists := p.entries[key]; exists {
-		return
+		return nil
 	}
 	if len(p.entries) < p.cfg.Capacity {
-		return
+		return nil
 	}
 	var oldestKey string
 	var oldest time.Time
@@ -189,7 +204,29 @@ func (p *Pool) evictIfNeeded(key string) {
 			oldestKey, oldest, first = k, e.lastUsed, false
 		}
 	}
+	e := p.entries[oldestKey]
 	delete(p.entries, oldestKey)
+	return e
+}
+
+// removeEntryLocked 摘出指定条目(调用方锁外删上游)。需持锁。
+func (p *Pool) removeEntryLocked(key string) *poolEntry {
+	e, ok := p.entries[key]
+	if ok {
+		delete(p.entries, key)
+	}
+	return e
+}
+
+// deleteUpstream 调上游删除 session。失败仅记日志(条目已作废,
+// 下轮降级新开;不因删除失败阻塞主路径)。
+func (p *Pool) deleteUpstream(e *poolEntry) {
+	if e == nil {
+		return
+	}
+	if err := p.up.DeleteSession(e.token, e.sid); err != nil {
+		log.Printf("[session-pool] 删除上游 session %s 失败: %v", e.sid, err)
+	}
 }
 
 // newLease 新开上游 session 并构造租约。
@@ -203,22 +240,27 @@ func (p *Pool) newLease(clientKey, modelID, token string) *lease {
 }
 
 // cleanupLoop 后台扫描过期条目(参照 handler 层 SessionManager 模式)。
+// 锁内只摘条目,锁外删上游——网络 I/O 不持池锁。
 func (p *Pool) cleanupLoop() {
 	ticker := time.NewTicker(p.cfg.CleanupInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		p.mu.Lock()
 		now := time.Now()
-		removed := 0
+		var victims []*poolEntry
 		for k, e := range p.entries {
 			if now.Sub(e.lastUsed) > p.cfg.TTL {
+				victims = append(victims, e)
 				delete(p.entries, k)
-				removed++
 			}
 		}
-		if removed > 0 {
-			log.Printf("[session-pool] 清理过期 session %d 个,当前活跃 %d 个", removed, len(p.entries))
-		}
+		n := len(victims)
 		p.mu.Unlock()
+		for _, e := range victims {
+			p.deleteUpstream(e)
+		}
+		if n > 0 {
+			log.Printf("[session-pool] 清理过期 session %d 个", n)
+		}
 	}
 }

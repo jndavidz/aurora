@@ -29,6 +29,13 @@ func (f *fakeUpstream) CreateSession(token string) (string, error) {
 	return id, nil
 }
 
+// currentDeleted 线程安全读取删除计数(测试主 goroutine vs cleanupLoop)。
+func (f *fakeUpstream) currentDeleted() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleted
+}
+
 func (f *fakeUpstream) DeleteSession(token, sessionID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -95,6 +102,9 @@ func TestAcquireTTLExpiredNewSession(t *testing.T) {
 	if up.created != 2 {
 		t.Fatalf("created = %d, want 2", up.created)
 	}
+	if up.deleted != 1 {
+		t.Fatalf("TTL 淘汰应顺手删上游 session: deleted = %d, want 1", up.deleted)
+	}
 }
 
 // Cycle 4b:LRU 淘汰——容量满时最久未用条目被踢出,刚用过的保留。
@@ -124,6 +134,11 @@ func TestAcquireLRUEviction(t *testing.T) {
 	if up.created != 5 {
 		t.Fatalf("created = %d, want 5", up.created)
 	}
+	// 删除计数:evict u1(1) → evict u2(2) → u1 占坑后被 u2 挤出(3)。
+	// 三次都是真实淘汰,deleted=3 是 LRU 链式挤出的正确结果。
+	if up.deleted != 3 {
+		t.Fatalf("LRU 链式淘汰应删上游: deleted = %d, want 3", up.deleted)
+	}
 }
 
 // Cycle 5:显式信令 → 池内同 key 旧 entry 作废,强制新开(旧上游 session
@@ -144,6 +159,9 @@ func TestAcquireNewSignalInvalidates(t *testing.T) {
 	}
 	if up.created != 2 {
 		t.Fatalf("created = %d, want 2", up.created)
+	}
+	if up.deleted != 1 {
+		t.Fatalf("信令作废旧 entry 应顺手删上游 session: deleted = %d, want 1", up.deleted)
 	}
 
 	// 信令后的下一轮(无信令)正常复用新 session
@@ -179,5 +197,22 @@ func TestPoolConcurrentAccess(t *testing.T) {
 	pool.mu.Unlock()
 	if size > 4 {
 		t.Fatalf("池内条目 %d 超上限 4", size)
+	}
+}
+
+// 后台清理循环也应顺手删上游 session(短间隔驱动,计时留余量)。
+func TestCleanupLoopDeletesUpstream(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{CleanupInterval: 20 * time.Millisecond, TTL: 10 * time.Millisecond})
+
+	l := pool.Acquire("u1", "m")
+	pool.Release(l, "r-1")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for up.currentDeleted() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d := up.currentDeleted(); d != 1 {
+		t.Fatalf("后台清理应删上游 session: deleted = %d, want 1", d)
 	}
 }
