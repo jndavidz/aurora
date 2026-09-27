@@ -133,6 +133,9 @@ func rotl64(v uint64, n int) uint64 {
 }
 
 // hashDeepSeekV1 对输入做 23 轮 Keccak-256(SHA3-256 海绵,rate=136,pad 0x06)。
+// HashDeepSeekV1 导出仅供测试构造可解 PoW 挑战(生产路径走 fetchAndSolvePow)。
+func HashDeepSeekV1(msg []byte) []byte { return hashDeepSeekV1(msg) }
+
 func hashDeepSeekV1(msg []byte) []byte {
 	const rate = 136 // SHA3-256
 	var st [25]uint64

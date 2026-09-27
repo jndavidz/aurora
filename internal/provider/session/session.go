@@ -67,8 +67,8 @@ type PoolConfig struct {
 	CleanupInterval time.Duration
 }
 
-// lease 是一次续轮租约:上游 session 的句柄 + 续轮所需的父消息锚点。
-type lease struct {
+// Lease 是一次续轮租约:上游 session 的句柄 + 续轮所需的父消息锚点。
+type Lease struct {
 	SessionID       string
 	ParentMessageID string // 上轮 response_message_id;新开时为空
 	token           string // 建立时绑定的 token
@@ -129,7 +129,7 @@ func cacheKey(clientKey, modelID string) string {
 // Acquire 取一条续轮租约。命中池内活 entry(未过 TTL)则续轮
 // (parent = 上轮 response_message_id);未命中/TTL 过期则新开。
 // 上游建会话失败返回 error(调用方转 502),不 panic。
-func (p *Pool) Acquire(clientKey, modelID string) (*lease, error) {
+func (p *Pool) Acquire(clientKey, modelID string) (*Lease, error) {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
 	var victim *poolEntry
@@ -137,7 +137,7 @@ func (p *Pool) Acquire(clientKey, modelID string) (*lease, error) {
 		if time.Since(e.lastUsed) <= p.cfg.TTL {
 			e.lastUsed = time.Now()
 			p.mu.Unlock()
-			return &lease{SessionID: e.sid, ParentMessageID: e.parentID, token: e.token, key: ck}, nil
+			return &Lease{SessionID: e.sid, ParentMessageID: e.parentID, token: e.token, key: ck}, nil
 		}
 		// TTL 过期:摘出旧条目(条目已不在池内,无人能再取到)。
 		victim = e
@@ -166,7 +166,7 @@ func (p *Pool) Acquire(clientKey, modelID string) (*lease, error) {
 
 // AcquireNew 显式新会话:作废池内同 key 旧 entry 后强制新开。
 // 信令解析统一走 ResolveClientKey,本层只负责作废语义。
-func (p *Pool) AcquireNew(clientKey, modelID string) (*lease, error) {
+func (p *Pool) AcquireNew(clientKey, modelID string) (*Lease, error) {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
 	victim := p.removeEntryLocked(ck)
@@ -177,10 +177,22 @@ func (p *Pool) AcquireNew(clientKey, modelID string) (*lease, error) {
 	return p.Acquire(clientKey, modelID)
 }
 
+// Discard 丢弃失败租约:条目不入池,上游 session 顺手删(ticket 03 的失败
+// 降级依赖此语义:失败续轮不留下已失效的条目)。删除失败仅记日志。
+func (p *Pool) Discard(l *Lease) {
+	if l == nil {
+		return
+	}
+	p.mu.Lock()
+	delete(p.entries, l.key)
+	p.mu.Unlock()
+	p.deleteUpstream(&poolEntry{sid: l.SessionID, token: l.token})
+}
+
 // release 归还租约:池化条目供下轮续轮,并把本轮 response_message_id
 // 写回作下轮 parent。新会话引导路径的租约同样归还(本轮成功即入池)。
 // 容量满时 LRU 淘汰的旧条目同样摘出后锁外删上游。
-func (p *Pool) Release(l *lease, responseMessageID string) {
+func (p *Pool) Release(l *Lease, responseMessageID string) {
 	if l == nil {
 		return
 	}
@@ -237,12 +249,12 @@ func (p *Pool) deleteUpstream(e *poolEntry) {
 
 // newLease 新开上游 session 并构造租约。token 为建立时绑定的凭证;
 // 失败透传 error(ticket 03 的降级重试建立在它之上)。
-func (p *Pool) newLease(clientKey, modelID, token string) (*lease, error) {
+func (p *Pool) newLease(clientKey, modelID, token string) (*Lease, error) {
 	sid, err := p.up.CreateSession(token)
 	if err != nil {
 		return nil, fmt.Errorf("session create: %w", err)
 	}
-	return &lease{SessionID: sid, token: token, key: cacheKey(clientKey, modelID)}, nil
+	return &Lease{SessionID: sid, token: token, key: cacheKey(clientKey, modelID)}, nil
 }
 
 // cleanupLoop 后台扫描过期条目(参照 handler 层 SessionManager 模式)。

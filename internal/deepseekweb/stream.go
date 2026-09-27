@@ -22,6 +22,9 @@ type StreamResult struct {
 	RequestMsgID  string
 	Finished      bool
 	Err           string
+	// usage 统计(若上游帧携带;非流式汇总响应回填用)。
+	PromptTokens     int
+	CompletionTokens int
 }
 
 // 正文引用标记(联网搜索时模型在正文里嵌入的引用占位符,网页端渲染成引用卡片)。
@@ -154,6 +157,17 @@ func applyPayload(payload, event string, onDelta func(Delta), res *StreamResult)
 	}
 	if rawMsg, ok := raw["request_message_id"]; ok {
 		res.RequestMsgID = rawJSONString(rawMsg)
+	}
+	// usage:token 统计帧(非流式汇总响应回填用;非 token 形态安全忽略)。
+	if rawUsage, ok := raw["usage"]; ok {
+		var u struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		}
+		if json.Unmarshal(rawUsage, &u) == nil {
+			res.PromptTokens = u.PromptTokens
+			res.CompletionTokens = u.CompletionTokens
+		}
 	}
 	if event == "ready" {
 		return

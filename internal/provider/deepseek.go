@@ -7,6 +7,7 @@ import (
 	"aurora/internal/apierrors"
 	"aurora/internal/config"
 	"aurora/internal/deepseekweb"
+	"aurora/internal/provider/session"
 	"aurora/typings/official"
 
 	"github.com/gin-gonic/gin"
@@ -43,11 +44,13 @@ type DeepSeek struct {
 	byID   map[string]*deepseekModel
 	// coding 限频(chat 不限)
 	limiter *CodingLimiter
+	// sessionPool 上游会话池(仅 chat 变体使用;惰性构造,服务生命周期共享)。
+	sessionPool *session.Pool
 }
 
 // defaultDeepSeekModels 是 DEEPSEEK_MODELS 未配置时的默认目录。
 // 2026-09-27 用户拍板:去掉 v4-pro/flash,只暴露一个 "deepseek"
-//(= 快速模式 + 智能搜索 + 非深度思考)。coding 变体已封存(CODING_ENABLED),
+// (= 快速模式 + 智能搜索 + 非深度思考)。coding 变体已封存(CODING_ENABLED),
 // 解析逻辑保留但默认目录不含。
 var defaultDeepSeekModels = []string{
 	"deepseek",

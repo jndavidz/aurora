@@ -54,8 +54,8 @@ func NewClient(baseURL, tokenFile, proxyURL string) (*Client, error) {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client: factory.NewWebClient(factory.Profile{
 			Mode:       factory.ModeTLSFaked, // C1 灰度(2026-09-04):Go JA3 + Chrome UA 是最刺眼的非真人特征
-			Upgradable: true,                // 保留:AURORA_LEGACY_IDENTITY=1 可回退 Go 原生
-			ProxyURL:   proxyURL,            // 代理语义由工厂内化(clone DefaultTransport + 注入)
+			Upgradable: true,                 // 保留:AURORA_LEGACY_IDENTITY=1 可回退 Go 原生
+			ProxyURL:   proxyURL,             // 代理语义由工厂内化(clone DefaultTransport + 注入)
 		}),
 		tokenFile: tokenFile,
 	}
@@ -226,7 +226,7 @@ func (c *Client) CreateSession(token string) (string, error) {
 type CompletionRequest struct {
 	SessionID       string
 	ParentMessageID string // 首轮空;续轮 = 上轮 response_message_id
-	Prompt          string // 拍平后的完整多轮字符串
+	Prompt          string // 首轮:拍平的多轮历史;续轮:仅本轮新内容
 	ModelType       string // "default"(快速) | "expert"(专家) | "vision"(识图)
 	ThinkingEnabled bool
 	SearchEnabled   bool
@@ -412,9 +412,10 @@ func (c *Client) ForkFileToVision(token, fileID string) (string, error) {
 // StopStream [P0] 中断生成。协议待验证(chat/stop_stream 或 chat_session/delete)。
 func (c *Client) StopStream(token, sessionID string) {}
 
-// DeleteSession 删除会话(兜底清理,防账号后台堆积)。
-func (c *Client) DeleteSession(token, sessionID string) {
-	_, _ = c.doJSON(token, "/api/v0/chat_session/delete", map[string]string{"chat_session_id": sessionID})
+// DeleteSession 删除会话(池淘汰/降级路径需感知失败并记日志,非纯尽力而为)。
+func (c *Client) DeleteSession(token, sessionID string) error {
+	_, err := c.doJSON(token, "/api/v0/chat_session/delete", map[string]string{"chat_session_id": sessionID})
+	return err
 }
 
 func jsonBody(v any) io.Reader {
