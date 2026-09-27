@@ -9,8 +9,8 @@ import (
 // ── 会话复用消费者 loop 的纯函数 seam 测试(ticket 02,wire-fake 之外的第三层)──
 //
 // runChatTurn 的分支逻辑(续轮增量 vs 新会话引导 vs vision 绕行)全部
-// 注入接口覆盖,不需要上游网络。wire 级回环(seamConsume 逐帧 flush、
-// 收流结束回放)由 deepseekweb 的 protocol_test 覆盖。
+// 注入接口覆盖,不需要上游网络。消费 seam 的帧序化行为由
+// preConsumedStream 预置回放 + wire 级测试(deepseek_chat_wire_test.go)覆盖。
 
 // fakeSessionPool 记录 acquire/discard/release 轨迹,返回预置租约。
 type fakeSessionPool struct {
@@ -55,12 +55,6 @@ func (f *fakeChatSender) Send(token string, req deepseekSenderReq) (*preConsumed
 		result: &deepseekStreamResult{Text: f.reply, ResponseMsgID: f.msgID},
 		deltas: []deepseekDelta{{Text: f.reply}},
 	}, nil
-}
-
-// seamConsume 用预置增量回放帧序(delta 回调期间立即可见)。
-func (f *fakeChatSender) seamConsume(_ *preConsumedStream, onDelta func(deepseekDelta)) *deepseekStreamResult {
-	onDelta(deepseekDelta{Text: f.reply})
-	return &deepseekStreamResult{Text: f.reply, ResponseMsgID: f.msgID}
 }
 
 // ── 断言用例 ──
