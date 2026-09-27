@@ -16,7 +16,11 @@
 - [x] 池化/TTL/LRU 全部穿过 acquire/release seam，用内存 fake 上游测试，无网络依赖
 - [x] clientKey 优先级解析单测：头 → user 字段剥 `#new#` → 不进池三档
 - [x] 缓存键 = clientKey + model id，同 clientKey 不同 model 不串池
-- [x] `X-Session-Action: new` 与 `#new#` 前缀解析单测
+- [x] `X-Session-Action: new` 与 `#new#` 前缀解析单测（三通道叠加为 OR，含 action 头独立/叠加/非 new 值忽略用例）
 - [x] LRU 淘汰与后台清理循环单测（超上限淘汰最旧、TTL 过期条目被清）
+- [x] Acquire/AcquireNew 返回 `(*lease, error)`：上游建会话失败透传 error（调用方转 502），不 panic
 
-**Review 备注（已拍板落地 c8eddd2）**：TTL 过期/LRU 淘汰/信令作废/后台清理四条路径均主动调上游 DeleteSession（锁内摘条目、锁外删，网络 I/O 不持池锁；删除失败仅记日志）。信令叠加语义（头 + user 任一生效）为 spec 盲区，已固化测试。
+**Review 备注**：
+- 淘汰删除策略（已拍板落地）：TTL 过期/LRU 淘汰/信令作废/后台清理四条路径均主动调上游 DeleteSession（锁内摘条目、锁外删，网络 I/O 不持池锁；删除失败仅记日志）。
+- 信令叠加语义（头 + user 任一生效）为 spec 盲区，已固化测试。
+- token 轮换语义（spec「热加载/轮换后旧 entry 失效」）不在本 ticket，排期 ticket 03；03 需给 Pool 增加 token 有效性校验口子（seam 扩展）。
