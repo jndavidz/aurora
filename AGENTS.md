@@ -28,6 +28,12 @@ Aurora 是「网页端 → OpenAI 兼容 API」网关(Go):对外暴露 `/v1/chat
 - **部署 / 发版** — `docs/NAS_DEPLOYMENT.md`(WSL 侧 `docker build` → `save/load` 推 NAS,NAS 只 `compose up`;NAS 映射 65432→8080)
 - **coding 封存**(2026-09-02) — 全部 `-coding` 变体冻结不删除,总开关 `CODING_ENABLED`(默认 false);aurora 仅作对话用途,结论与恢复方法见 `docs/CHATGPT_TOOL_BRIDGE.md`。
 
+## 测试纪律（防风控）
+
+- **live 测试 = 消耗真实账号的真人化操作**：模拟真人节奏（单发、间隔 ≥2s），优先复用已有会话/登录态；**批量脚本压测、循环连发、并发轰炸一律禁止**，这类机器化请求是封号主因。
+- **非必要不打上游**：本地可验证的逻辑（parser/conversion/单元测试）不碰真实凭证；确需 live 验证时单条验证即止，不复跑、不重放。
+- **可自动化≠该自动化**：涉及真实账号的操作（live test、抓包、保活脚本）能手工单次完成就手工单次，减少自动化痕迹（固定间隔、均匀节奏、无停顿连发都是风控特征）。
+
 ## 凭证红线
 
 - 真实凭证只在 `.runtime/tokens/`、`tokens/*.json`:这些值不进 git、不进聊天记录。
@@ -41,3 +47,13 @@ Aurora 是「网页端 → OpenAI 兼容 API」网关(Go):对外暴露 `/v1/chat
 - Chrome for Testing 启停:`bash scripts/cdp/start-chrome-cdp.sh {start|stop|status}`;通用抓取:`node scripts/cdp/cdp-drive.mjs <url> [--out f.txt]`;各站协议抓包:`node scripts/cdp/capture-<site>.mjs`(抓 /api/ 请求)。
 - 抓取统一在 **Windows 侧**跑(`D:\PortableApps\_sys\node\node.exe`):WSL NAT 下 `127.0.0.1` 不可达 Windows 回环端口(Chrome 强制绑回环)。
 - 关闭浏览器走优雅路径(graceful-close),强杀会损坏 profile 登录态。
+
+## Agent skills
+
+### Issue tracker
+
+Issues are local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at repo root + `docs/adr/`. See `docs/agents/domain.md`.
