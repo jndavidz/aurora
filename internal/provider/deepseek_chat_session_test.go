@@ -18,11 +18,13 @@ type fakeSessionPool struct {
 	acquired int
 	acqNew   int
 	discards int
+	tokens   []string // Acquire/AcquireNew 收到的 token(轮换传递断言)
 	released []string // release 收到的 responseMessageID
 }
 
-func (f *fakeSessionPool) Acquire(clientKey, modelID string) (*session.Lease, error) {
+func (f *fakeSessionPool) Acquire(clientKey, modelID, token string) (*session.Lease, error) {
 	f.acquired++
+	f.tokens = append(f.tokens, token)
 	if len(f.leases) > 0 {
 		l := f.leases[0]
 		f.leases = f.leases[1:]
@@ -31,9 +33,9 @@ func (f *fakeSessionPool) Acquire(clientKey, modelID string) (*session.Lease, er
 	return &session.Lease{}, nil
 }
 
-func (f *fakeSessionPool) AcquireNew(clientKey, modelID string) (*session.Lease, error) {
+func (f *fakeSessionPool) AcquireNew(clientKey, modelID, token string) (*session.Lease, error) {
 	f.acqNew++
-	return f.Acquire(clientKey, modelID)
+	return f.Acquire(clientKey, modelID, token)
 }
 
 func (f *fakeSessionPool) Discard(l *session.Lease) { f.discards++ }
@@ -55,6 +57,21 @@ func (f *fakeChatSender) Send(token string, req deepseekSenderReq) (*preConsumed
 		result: &deepseekStreamResult{Text: f.reply, ResponseMsgID: f.msgID},
 		deltas: []deepseekDelta{{Text: f.reply}},
 	}, nil
+}
+
+// 租约建立绑定本轮 token:flow 把 token 传给池(spec「session 与建立时 token 绑定」)。
+func TestLoopPassesTokenToPool(t *testing.T) {
+	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1"}}}
+	sender := &fakeChatSender{reply: "答", msgID: "m1"}
+	flow := &deepseekChatFlow{
+		pool: pool, sender: sender, clientKey: "u1", token: "tok-a",
+		messages: []deepseekTurn{{Text: "问"}},
+	}
+	flow.runForTest(t)
+
+	if len(pool.tokens) != 1 || pool.tokens[0] != "tok-a" {
+		t.Fatalf("acquire 应传入本轮 token, got %v", pool.tokens)
+	}
 }
 
 // ── 断言用例 ──

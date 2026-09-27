@@ -126,20 +126,21 @@ func cacheKey(clientKey, modelID string) string {
 	return clientKey + "|" + modelID
 }
 
-// Acquire 取一条续轮租约。命中池内活 entry(未过 TTL)则续轮
-// (parent = 上轮 response_message_id);未命中/TTL 过期则新开。
-// 上游建会话失败返回 error(调用方转 502),不 panic。
-func (p *Pool) Acquire(clientKey, modelID string) (*Lease, error) {
+// Acquire 取一条续轮租约。命中池内活 entry(未过 TTL 且 token 未轮换)则续轮
+// (parent = 上轮 response_message_id);未命中/TTL 过期/token 轮换则新开。
+// token 是调用方本轮携带的凭证:session 与建立时的 token 绑定,轮换后旧 entry
+// 视为失效(spec §token 轮换语义)。上游建会话失败返回 error(调用方转 502),不 panic。
+func (p *Pool) Acquire(clientKey, modelID, token string) (*Lease, error) {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
 	var victim *poolEntry
 	if e, ok := p.entries[ck]; ok {
-		if time.Since(e.lastUsed) <= p.cfg.TTL {
+		if time.Since(e.lastUsed) <= p.cfg.TTL && e.token == token {
 			e.lastUsed = time.Now()
 			p.mu.Unlock()
 			return &Lease{SessionID: e.sid, ParentMessageID: e.parentID, token: e.token, key: ck}, nil
 		}
-		// TTL 过期:摘出旧条目(条目已不在池内,无人能再取到)。
+		// TTL 过期 / token 已轮换:摘出旧条目(条目已不在池内,无人能再取到)。
 		victim = e
 		delete(p.entries, ck)
 	}
@@ -147,7 +148,7 @@ func (p *Pool) Acquire(clientKey, modelID string) (*Lease, error) {
 	if victim != nil {
 		p.deleteUpstream(victim) // 用户拍板:淘汰顺手删,不悬挂;锁外执行
 	}
-	l, err := p.newLease(clientKey, modelID, "")
+	l, err := p.newLease(clientKey, modelID, token)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +167,7 @@ func (p *Pool) Acquire(clientKey, modelID string) (*Lease, error) {
 
 // AcquireNew 显式新会话:作废池内同 key 旧 entry 后强制新开。
 // 信令解析统一走 ResolveClientKey,本层只负责作废语义。
-func (p *Pool) AcquireNew(clientKey, modelID string) (*Lease, error) {
+func (p *Pool) AcquireNew(clientKey, modelID, token string) (*Lease, error) {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
 	victim := p.removeEntryLocked(ck)
@@ -174,7 +175,7 @@ func (p *Pool) AcquireNew(clientKey, modelID string) (*Lease, error) {
 	if victim != nil {
 		p.deleteUpstream(victim)
 	}
-	return p.Acquire(clientKey, modelID)
+	return p.Acquire(clientKey, modelID, token)
 }
 
 // Discard 丢弃失败租约:条目不入池,上游 session 顺手删(ticket 03 的失败

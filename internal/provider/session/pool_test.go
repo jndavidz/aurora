@@ -50,8 +50,8 @@ func TestAcquireDifferentModelsNoPoolSharing(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{})
 
-	l1, err := pool.Acquire("u1", "deepseek")
-	l2, err2 := pool.Acquire("u1", "deepseek-expert")
+	l1, err := pool.Acquire("u1", "deepseek", "tok")
+	l2, err2 := pool.Acquire("u1", "deepseek-expert", "tok")
 	if err != nil || err2 != nil {
 		t.Fatalf("Acquire: %v / %v", err, err2)
 	}
@@ -69,14 +69,14 @@ func TestAcquireHitReusesSession(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
 
-	l1, err := pool.Acquire("u1", "deepseek")
+	l1, err := pool.Acquire("u1", "deepseek", "tok")
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	l1.ParentMessageID = "resp-1" // 模拟首轮完成
 	pool.Release(l1, "resp-1")
 
-	l2, err := pool.Acquire("u1", "deepseek")
+	l2, err := pool.Acquire("u1", "deepseek", "tok")
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -97,14 +97,14 @@ func TestAcquireTTLExpiredNewSession(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: -1, TTL: 10 * time.Millisecond})
 
-	l1, err := pool.Acquire("u1", "deepseek")
+	l1, err := pool.Acquire("u1", "deepseek", "tok")
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	pool.Release(l1, "resp-1")
 	time.Sleep(15 * time.Millisecond)
 
-	l2, err := pool.Acquire("u1", "deepseek")
+	l2, err := pool.Acquire("u1", "deepseek", "tok")
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -127,19 +127,19 @@ func TestAcquireLRUEviction(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{Capacity: 2, CleanupInterval: -1})
 
-	a, err := pool.Acquire("u1", "m")
+	a, err := pool.Acquire("u1", "m", "tok")
 	pool.Release(a, "r-a")
-	b, err2 := pool.Acquire("u2", "m")
+	b, err2 := pool.Acquire("u2", "m", "tok")
 	pool.Release(b, "r-b")
-	time.Sleep(2 * time.Millisecond)   // 保证 lastUsed 可比
-	c, err3 := pool.Acquire("u3", "m") // 池满,u1 被淘汰
+	time.Sleep(2 * time.Millisecond)          // 保证 lastUsed 可比
+	c, err3 := pool.Acquire("u3", "m", "tok") // 池满,u1 被淘汰
 	if err != nil || err2 != nil || err3 != nil {
 		t.Fatalf("Acquire: %v / %v / %v", err, err2, err3)
 	}
 	_ = c
 
 	// u1 的条目已被淘汰 → 再次 acquire u1 应新开
-	a2, err4 := pool.Acquire("u1", "m")
+	a2, err4 := pool.Acquire("u1", "m", "tok")
 	if err4 != nil {
 		t.Fatalf("Acquire: %v", err4)
 	}
@@ -148,7 +148,7 @@ func TestAcquireLRUEviction(t *testing.T) {
 	}
 	// LRU 语义自洽:acquire u1 时池又满,u2 成为最旧被淘汰 → b2 也新开。
 	// created 计数 = 初始 3 + u1 重开 1 + u2 重开 1 = 5。
-	b2, err5 := pool.Acquire("u2", "m")
+	b2, err5 := pool.Acquire("u2", "m", "tok")
 	if err5 != nil {
 		t.Fatalf("Acquire: %v", err5)
 	}
@@ -171,13 +171,13 @@ func TestAcquireNewSignalInvalidates(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
 
-	l1, err := pool.Acquire("u1", "deepseek")
+	l1, err := pool.Acquire("u1", "deepseek", "tok")
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
 	pool.Release(l1, "resp-1")
 
-	l2, err := pool.AcquireNew("u1", "deepseek")
+	l2, err := pool.AcquireNew("u1", "deepseek", "tok")
 	if l2.SessionID == l1.SessionID {
 		t.Fatal("显式新会话信令应强制新开,却复用了旧 session")
 	}
@@ -192,7 +192,7 @@ func TestAcquireNewSignalInvalidates(t *testing.T) {
 	}
 
 	// 信令后的下一轮(无信令)正常复用新 session
-	l3, err2 := pool.Acquire("u1", "deepseek")
+	l3, err2 := pool.Acquire("u1", "deepseek", "tok")
 	if err2 != nil {
 		t.Fatalf("Acquire: %v", err2)
 	}
@@ -213,13 +213,13 @@ func TestPoolConcurrentAccess(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			key := fmt.Sprintf("u%d", n%6)
-			l, err := pool.Acquire(key, "m")
+			l, err := pool.Acquire(key, "m", "tok")
 			if err != nil {
 				t.Errorf("Acquire: %v", err)
 				return
 			}
 			if n%3 == 0 {
-				if _, err := pool.AcquireNew(key, "m"); err != nil {
+				if _, err := pool.AcquireNew(key, "m", "tok"); err != nil {
 					t.Errorf("AcquireNew: %v", err)
 					return
 				}
@@ -242,7 +242,7 @@ func TestCleanupLoopDeletesUpstream(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: 20 * time.Millisecond, TTL: 10 * time.Millisecond})
 
-	l, err := pool.Acquire("u1", "m")
+	l, err := pool.Acquire("u1", "m", "tok")
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -254,5 +254,58 @@ func TestCleanupLoopDeletesUpstream(t *testing.T) {
 	}
 	if d := up.currentDeleted(); d != 1 {
 		t.Fatalf("后台清理应删上游 session: deleted = %d, want 1", d)
+	}
+}
+
+// Cycle 6(2026-09-27 live 验证暴露):租约建立必须用调用方本轮携带的 token。
+// 修复前 newLease 硬编码空 token,带 X-Session-Key 的请求 100% 401/502。
+func TestAcquirePassesTokenToUpstream(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
+
+	l, err := pool.Acquire("u1", "deepseek", "tok-A")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if got := up.sessions[l.SessionID]; got != "tok-A" {
+		t.Fatalf("上游建会话 token = %q, want tok-A", got)
+	}
+	if l.token != "tok-A" {
+		t.Fatalf("租约绑定 token = %q, want tok-A", l.token)
+	}
+}
+
+// Cycle 6b:token 轮换(spec「session 与建立时的 token 绑定」)→ 池内旧 entry
+// 对持有新 token 的请求视为失效,降级新开(不拿旧 session 配新 token 发)。
+func TestAcquireTokenRotationInvalidatesEntry(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
+
+	l1, err := pool.Acquire("u1", "deepseek", "tok-A")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pool.Release(l1, "resp-1")
+
+	l2, err := pool.Acquire("u1", "deepseek", "tok-B")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if l2.SessionID == l1.SessionID {
+		t.Fatal("token 轮换后旧 entry 应失效,不应复用")
+	}
+	if l2.ParentMessageID != "" {
+		t.Fatalf("失效重开的 parent 应为空, got %q", l2.ParentMessageID)
+	}
+	if up.deleted != 1 {
+		t.Fatalf("失效 entry 应顺手删上游 session: deleted = %d, want 1", up.deleted)
+	}
+	// 同 token 的后续请求正常复用新 entry。
+	l3, err := pool.Acquire("u1", "deepseek", "tok-B")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if l3.SessionID != l2.SessionID {
+		t.Fatalf("同 token 应复用新 session: got %q want %q", l3.SessionID, l2.SessionID)
 	}
 }

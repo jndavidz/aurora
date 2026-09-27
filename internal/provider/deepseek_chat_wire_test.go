@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,11 +25,14 @@ import (
 
 // wireUpstream 是 httptest 假上游:实现 CreateSession/DeleteSession/Complete,
 // 记录全部请求体。PoW 挑战可解(difficulty 小、target 已算好)。
+// failCompletions 列出需返回 4xx 的 completion 序号(从 0 起),
+// 用于注入续轮失败(ticket 03 降级验收);命中的请求仍记入 completions。
 type wireUpstream struct {
-	mu          sync.Mutex
-	creates     int
-	deletes     int
-	completions []wireCompletion // 按到达顺序
+	mu              sync.Mutex
+	creates         int
+	deletes         int
+	completions     []wireCompletion // 按到达顺序
+	failCompletions map[int]bool
 }
 
 type wireCompletion struct {
@@ -64,6 +69,12 @@ func (w *wireUpstream) handler(t *testing.T) http.Handler {
 			})
 			msgID := "m" + strconv.Itoa(idx+1)
 			text := "回复" + strconv.Itoa(idx+1)
+			if w.failCompletions[idx] {
+				// 上游 4xx(会话失效/风控):Complete 侧解析为错误
+				// ("./chat/deepseek_chat_session.go 的发送失败分支)。
+				writeJSONWire(rw, map[string]any{"code": 40003, "msg": "session invalid", "data": map[string]any{"biz_code": 0, "biz_msg": "", "biz_data": nil}})
+				return
+			}
 			rw.Header().Set("Content-Type", "text/event-stream")
 			rw.Write([]byte("data: {\"response_message_id\":\"" + msgID + "\"}\n\n" +
 				"data: {\"v\":\"" + text + "\"}\n\n" +
@@ -91,8 +102,14 @@ type deepseekWireFacade struct {
 
 func startWire(t *testing.T, w *wireUpstream) (*deepseekweb.Client, func()) {
 	t.Helper()
+	return startWireWithTokenFile(t, w, "")
+}
+
+// startWireWithTokenFile 同上,但接一个 token 文件(热加载/轮换场景)。
+func startWireWithTokenFile(t *testing.T, w *wireUpstream, tokenFile string) (*deepseekweb.Client, func()) {
+	t.Helper()
 	srv := httptest.NewServer(w.handler(t))
-	c, err := deepseekweb.NewClient(srv.URL, "", "")
+	c, err := deepseekweb.NewClient(srv.URL, tokenFile, "")
 	if err != nil {
 		srv.Close()
 		t.Fatal(err)
@@ -132,6 +149,26 @@ func runWireTurn(t *testing.T, f *deepseekWireFacade, token string, req *officia
 		t.Fatalf("flow.run: %v", err)
 	}
 	return out
+}
+
+// runWireTurnErr 与 runWireTurn 同型但透传 error(降级失败断言用)。
+func runWireTurnErr(t *testing.T, f *deepseekWireFacade, token string, req *official.ResponsesAPIRequest) (deepseekTurnOutput, error) {
+	t.Helper()
+	var turns []deepseekTurn
+	for _, it := range responsesInputItems(req.Input) {
+		if it.Text != "" {
+			turns = append(turns, deepseekTurn{Text: it.Text})
+		}
+	}
+	flow := &deepseekChatFlow{
+		pool:      f.pool,
+		sender:    &deepseekWebSender{client: f.client},
+		clientKey: "sess-1",
+		modelType: "default",
+		token:     token,
+		messages:  turns,
+	}
+	return flow.run()
 }
 
 // writeJSONWire 输出 JSON 响应(wire 测试局部辅助)。
@@ -261,6 +298,145 @@ func TestWireVisionBypassesPool(t *testing.T) {
 		if comp.SessionID != "vision" && comp.SessionID == "" {
 			t.Fatalf("vision 请求应有自建 session id")
 		}
+	}
+}
+
+// Acceptance 2(ticket 03):续轮 completion 失败(上游 4xx)→ 池内 entry 被丢弃
+// (旧上游 session 顺手删)→ 自动新开 session 重试一次成功。
+func TestWireFailureDegradesToNewSession(t *testing.T) {
+	w := &wireUpstream{failCompletions: map[int]bool{1: true}}
+	client, closer := startWire(t, w)
+	defer closer()
+
+	pool := session.NewPool(deepseekUpstream{client}, session.PoolConfig{CleanupInterval: -1})
+	f := &deepseekWireFacade{pool: pool, client: client}
+
+	// 第一轮:建会话,completion #0 成功。
+	runWireTurn(t, f, "tok", responsesReq("你好"))
+
+	// 第二轮续轮:completion #1 注入 4xx(会话失效/风控)→ 降级新开重试。
+	out, err := runWireTurnErr(t, f, "tok", responsesReq("你好", "还在吗"))
+	if err != nil {
+		t.Fatalf("降级重试应成功,却返回 error: %v", err)
+	}
+	if out.text == "" {
+		t.Fatal("降级重试成功但无正文")
+	}
+
+	if w.creates != 2 {
+		t.Fatalf("失败后应新开一个 session(共 2), creates=%d", w.creates)
+	}
+	if w.deletes != 1 {
+		t.Fatalf("失败租约应丢弃并删旧上游 session, deletes=%d", w.deletes)
+	}
+	if len(w.completions) != 3 {
+		t.Fatalf("应恰好发 3 次(首轮+失败续轮+重试新开), got %d", len(w.completions))
+	}
+	failed, retry := w.completions[1], w.completions[2]
+	if failed.ParentMessageID == nil {
+		t.Fatal("失败的那次应是续轮形态(parent 非空)")
+	}
+	if failed.Prompt != "还在吗" {
+		t.Fatalf("失败续轮 prompt = %q, want 还在吗", failed.Prompt)
+	}
+	if retry.ParentMessageID != nil {
+		t.Fatalf("重试应新会话引导(parent 为 null), got %v", retry.ParentMessageID)
+	}
+	if retry.Prompt != "你好\n\n还在吗" {
+		t.Fatalf("重试应拍平本轮内容, prompt=%q", retry.Prompt)
+	}
+	if retry.SessionID == failed.SessionID {
+		t.Fatalf("重试应换用新 session: %q", retry.SessionID)
+	}
+	// 降级成功后新 entry 入池:下一轮继续复用重试建立的 session。
+	out3, err := runWireTurnErr(t, f, "tok", responsesReq("你好", "还在吗", "再问"))
+	if err != nil {
+		t.Fatalf("降级后下一轮: %v", err)
+	}
+	if w.creates != 2 {
+		t.Fatalf("降级后下一轮应复用重试 session, creates=%d", w.creates)
+	}
+	if w.completions[3].SessionID != retry.SessionID || w.completions[3].ParentMessageID == nil {
+		t.Fatalf("降级后下一轮应续轮同一 session: %+v", w.completions[3])
+	}
+	_ = out3
+}
+
+// Acceptance 2b(ticket 03):连续失败 → 恰好重试一次后返回错误,不无限重试。
+func TestWireDoubleFailureStopsAfterOneRetry(t *testing.T) {
+	w := &wireUpstream{failCompletions: map[int]bool{0: true, 1: true, 2: true}}
+	client, closer := startWire(t, w)
+	defer closer()
+
+	pool := session.NewPool(deepseekUpstream{client}, session.PoolConfig{CleanupInterval: -1})
+	f := &deepseekWireFacade{pool: pool, client: client}
+
+	if _, err := runWireTurnErr(t, f, "tok", responsesReq("你好")); err == nil {
+		t.Fatal("连续失败应返回 error")
+	}
+	if len(w.completions) != 2 {
+		t.Fatalf("应恰好尝试 2 次(首次+重试一次), got %d", len(w.completions))
+	}
+	if w.creates != 2 {
+		t.Fatalf("两次尝试各新开 session, creates=%d", w.creates)
+	}
+	if w.deletes != 2 {
+		t.Fatalf("两次失败租约都应丢弃删除, deletes=%d", w.deletes)
+	}
+}
+
+// Acceptance(ticket 03):token 热加载/轮换后,池内旧 entry 视为失效——
+// 同一 clientKey 的下一轮降级新开(parent 为 null),旧上游 session 顺手删。
+func TestWireTokenRotationInvalidatesPoolEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tokens.txt")
+	if err := os.WriteFile(path, []byte("tok-A\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now().Add(-2 * time.Second)
+	if err := os.Chtimes(path, t0, t0); err != nil {
+		t.Fatal(err)
+	}
+
+	w := &wireUpstream{}
+	client, closer := startWireWithTokenFile(t, w, path)
+	defer closer()
+	pool := session.NewPool(deepseekUpstream{client}, session.PoolConfig{CleanupInterval: -1})
+	f := &deepseekWireFacade{pool: pool, client: client}
+
+	// 第一轮:token A,建 session 入池。
+	runWireTurn(t, f, client.NextToken(), responsesReq("你好"))
+	first := w.completions[0]
+
+	// 凭证热加载:文件轮换到 token B。
+	if err := os.WriteFile(path, []byte("tok-B\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t1 := time.Now()
+	if err := os.Chtimes(path, t1, t1); err != nil {
+		t.Fatal(err)
+	}
+	newTok := client.NextToken()
+	if newTok != "tok-B" {
+		t.Fatalf("热加载后 token = %q, want tok-B", newTok)
+	}
+
+	// 第二轮:同 clientKey 但新 token → 旧 entry 失效,新会话引导。
+	if _, err := runWireTurnErr(t, f, newTok, responsesReq("你好", "还在吗")); err != nil {
+		t.Fatalf("轮换后应降级新开成功: %v", err)
+	}
+	if w.creates != 2 {
+		t.Fatalf("token 轮换应新开 session, creates=%d", w.creates)
+	}
+	if w.deletes != 1 {
+		t.Fatalf("轮换旧 entry 应删上游 session, deletes=%d", w.deletes)
+	}
+	second := w.completions[1]
+	if second.ParentMessageID != nil {
+		t.Fatalf("轮换后新会话引导 parent 应为 null, got %v", second.ParentMessageID)
+	}
+	if second.SessionID == first.SessionID {
+		t.Fatalf("轮换后不应复用旧 session: %q", second.SessionID)
 	}
 }
 

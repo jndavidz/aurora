@@ -107,10 +107,27 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 // 回调里实时 flush(SSE 首字延迟来自真流式,不能等整流结束)。
 // 池交互(acquire/降级/release)与 flow.run 同型。
 func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest, flow *deepseekChatFlow) {
-	w := newSSEWriter(c)
 	respID := "resp_" + uuid.NewString()
 	reasoningItemID := "rs_" + uuid.NewString()
 	messageItemID := "msg_" + uuid.NewString()
+
+	// 建会话失败在 SSE 头设置前返回:保持干净的 JSON 502(建会话失败非续轮失败)。
+	poolable := flow.poolable()
+	var l *session.Lease
+	if poolable {
+		var err error
+		if flow.isNew {
+			l, err = flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
+		} else {
+			l, err = flow.pool.Acquire(flow.clientKey, flow.modelID(), flow.token)
+		}
+		if err != nil {
+			apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
+			return
+		}
+	}
+
+	w := newSSEWriter(c)
 
 	begin := func() {
 		w.event("response.created", createdEvent(respID, req.Model))
@@ -118,10 +135,10 @@ func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *officia
 		w.event("response.output_item.added", outputItemAddedEvent(1, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
 	}
 
-	runOnce := func(l *session.Lease) (*deepseekStreamResult, bool) {
+	runOnce := func(l *session.Lease) (*deepseekStreamResult, error) {
 		stream, err := flow.sender.Send(flow.token, flow.buildRequest(l))
 		if err != nil {
-			return nil, false
+			return nil, err
 		}
 		var fullText, fullReasoning string
 		// seamConsume 对 live 流逐帧回调(帧序化):delta 到达即 flush SSE,
@@ -142,42 +159,28 @@ func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *officia
 				})
 			}
 		})
-		if res.Err != "" && fullText == "" && fullReasoning == "" {
-			return res, false
+		if res != nil && res.Err != "" && fullText == "" && fullReasoning == "" {
+			return res, flowError(res.Err)
 		}
-		return res, true
-	}
-
-	poolable := flow.poolable()
-	var l *session.Lease
-	if poolable {
-		var err error
-		if flow.isNew {
-			l, err = flow.pool.AcquireNew(flow.clientKey, flow.modelID())
-		} else {
-			l, err = flow.pool.Acquire(flow.clientKey, flow.modelID())
-		}
-		if err != nil {
-			apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
-			return
-		}
+		return res, nil
 	}
 
 	begin()
-	res, ok := runOnce(l)
-	if !ok && poolable {
-		// 流式已可能吐出事件;失败降级重试一次,输出继续追加(SSE 消费端兼容)。
+	res, runErr := runOnce(l)
+	if runErr != nil && poolable {
+		// 失败降级(spec §失败降级):丢弃失败租约 → 新开重试一次。
+		// 上报失败时不会 flush 任何 delta(正文与思维链皆空),故重试对客户端透明。
 		flow.pool.Discard(l)
-		l3, cerr := flow.pool.AcquireNew(flow.clientKey, flow.modelID())
+		l3, cerr := flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
 		if cerr != nil {
 			w.event("response.failed", failedEvent(cerr.Error()))
 			return
 		}
-		res, ok = runOnce(l3)
+		res, runErr = runOnce(l3)
 		l = l3
 	}
-	if !ok {
-		w.event("response.failed", failedEvent(res.Err))
+	if runErr != nil {
+		w.event("response.failed", failedEvent(runErr.Error()))
 		if poolable {
 			flow.pool.Discard(l)
 		}

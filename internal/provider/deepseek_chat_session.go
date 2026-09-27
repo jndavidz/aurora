@@ -24,9 +24,10 @@ type deepseekTurn struct {
 }
 
 // chatSessionPool 是 provider 侧需要的会话策略面(session.Pool 的窄视图)。
+// token 逐次传入:session 与建立时的 token 绑定,轮换代理由池内 token 比对兜底。
 type chatSessionPool interface {
-	Acquire(clientKey, modelID string) (*session.Lease, error)
-	AcquireNew(clientKey, modelID string) (*session.Lease, error)
+	Acquire(clientKey, modelID, token string) (*session.Lease, error)
+	AcquireNew(clientKey, modelID, token string) (*session.Lease, error)
 	Release(l *session.Lease, responseMessageID string)
 	Discard(l *session.Lease)
 }
@@ -162,9 +163,9 @@ func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
 	if poolable {
 		var err error
 		if f.isNew {
-			l, err = f.pool.AcquireNew(f.clientKey, f.modelID())
+			l, err = f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
 		} else {
-			l, err = f.pool.Acquire(f.clientKey, f.modelID())
+			l, err = f.pool.Acquire(f.clientKey, f.modelID(), f.token)
 		}
 		if err != nil {
 			return deepseekTurnOutput{}, err
@@ -182,7 +183,7 @@ func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
 			if poolable {
 				f.pool.Discard(l)
 			}
-			l2, cerr := f.pool.AcquireNew(f.clientKey, f.modelID())
+			l2, cerr := f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
 			if cerr != nil {
 				return deepseekTurnOutput{}, cerr
 			}
@@ -211,7 +212,7 @@ func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
 				if attempt > 0 || !poolable {
 					return deepseekTurnOutput{}, flowError(res.Err)
 				}
-				l2, cerr := f.pool.AcquireNew(f.clientKey, f.modelID())
+				l2, cerr := f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
 				if cerr != nil {
 					return deepseekTurnOutput{}, cerr
 				}
