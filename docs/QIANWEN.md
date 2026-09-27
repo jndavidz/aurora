@@ -2,7 +2,7 @@
 
 > 逆向时间:2026-08-13(CDP 抓包 + curl 复刻验证闭环)。
 > 关联:`docs/ARCHITECTURE.md`、`docs/PROVIDER_ARCHITECTURE.md`(落点速查)、`docs/CDP_BROWSER_DEBUG.md`(抓包方法)。
-> 实现:`internal/qianwenweb/` + `internal/provider/qianwen*.go`,暴露模型 `Qwen3.8-Max`。
+> 实现:`internal/qianwenweb/` + `internal/provider/qianwen*.go`,暴露模型 `qwen`(上游指向 `Qwen3.6-Flash`,2026-09-27 用户拍板;早期为 `Qwen3.8-Max`)。
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|
 | 聊天端点 | `POST https://chat2.qianwen.com/api/v2/chat` |
 | 认证 | cookie **`tongyi_sso_ticket`**(httpOnly,约 1 年)为账号凭据;WAF 升级后还需 **`x5sec`** 通关 cookie(约 20 分钟,浏览器过滑块后签发) |
-| 模型 id | `"model": "Qwen3.8-Max"`(网页真实 id;默认款是 `Qwen3.7`,另有 `Qwen3.7-Max`/`Qwen3.6-Flash`) |
+| 模型 id | `"model": "Qwen3.6-Flash"`(exposed id `qwen` 经 upstreamSlug 映射;网页另有 `Qwen3.7`/`Qwen3.7-Max`/`Qwen3.8-Max`) |
 | 工具调用 | **不支持**自定义外部工具(`tools` 字段被忽略);仅内置「联网搜索」(`enable_web_search` 操作) |
 | 思考模式 | `chat_mode:"expert"` 无效(返回乱码);用 `"quick"`,无 reasoning 内容 |
 | 多轮 | 单请求 `messages` 数组带完整历史 + `scene_param:"first_turn"` + 随机 session/topic id 即可 |
@@ -156,6 +156,6 @@ curl -s --compressed -X POST 'https://chat2.qianwen.com/api/v2/chat?biz_id=ai_qw
 ## 六、抓包原始资料
 
 - 页面:https://www.qianwen.com (预连接 `chat2-api.qianwen.com` / `chat2.qianwen.com` / `sec.qianwen.com` / `member.qianwen.com`)
-- 模型下拉实测:`Qwen3.7-千问`(默认)、`Qwen3.8-Max`(新,旗舰,视觉)、`Qwen3.7-Max`(代码)、`Qwen3.6-Flash`(快)
+- 模型下拉实测:`Qwen3.7-千问`(默认)、`Qwen3.8-Max`(新,旗舰,视觉)、`Qwen3.7-Max`(代码)、`Qwen3.6-Flash`(快);aurora 暴露 `qwen` → `Qwen3.6-Flash`
 - localStorage 关键键:`qianwen-selectModel`(当前选中模型)、`lswucn`(umidtoken)、`itracingjs:dycf:66ur41cs-cntu1744`(x-wpk-bid)
 - 无关安全头清单(浏览器发出但服务端不校验):`clt-acs-sign/request-params/reqt/bfg/caer`、`bx_et`、`bx-ua`、`bx-umidtoken`、`eo-clt-actkn/sacsft/snver/ve`、`x-wpk-reqid/traceid/bid/rel`、`x-chat-id/biz`、`x-csrf-token`、`sec-ch-ua*`、`XSRF-TOKEN`

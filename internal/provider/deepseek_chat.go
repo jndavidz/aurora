@@ -20,13 +20,16 @@ import (
 // 不注入任何工具调用信息;仅携带网页模式开关(快速/专家、智能搜索、深度思考、识图)。
 // 识图(快速模式)与联网搜索互斥(DeepSeek 网页行为)。
 
-// searchEnabled 返回 quick 档请求是否带联网搜索。
-// 默认开启(DEEPSEEK_WEB_SEARCH=0 关闭,2026-09-27 起):与官网行为对齐,
-// 时效性问题(如「最新奖牌榜」)需网页代查;代价是首字延迟 +1~2s。
+// searchEnabled 返回请求是否带联网搜索。
+// 2026-09-27 起 exposed id "deepseek" 的定义即「智能搜索 + 非深度思考」,
+// SearchAlways=true 恒开搜索,不受 DEEPSEEK_WEB_SEARCH 影响(其余模型按开关)。
 // 有图时恒为 false(带图时上游忽略搜索开关)。
 func (d *DeepSeek) searchEnabled(m *deepseekModel, hasImages bool) bool {
 	if hasImages {
 		return false // 识图与搜索互斥
+	}
+	if m.SearchAlways {
+		return true
 	}
 	return m.Mode == modeQuick && d.cfg.DeepSeekWebSearch
 }

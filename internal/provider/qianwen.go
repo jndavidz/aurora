@@ -12,9 +12,10 @@ import (
 )
 
 // defaultQianwenModels 是 QIANWEN_MODELS 未配置时的默认目录。
-// 网页真实模型 id(实测 qwen-3.8-max 可出流;默认款 Qwen3.7 见 docs/QIANWEN.md §〇)。
+// 2026-09-27 用户拍板:去掉 qwen-3.8-max,改暴露单 id "qwen",
+// 经 upstreamSlug 映射到网页真实模型 Qwen3.6-Flash(见 provider.go)。
 var defaultQianwenModels = []string{
-	"qwen-3.8-max",
+	"qwen",
 }
 
 // Qianwen 实现 Provider 接口,走 www.qianwen.com 网页逆向。

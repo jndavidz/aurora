@@ -23,12 +23,12 @@ func TestParseDeepSeekModel(t *testing.T) {
 		mode    string
 		caps    []Capability
 	}{
-		{"deepseek-v4-flash", variantChat, modeQuick, []Capability{CapWebSearch, CapReasoning, CapVision}},
-		{"deepseek-v4-pro", variantChat, modeExpert, []Capability{CapReasoning}},
+		{"deepseek", variantChat, modeQuick, []Capability{CapWebSearch, CapReasoning, CapVision}},
+		{"deepseek-v4-flash", "", "", nil},      // 2026-09-27 下线
+		{"deepseek-v4-pro", "", "", nil},        // 2026-09-27 下线
 		{"deepseek-v4-flash-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
 		{"deepseek-v4-pro-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
 		{"gpt-5", "", "", nil}, // 非 deepseek 命名 → nil
-		{"deepseek-v4-pro", variantChat, modeExpert, []Capability{CapReasoning}}, // 2026-09-04 改名:pro=expert 挡
 	}
 	for _, c := range cases {
 		m := parseDeepSeekModel(c.id)
@@ -59,8 +59,8 @@ func TestRegistryResolve(t *testing.T) {
 	r := NewRegistry()
 	r.Register(d)
 
-	if p := r.Resolve("deepseek-v4-flash"); p == nil {
-		t.Fatal("Resolve(deepseek-v4-flash) = nil, want DeepSeek")
+	if p := r.Resolve("deepseek"); p == nil {
+		t.Fatal("Resolve(deepseek) = nil, want DeepSeek")
 	}
 	if p := r.Resolve("auto"); p != nil {
 		t.Fatalf("Resolve(auto) = %v, want nil (default ChatGPT)", p.Name())
@@ -68,8 +68,8 @@ func TestRegistryResolve(t *testing.T) {
 	if p := r.Resolve("gpt-5.6"); p != nil {
 		t.Fatalf("Resolve(gpt-5.6) = %v, want nil", p.Name())
 	}
-	if len(r.Models()) != 4 {
-		t.Errorf("Models() = %d entries, want 4", len(r.Models()))
+	if len(r.Models()) != 1 {
+		t.Errorf("Models() = %d entries, want 1", len(r.Models()))
 	}
 }
 
@@ -268,7 +268,7 @@ func TestResolveCanonicalFriendlyName(t *testing.T) {
 	r.Register(NewGlm(cfg))
 	// 挂载 friendly 反查(生产由 handler.NewModelsHandler 调用)
 	SetFriendlyModelLookup(func(name string) string {
-		rev := map[string]string{"GLM-5.3 Flash": "glm-flash", "DeepSeek V4 Flash": "deepseek-v4-flash"}
+		rev := map[string]string{"GLM-5.3 Flash": "glm-flash", "DeepSeek": "deepseek"}
 		return rev[name]
 	})
 	t.Cleanup(func() { SetFriendlyModelLookup(func(string) string { return "" }) })
@@ -290,8 +290,8 @@ func TestResolveCanonicalFriendlyName(t *testing.T) {
 		t.Errorf("glm-flash → want 原样, got %v", id)
 	}
 	// deepseek 同样容错
-	if _, id := r.ResolveCanonical("DeepSeek V4 Flash"); id != "deepseek-v4-flash" {
-		t.Errorf("DeepSeek V4 Flash → want deepseek-v4-flash, got %v", id)
+	if _, id := r.ResolveCanonical("DeepSeek"); id != "deepseek" {
+		t.Errorf("DeepSeek → want deepseek, got %v", id)
 	}
 	// 未注册模型 → nil
 	if p := r.Resolve("nonexistent-model"); p != nil {

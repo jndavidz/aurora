@@ -29,6 +29,10 @@ type deepseekModel struct {
 	Variant string
 	Mode    string
 	Caps    []Capability
+	// SearchAlways 为 true 时恒带智能搜索(不受 DEEPSEEK_WEB_SEARCH 开关影响)。
+	// 2026-09-27 起 exposed id "deepseek" 的定义即「智能搜索 + 非深度思考」,
+	// 搜索是模型参数的一部分,与全局开关解耦。
+	SearchAlways bool
 }
 
 // DeepSeek 实现 Provider 接口,走 chat.deepseek.com 网页逆向。
@@ -42,11 +46,11 @@ type DeepSeek struct {
 }
 
 // defaultDeepSeekModels 是 DEEPSEEK_MODELS 未配置时的默认目录。
+// 2026-09-27 用户拍板:去掉 v4-pro/flash,只暴露一个 "deepseek"
+//(= 快速模式 + 智能搜索 + 非深度思考)。coding 变体已封存(CODING_ENABLED),
+// 解析逻辑保留但默认目录不含。
 var defaultDeepSeekModels = []string{
-	"deepseek-v4-flash",
-	"deepseek-v4-pro",
-	"deepseek-v4-flash-coding",
-	"deepseek-v4-pro-coding",
+	"deepseek",
 }
 
 // NewDeepSeek 构造 DeepSeek provider。无 token 池时仍可构造(返回 502 时提示)。
@@ -61,8 +65,8 @@ func NewDeepSeek(cfg *config.Config) *DeepSeek {
 		if m == nil {
 			continue
 		}
-		// 搜索关闭时如实标注:quick 档不再宣称 CapWebSearch(能力注记与实际行为一致)。
-		if !cfg.DeepSeekWebSearch {
+		// 搜索关闭时如实标注:非 SearchAlways 模型剥掉 CapWebSearch(能力注记与实际行为一致)。
+		if !cfg.DeepSeekWebSearch && !m.SearchAlways {
 			caps := make([]Capability, 0, len(m.Caps))
 			for _, cap := range m.Caps {
 				if cap != CapWebSearch {
@@ -78,14 +82,13 @@ func NewDeepSeek(cfg *config.Config) *DeepSeek {
 }
 
 // parseDeepSeekModel 从 exposed id 解析变体与能力。无法识别返回 nil。
-// 2026-09-04 改名:暴露 id 去 -chat 后缀(deepseek-v4-flash/pro)。coding 变体保留。
+// 2026-09-27 改版:exposed id "deepseek" = 快速模式 + 恒开智能搜索 + 非深度思考;
+// v4-flash/v4-pro 下线。coding 变体保留解析(封存,不默认暴露)。
 func parseDeepSeekModel(id string) *deepseekModel {
 	id = strings.TrimSpace(id)
 	switch {
-	case id == "deepseek-v4-flash":
-		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeQuick, Caps: []Capability{CapWebSearch, CapReasoning, CapVision}}
-	case id == "deepseek-v4-pro":
-		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeExpert, Caps: []Capability{CapReasoning}}
+	case id == "deepseek":
+		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeQuick, Caps: []Capability{CapWebSearch, CapReasoning, CapVision}, SearchAlways: true}
 	case strings.HasSuffix(id, "-coding"):
 		return &deepseekModel{
 			ID:      id,

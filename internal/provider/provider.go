@@ -172,6 +172,8 @@ func normalizeModelID(s string) string {
 // 未知 id 原样返回(保底,正常不会走到)。
 func upstreamSlug(exposedID string) string {
 	switch exposedID {
+	case "qwen":
+		return "Qwen3.6-Flash" // 2026-09-27 用户拍板:qwen 指向 Qwen3.6-Flash
 	case "qwen-3.8-max":
 		return "Qwen3.8-Max" // 千问上游大小写敏感,只认 Qwen3.8-Max
 	default:
