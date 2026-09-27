@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -56,20 +56,7 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 
 	// 会话策略 ticket 02:clientKey 解析(头 → user 字段),空 = 不进池。
 	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
-	var pool *session.Pool
-	if d.sessionPool != nil {
-		pool = d.sessionPool
-	} else {
-		pool = session.NewPool(deepseekUpstream{client}, session.PoolConfig{CleanupInterval: 10 * time.Minute})
-		d.sessionPool = pool
-	}
-
-	var turns []deepseekTurn
-	for _, it := range responsesInputItems(req.Input) {
-		if it.Text != "" {
-			turns = append(turns, deepseekTurn{Text: it.Text})
-		}
-	}
+	pool := d.webPool(client)
 
 	modelType := modelTypeFor(m)
 	if vision {
@@ -77,15 +64,16 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 	}
 
 	flow := &deepseekChatFlow{
-		pool:      pool,
-		sender:    &deepseekWebSender{client: client, searchEnabled: d.searchEnabled(m, vision), thinking: thinkingEnabled(m, req)},
-		clientKey: clientKey,
-		isNew:     isNew,
-		vision:    vision,
-		noResume:  d.resumeDisabled(m),
-		modelType: modelType,
-		token:     token,
-		messages:  turns,
+		pool:       pool,
+		sender:     &deepseekWebSender{client: client, searchEnabled: d.searchEnabled(m, vision), thinking: thinkingEnabled(m, req)},
+		clientKey:  clientKey,
+		isNew:      isNew,
+		vision:     vision,
+		noResume:   d.resumeDisabled(m),
+		modelType:  modelType,
+		token:      token,
+		messages:   deepseekTurnsFromItems(responsesInputItems(req.Input)),
+		refFileIDs: refFileIDs,
 	}
 	// 新会话引导 instructions 前置(仅拍平路径生效,续轮忽略)。
 	flow.instructions = rawResponsesText(req.Instructions)
@@ -102,6 +90,34 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 		return
 	}
 	d.chatNonStreamReplay(c, m, req, out)
+}
+
+// webPool 惰性构造并复用服务生命周期共享的会话池。
+func (d *DeepSeek) webPool(client *deepseekweb.Client) *session.Pool {
+	if d.sessionPool == nil {
+		d.sessionPool = session.NewPool(deepseekUpstream{client}, session.PoolConfig{CleanupInterval: 10 * time.Minute})
+	}
+	return d.sessionPool
+}
+
+// deepseekTurnsFromItems 把统一 item 列表收敛为本轮拍平输入(仅取文本;
+// 图片走独立 vision 路径)。Responses / chat.completions 两表面共用。
+//
+// 硬规则:chat 变体绝不向上游注入任何工具信息——function_call /
+// function_call_output 与 flattenChatItems 同口径跳过(防御性:客户端带了
+// tools 也不得泄漏到 prompt)。
+func deepseekTurnsFromItems(items []responsesInputItem) []deepseekTurn {
+	var turns []deepseekTurn
+	for _, it := range items {
+		switch it.Type {
+		case "function_call", "function_call_output":
+			continue
+		}
+		if it.Text != "" {
+			turns = append(turns, deepseekTurn{Text: it.Text})
+		}
+	}
+	return turns
 }
 
 // chatStreamTurn 流式一轮:穿过与 flow.run 相同的 seam,但增量在 delta
@@ -337,33 +353,43 @@ func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *offici
 		return
 	}
 
-	prompt := flattenChatInputAPI(req)
-
-	sessionID, err := client.CreateSession(token)
-	if err != nil {
-		apierrors.JSONError(c, 502, "api_error", fmt.Sprintf("deepseek create session: %v", err), nil, "upstream_error")
-		return
-	}
-	defer client.DeleteSession(token, sessionID)
-
+	// 识图:从 messages 里收集图片上传并 fork 成 vision 版;带图不进池。
 	refFileIDs, _ := uploadImagesFromMessages(client, token, req.Messages)
+	vision := len(refFileIDs) > 0
+
+	// 会话策略 ticket 04:clientKey 解析与 Responses 表面同一规则
+	// (X-Session-Key 头 → user 字段剥 #new# → 空不进池),信令两表面统一。
+	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
+
 	modelType := modelTypeFor(m)
-	if len(refFileIDs) > 0 {
+	if vision {
 		modelType = "vision"
 	}
-	streamReq := deepseekweb.CompletionRequest{
-		SessionID:       sessionID,
-		Prompt:          prompt,
-		ModelType:       modelType,
-		ThinkingEnabled: thinkingEnabledAPI(m, req),
-		SearchEnabled:   d.searchEnabled(m, len(refFileIDs) > 0),
-		RefFileIDs:      refFileIDs,
+
+	flow := &deepseekChatFlow{
+		pool: d.webPool(client),
+		// chat.completions 的思考开关走 reasoning_effort(thinkingEnabledAPI)。
+		sender:     &deepseekWebSender{client: client, searchEnabled: d.searchEnabled(m, vision), thinking: thinkingEnabledAPI(m, req)},
+		clientKey:  clientKey,
+		isNew:      isNew,
+		vision:     vision,
+		noResume:   d.resumeDisabled(m),
+		modelType:  modelType,
+		token:      token,
+		messages:   deepseekTurnsFromItems(apiMessagesToItems(req.Messages)),
+		refFileIDs: refFileIDs,
 	}
+
 	if req.Stream {
-		d.chatCompletionsStream(c, m, req, client, token, streamReq)
+		d.chatStreamCompletion(c, m, req, flow)
 		return
 	}
-	d.chatCompletionsNonStream(c, m, req, client, token, streamReq)
+	out, err := flow.run()
+	if err != nil {
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
+		return
+	}
+	d.chatReplayCompletion(c, req, out)
 }
 
 // thinkingEnabledAPI chat.completions 版的深度思考开关(reasoning_effort)。
@@ -377,45 +403,107 @@ func thinkingEnabledAPI(m *deepseekModel, req *official.APIRequest) bool {
 	return true
 }
 
-// chatCompletionsStream 流式输出 chat.completion.chunk SSE。
-func (d *DeepSeek) chatCompletionsStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
-	resp, err := client.Complete(token, streamReq)
-	if err != nil {
-		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
-		return
+// chatStreamCompletion 流式输出 chat.completion.chunk。
+// 与 Responses 表面的 chatStreamTurn 同型:穿过同一 seam(acquire → send →
+// 逐帧 flush → release),增量在 delta 回调里实时 flush。
+// 失败降级对客户端透明:重试成功则只可见一条完整正常流。
+func (d *DeepSeek) chatStreamCompletion(c *gin.Context, m *deepseekModel, req *official.APIRequest, flow *deepseekChatFlow) {
+	poolable := flow.poolable()
+	var l *session.Lease
+	if poolable {
+		var err error
+		if flow.isNew {
+			l, err = flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
+		} else {
+			l, err = flow.pool.Acquire(flow.clientKey, flow.modelID(), flow.token)
+		}
+		if err != nil {
+			// 建会话失败在 SSE 头设置前:保持干净的 JSON 502。
+			apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
+			return
+		}
 	}
-	defer resp.Body.Close()
 
 	model := req.Model
 	if model == "" {
 		model = "auto"
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	flusher, _ := c.Writer.(http.Flusher)
-
+	// 头部与 role 块均延迟到首个增量时才写出:降级重试对客户端不可见的同时,
+	// 保留旧路径的失败形态——尚未写出任何内容时的上游失败仍走干净的 JSON 502。
+	started := false
 	writeChunk := func(chunk official.ChatCompletionChunk) {
 		c.Writer.WriteString("data: " + chunk.String() + "\n\n")
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}
-
-	// role 块
-	roleChunk := official.NewChatCompletionChunk("", model)
-	roleChunk.Choices[0].Delta.Role = "assistant"
-	writeChunk(roleChunk)
-
-	_ = deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
-		if delta.Reasoning != "" {
-			writeChunk(official.NewReasoningChunk(delta.Reasoning, model))
+	begin := func() {
+		if started {
+			return
 		}
-		if delta.Text != "" {
-			writeChunk(official.NewChatCompletionChunk(delta.Text, model))
+		started = true
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		// role 块(与旧路径一致:客户端先收到 assistant 角色)。
+		roleChunk := official.NewChatCompletionChunk("", model)
+		roleChunk.Choices[0].Delta.Role = "assistant"
+		writeChunk(roleChunk)
+	}
+
+	// runOnce 发一轮并把增量实时吐成 chunk。仅在"一个增量都没吐"时才算失败
+	// (与 flow.run 同判据),因此重试对客户端不可见。
+	runOnce := func(l *session.Lease) (*deepseekStreamResult, error) {
+		var emitted bool
+		stream, err := flow.sender.Send(flow.token, flow.buildRequest(l))
+		if err != nil {
+			return nil, err
 		}
-	})
+		res := seamConsume(stream, func(dd deepseekDelta) {
+			if dd.Reasoning != "" {
+				emitted = true
+				begin()
+				writeChunk(official.NewReasoningChunk(dd.Reasoning, model))
+			}
+			if dd.Text != "" {
+				emitted = true
+				begin()
+				writeChunk(official.NewChatCompletionChunk(dd.Text, model))
+			}
+		})
+		if res != nil && res.Err != "" && !emitted {
+			return res, flowError(res.Err)
+		}
+		return res, nil
+	}
+
+	res, runErr := runOnce(l)
+	if runErr != nil && poolable {
+		// 失败降级(spec §失败降级):丢弃失败租约 → 新开重试一次。
+		flow.pool.Discard(l)
+		l2, cerr := flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
+		if cerr != nil {
+			writeCompletionError(c, started, cerr)
+			return
+		}
+		res, runErr = runOnce(l2)
+		l = l2
+	}
+	if runErr != nil {
+		if poolable {
+			flow.pool.Discard(l)
+		}
+		writeCompletionError(c, started, runErr)
+		return
+	}
+	if poolable {
+		flow.pool.Release(l, res.ResponseMsgID)
+	}
+
+	// 空响应(上游未吐任何增量但不报错):补建流头与 role 块,与旧路径形态一致。
+	begin()
 	writeChunk(official.StopChunk("stop", model))
 	c.Writer.WriteString("data: [DONE]\n\n")
 	if flusher != nil {
@@ -423,26 +511,29 @@ func (d *DeepSeek) chatCompletionsStream(c *gin.Context, m *deepseekModel, req *
 	}
 }
 
-// chatCompletionsNonStream 非流式返回 ChatCompletion JSON。
-func (d *DeepSeek) chatCompletionsNonStream(c *gin.Context, m *deepseekModel, req *official.APIRequest, client *deepseekweb.Client, token string, streamReq deepseekweb.CompletionRequest) {
-	resp, err := client.Complete(token, streamReq)
-	if err != nil {
+// writeCompletionError 统一流式失败出口:
+//   - 尚未开出 SSE(started=false):干净的 JSON 502(保留旧路径对无 key/建会话
+//     失败的行为,客户端拿到的是结构化错误而非半截流)
+//   - 已开流:发一个 OpenAI 形态的 data: {"error": ...} 帧再以 [DONE] 收尾
+func writeCompletionError(c *gin.Context, started bool, err error) {
+	if !started {
 		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
-	defer resp.Body.Close()
-
-	var fullText, fullReasoning string
-	res := deepseekweb.ConsumeStream(resp.Body, func(delta deepseekweb.Delta) {
-		fullText += delta.Text
-		fullReasoning += delta.Reasoning
+	b, _ := json.Marshal(map[string]any{
+		"error": map[string]any{"message": err.Error(), "type": "upstream_error"},
 	})
-	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		apierrors.JSONError(c, 502, "api_error", res.Err, nil, "upstream_error")
-		return
+	c.Writer.WriteString("data: " + string(b) + "\n\n")
+	c.Writer.WriteString("data: [DONE]\n\n")
+	if flusher, ok := c.Writer.(http.Flusher); ok {
+		flusher.Flush()
 	}
+}
+
+// chatReplayCompletion 非流式回放一轮已完成的 flow 结果(chat.completion 格式)。
+func (d *DeepSeek) chatReplayCompletion(c *gin.Context, req *official.APIRequest, out deepseekTurnOutput) {
 	inputTokens := countMessagesChars(req.Messages)
-	outResp := official.NewChatCompletionWithMetadataAndReasoning(fullText, fullReasoning, inputTokens, util.CountToken(fullText), req.Model, "", nil)
+	outResp := official.NewChatCompletionWithMetadataAndReasoning(out.text, out.reasoning, inputTokens, util.CountToken(out.text), req.Model, "", nil)
 	c.JSON(200, outResp)
 }
 

@@ -252,12 +252,13 @@ func TestLoopVisionBypassesPool(t *testing.T) {
 	pool := &fakeSessionPool{}
 	sender := &fakeChatSender{reply: "看到了", msgID: "m1"}
 	flow := &deepseekChatFlow{
-		pool:      pool,
-		sender:    sender,
-		clientKey: "u1",
-		vision:    true,
-		modelType: "vision",
-		messages:  []deepseekTurn{{Text: "这是什么"}},
+		pool:       pool,
+		sender:     sender,
+		clientKey:  "u1",
+		vision:     true,
+		modelType:  "vision",
+		messages:   []deepseekTurn{{Text: "这是什么"}},
+		refFileIDs: []string{"f1", "f2"},
 	}
 	flow.runForTest(t)
 
@@ -266,6 +267,11 @@ func TestLoopVisionBypassesPool(t *testing.T) {
 	}
 	if len(sender.sent) != 1 || sender.sent[0].ModelType != "vision" {
 		t.Fatalf("vision 请求形态: %+v", sender.sent)
+	}
+	// 已上传并 fork 的 vision 文件 id 必须随本轮发出(缺了上游报“发送至识图模式”;
+	// ticket 02 接线时曾丢失,此处锁住)。
+	if got := sender.sent[0].RefFileIDs; len(got) != 2 || got[0] != "f1" || got[1] != "f2" {
+		t.Fatalf("vision ref_file_ids = %v, want [f1 f2]", got)
 	}
 }
 

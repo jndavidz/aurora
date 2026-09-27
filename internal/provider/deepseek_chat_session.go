@@ -126,6 +126,9 @@ type deepseekChatFlow struct {
 	modelType string // default / expert / vision
 	token     string
 	messages  []deepseekTurn
+	// refFileIDs 是识图路径已上传并 fork 的 vision 文件 id:vision 不进池,
+	// 但两条表面都必须把它随本轮请求发出(缺了上游报“发送至识图模式”)。
+	refFileIDs []string
 	// instructions 仅新会话引导路径前置(续轮忽略,网页无 system 位)。
 	instructions string
 }
@@ -267,6 +270,7 @@ func (f *deepseekChatFlow) buildRequest(l *session.Lease) deepseekSenderReq {
 		ParentMessageID: parent,
 		Prompt:          prompt,
 		ModelType:       f.modelType,
+		RefFileIDs:      f.refFileIDs,
 	}
 }
 
