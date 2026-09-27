@@ -90,7 +90,7 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 	flow.instructions = rawResponsesText(req.Instructions)
 
 	// 流式逐帧 flush 需要帧序化回调:不走 flow.run(整流消费),改由
-	// streamChatTurn 直接穿过 seam(acquire → send → 逐帧 flush → release)。
+	// chatStreamTurn 直接穿过 seam(acquire → send → 逐帧 flush → release)。
 	if req.Stream {
 		d.chatStreamTurn(c, m, req, flow)
 		return
