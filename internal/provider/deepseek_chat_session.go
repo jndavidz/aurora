@@ -120,6 +120,9 @@ type deepseekChatFlow struct {
 	clientKey string // 空 = 不进池
 	isNew     bool   // 显式新会话信令
 	vision    bool   // 识图请求不进池(spec 拍板)
+	// noResume 关闭本档的会话复用,ticket 05 的 expert 回退开关:
+	// expert 续轮若在上游异常,置 DEEPSEEK_EXPERT_RESUME=0 则本档退回每轮新开。
+	noResume  bool
 	modelType string // default / expert / vision
 	token     string
 	messages  []deepseekTurn
@@ -150,9 +153,11 @@ func (f *deepseekChatFlow) runForTestErr(t interface{ Fatalf(string, ...any) }) 
 	return err
 }
 
-// poolable 报告本轮是否走会话池:有 clientKey 且非 vision(spec 拍板)。
+// poolable 报告本轮是否走会话池:有 clientKey、非 vision、且本档未关复用(spec 拍板)。
 // 流式/非流式两条管线共用同一判定,避免判定条件漂移。
-func (f *deepseekChatFlow) poolable() bool { return f.clientKey != "" && !f.vision }
+func (f *deepseekChatFlow) poolable() bool {
+	return f.clientKey != "" && !f.vision && !f.noResume
+}
 
 // run 执行一轮:acquire → 构造请求 → send → consume → release/discard。
 // 失败降级:首次失败(任意上游错误)→ Discard → 新开重试一次 → 仍失败返回 error。

@@ -37,6 +37,11 @@ type Config struct {
 	// 默认开启(2026-09-27):与官网行为对齐,时效性问题(如赛事奖牌榜)需网页代查;
 	// 纯对话低延迟场景可设 DEEPSEEK_WEB_SEARCH=0 关闭(首字延迟 +1~2s)。
 	DeepSeekWebSearch bool // 默认 true
+	// DeepSeekExpertResume 控制 expert(深度思考)档是否参与上游会话复用。
+	// 默认 true(live 验证 2026-09-27:expert 续轮正常,thinking 语义与服务端
+	// 记忆均生效,故此开关仅备而不用)。若上游变更导致 expert 续轮异常,
+	// 置 DEEPSEEK_EXPERT_RESUME=0 让 expert 退回每轮新开;quick 档不受影响。
+	DeepSeekExpertResume bool // 默认 true
 
 	// 智谱清言(chatglm.cn)网页逆向通道配置。
 	GlmWebBase   string   // 网页端 base,默认 https://chatglm.cn
@@ -156,6 +161,8 @@ func Load() Config {
 		DeepSeekModels:    splitCSV(os.Getenv("DEEPSEEK_MODELS")),
 		DeepSeekProxy:     os.Getenv("DEEPSEEK_PROXY"),
 		DeepSeekWebSearch: getBoolEnv("DEEPSEEK_WEB_SEARCH", true),
+
+		DeepSeekExpertResume: getBoolEnv("DEEPSEEK_EXPERT_RESUME", true),
 
 		GlmWebBase:   getEnv("GLM_WEB_BASE", "https://chatglm.cn"),
 		GlmWebTokens: os.Getenv("GLM_WEB_TOKENS"),

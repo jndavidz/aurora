@@ -31,6 +31,7 @@ type wireUpstream struct {
 	mu              sync.Mutex
 	creates         int
 	deletes         int
+	createsAuth     []string         // 每次 create 收到的 Authorization 头
 	completions     []wireCompletion // 按到达顺序
 	failCompletions map[int]bool
 }
@@ -39,6 +40,7 @@ type wireCompletion struct {
 	ParentMessageID any // JSON 解码后的原值(nil = 字段缺省/null)
 	Prompt          string
 	SessionID       string
+	Auth            string // Authorization 头(ticket 05 P0 回归:池路径不得空 token)
 }
 
 func (w *wireUpstream) handler(t *testing.T) http.Handler {
@@ -48,6 +50,7 @@ func (w *wireUpstream) handler(t *testing.T) http.Handler {
 		switch r.URL.Path {
 		case "/api/v0/chat_session/create":
 			w.creates++
+			w.createsAuth = append(w.createsAuth, r.Header.Get("Authorization"))
 			writeJSONWire(rw, map[string]any{"code": 0, "data": map[string]any{"biz_code": 0, "biz_data": map[string]any{"id": "ws" + strconv.Itoa(w.creates)}}})
 		case "/api/v0/chat_session/delete":
 			w.deletes++
@@ -66,6 +69,7 @@ func (w *wireUpstream) handler(t *testing.T) http.Handler {
 				ParentMessageID: body["parent_message_id"],
 				Prompt:          strOf(body["prompt"]),
 				SessionID:       strOf(body["chat_session_id"]),
+				Auth:            r.Header.Get("Authorization"),
 			})
 			msgID := "m" + strconv.Itoa(idx+1)
 			text := "回复" + strconv.Itoa(idx+1)
@@ -190,6 +194,8 @@ func hexEncode(b []byte) string {
 
 // Acceptance 1:带 X-Session-Key 连续两轮,第二轮请求体 parent_message_id
 // 非空、prompt 为增量,且不再 create/delete session。
+// 同时回归 ticket 05 的 P0:池路径建会话与 completion 都必须带上本轮 token
+// (修复前 newLease 硬编码空 token,带 X-Session-Key 的请求 100% 401)。
 func TestWireTwoTurnsResume(t *testing.T) {
 	w := &wireUpstream{}
 	client, closer := startWire(t, w)
@@ -228,6 +234,15 @@ func TestWireTwoTurnsResume(t *testing.T) {
 	}
 	if second.SessionID != first.SessionID {
 		t.Fatalf("两轮应同 session: %q vs %q", second.SessionID, first.SessionID)
+	}
+	// token 透传回归(修复前此处为空,假上游不校验 token 所以测试一直绿)。
+	if len(w.createsAuth) != 1 || w.createsAuth[0] != "Bearer tok" {
+		t.Fatalf("池路径建会话 Authorization = %v, want [Bearer tok]", w.createsAuth)
+	}
+	for i, comp := range w.completions {
+		if comp.Auth != "Bearer tok" {
+			t.Fatalf("第 %d 轮 completion Authorization = %q, want Bearer tok", i, comp.Auth)
+		}
 	}
 }
 

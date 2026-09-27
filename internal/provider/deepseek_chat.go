@@ -82,6 +82,7 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 		clientKey: clientKey,
 		isNew:     isNew,
 		vision:    vision,
+		noResume:  d.resumeDisabled(m),
 		modelType: modelType,
 		token:     token,
 		messages:  turns,
@@ -256,6 +257,12 @@ func (u deepseekUpstream) CreateSession(token string) (string, error) {
 
 func (u deepseekUpstream) DeleteSession(token, sessionID string) error {
 	return u.client.DeleteSession(token, sessionID)
+}
+
+// resumeDisabled 报告本档是否禁用会话复用(ticket 05 回退开关)。
+// expert 档由 DEEPSEEK_EXPERT_RESUME 控制(默认复用);quick 档恒复用。
+func (d *DeepSeek) resumeDisabled(m *deepseekModel) bool {
+	return m.Mode == modeExpert && !d.cfg.DeepSeekExpertResume
 }
 
 // thinkingEnabled 根据模式与 reasoning.effort 决定是否开深度思考。

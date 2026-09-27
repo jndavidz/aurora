@@ -84,6 +84,7 @@ func TestLoopResumeSendsIncrementOnly(t *testing.T) {
 		pool:      pool,
 		sender:    sender,
 		clientKey: "u1",
+		token:     "tok-1",
 		messages: []deepseekTurn{
 			{Text: "问1"},
 			{Text: "问2"},
@@ -93,6 +94,10 @@ func TestLoopResumeSendsIncrementOnly(t *testing.T) {
 
 	if len(sender.sent) != 1 {
 		t.Fatalf("发送次数 = %d, want 1", len(sender.sent))
+	}
+	// token 必须透传到 acquire(ticket 05 live 验证暴露的 P0:空 token 建会话必 401)。
+	if len(pool.tokens) != 1 || pool.tokens[0] != "tok-1" {
+		t.Fatalf("acquire 应收到本轮 token, got %v", pool.tokens)
 	}
 	req := sender.sent[0]
 	if req.ParentMessageID != "77" {
@@ -261,5 +266,70 @@ func TestLoopVisionBypassesPool(t *testing.T) {
 	}
 	if len(sender.sent) != 1 || sender.sent[0].ModelType != "vision" {
 		t.Fatalf("vision 请求形态: %+v", sender.sent)
+	}
+}
+
+// ── expert 档回退开关(ticket 05)──
+//
+// live 验证(2026-09-27)结论:DeepSeek expert 续轮正常(thinking 语义与
+// 服务端记忆均生效),故开关默认保持复用、仅备而不用。上游若后续变更导致
+// expert 续轮异常,置 DEEPSEEK_EXPERT_RESUME=0 即让 expert 档退回每轮新开
+// (无池独立会话路径),quick 档不受影响。
+
+// expert 档回退:noResume → 不进池、每轮新开引导(拍平本轮内容)。
+func TestLoopExpertResumeDisabledBypassesPool(t *testing.T) {
+	pool := &fakeSessionPool{}
+	sender := &fakeChatSender{reply: "答", msgID: "m1"}
+	flow := &deepseekChatFlow{
+		pool:      pool,
+		sender:    sender,
+		clientKey: "u1",
+		noResume:  true,
+		modelType: "expert",
+		messages: []deepseekTurn{
+			{Text: "问1"},
+			{Text: "问2"},
+		},
+	}
+	out := flow.runForTest(t)
+
+	if pool.acquired != 0 || pool.acqNew != 0 {
+		t.Fatalf("回退档不应进池, acquired=%d acqNew=%d", pool.acquired, pool.acqNew)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("发送次数 = %d, want 1", len(sender.sent))
+	}
+	if sender.sent[0].ParentMessageID != "" {
+		t.Fatalf("回退档 parent 应为空, got %q", sender.sent[0].ParentMessageID)
+	}
+	if sender.sent[0].Prompt != "问1\n\n问2" {
+		t.Fatalf("回退档应为新会话引导(拍平本轮内容), got %q", sender.sent[0].Prompt)
+	}
+	if sender.sent[0].ModelType != "expert" {
+		t.Fatalf("回退只关复用,不改模式: modelType = %q", sender.sent[0].ModelType)
+	}
+	if out.text != "答" {
+		t.Fatalf("输出 = %q", out.text)
+	}
+}
+
+// 开关默认(noResume=false)时 expert 档照常进池复用——默认行为是复用。
+func TestLoopExpertResumeDefaultStillPools(t *testing.T) {
+	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1", ParentMessageID: "77"}}}
+	sender := &fakeChatSender{reply: "答2", msgID: "78"}
+	flow := &deepseekChatFlow{
+		pool:      pool,
+		sender:    sender,
+		clientKey: "u1",
+		modelType: "expert",
+		messages:  []deepseekTurn{{Text: "问1"}, {Text: "问2"}},
+	}
+	flow.runForTest(t)
+
+	if pool.acquired != 1 {
+		t.Fatalf("默认应进池, acquired=%d", pool.acquired)
+	}
+	if sender.sent[0].ParentMessageID != "77" {
+		t.Fatalf("默认应续轮, parent = %q", sender.sent[0].ParentMessageID)
 	}
 }

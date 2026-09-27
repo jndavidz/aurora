@@ -59,3 +59,20 @@ func TestGetBoolEnvInvalid(t *testing.T) {
 		t.Error("getBoolEnv with invalid value should return default (true)")
 	}
 }
+
+// ticket 05:expert 档会话复用开关,默认开启(live 验证 expert 续轮正常,
+// 开关仅备而不用);置 0/false 时 expert 退回每轮新开。
+func TestDeepSeekExpertResumeFlag(t *testing.T) {
+	t.Setenv("DEEPSEEK_EXPERT_RESUME", "")
+	if !Load().DeepSeekExpertResume {
+		t.Error("默认应为 true(expert 复用开启)")
+	}
+	t.Setenv("DEEPSEEK_EXPERT_RESUME", "0")
+	if Load().DeepSeekExpertResume {
+		t.Error("DEEPSEEK_EXPERT_RESUME=0 应关闭 expert 复用")
+	}
+	t.Setenv("DEEPSEEK_EXPERT_RESUME", "true")
+	if !Load().DeepSeekExpertResume {
+		t.Error("DEEPSEEK_EXPERT_RESUME=true 应开启")
+	}
+}
