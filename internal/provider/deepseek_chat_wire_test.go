@@ -28,8 +28,6 @@ type wireUpstream struct {
 	creates     int
 	deletes     int
 	completions []wireCompletion // 按到达顺序
-	replies     []string
-	msgIDs      []string
 }
 
 type wireCompletion struct {
@@ -66,12 +64,6 @@ func (w *wireUpstream) handler(t *testing.T) http.Handler {
 			})
 			msgID := "m" + strconv.Itoa(idx+1)
 			text := "回复" + strconv.Itoa(idx+1)
-			if idx < len(w.replies) {
-				text = w.replies[idx]
-			}
-			if idx < len(w.msgIDs) {
-				msgID = w.msgIDs[idx]
-			}
 			rw.Header().Set("Content-Type", "text/event-stream")
 			rw.Write([]byte("data: {\"response_message_id\":\"" + msgID + "\"}\n\n" +
 				"data: {\"v\":\"" + text + "\"}\n\n" +
