@@ -1,0 +1,183 @@
+package session
+
+import (
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeUpstream 是 acquire/release seam 的内存 fake:模拟上游 session 的
+// 创建/关闭,记录调用轨迹供断言,无网络。
+type fakeUpstream struct {
+	mu       sync.Mutex
+	created  int
+	deleted  int
+	sessions map[string]string // sessionID → token
+}
+
+func newFakeUpstream() *fakeUpstream {
+	return &fakeUpstream{sessions: map[string]string{}}
+}
+
+func (f *fakeUpstream) CreateSession(token string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.created++
+	id := fmt.Sprintf("s%d", f.created)
+	f.sessions[id] = token
+	return id, nil
+}
+
+func (f *fakeUpstream) DeleteSession(token, sessionID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted++
+	delete(f.sessions, sessionID)
+	return nil
+}
+
+// Cycle 2:同 clientKey 不同 model 不串池(缓存键 = clientKey + "|" + model)。
+// 用两次 acquire 走不同 model,断言各自新开 session(fake 上游 created == 2)。
+func TestAcquireDifferentModelsNoPoolSharing(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{})
+
+	l1 := pool.Acquire("u1", "deepseek")
+	l2 := pool.Acquire("u1", "deepseek-expert")
+
+	if l1.SessionID == l2.SessionID {
+		t.Fatalf("不同 model 应各自新开 session,got same %q", l1.SessionID)
+	}
+	if up.created != 2 {
+		t.Fatalf("created = %d, want 2", up.created)
+	}
+}
+
+// Cycle 3:同 key 同 model 连续 acquire 命中池 → 续轮(不新开、不删旧)。
+func TestAcquireHitReusesSession(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
+
+	l1 := pool.Acquire("u1", "deepseek")
+	l1.ParentMessageID = "resp-1" // 模拟首轮完成
+	pool.Release(l1, "resp-1")
+
+	l2 := pool.Acquire("u1", "deepseek")
+	if l2.SessionID != l1.SessionID {
+		t.Fatalf("同 key 同 model 第二轮应复用 session: l1=%q l2=%q", l1.SessionID, l2.SessionID)
+	}
+	if l2.ParentMessageID != "resp-1" {
+		t.Fatalf("续轮 parent_message_id = %q, want resp-1", l2.ParentMessageID)
+	}
+	if up.created != 1 || up.deleted != 0 {
+		t.Fatalf("created=%d deleted=%d, want 1/0", up.created, up.deleted)
+	}
+}
+
+// Cycle 4a:TTL 惰性过期——空闲超时的条目在下一次 acquire 时被踢出,
+// 视为新开(spec: TTL 过期即接受记忆断档,不重放历史)。
+func TestAcquireTTLExpiredNewSession(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{CleanupInterval: -1, TTL: 10 * time.Millisecond})
+
+	l1 := pool.Acquire("u1", "deepseek")
+	pool.Release(l1, "resp-1")
+	time.Sleep(15 * time.Millisecond)
+
+	l2 := pool.Acquire("u1", "deepseek")
+	if l2.SessionID == l1.SessionID {
+		t.Fatal("TTL 过期后应新开 session,却复用了旧 session")
+	}
+	if l2.ParentMessageID != "" {
+		t.Fatalf("新开会话 parent 应为空, got %q", l2.ParentMessageID)
+	}
+	if up.created != 2 {
+		t.Fatalf("created = %d, want 2", up.created)
+	}
+}
+
+// Cycle 4b:LRU 淘汰——容量满时最久未用条目被踢出,刚用过的保留。
+func TestAcquireLRUEviction(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{Capacity: 2, CleanupInterval: -1})
+
+	a := pool.Acquire("u1", "m")
+	pool.Release(a, "r-a")
+	b := pool.Acquire("u2", "m")
+	pool.Release(b, "r-b")
+	time.Sleep(2 * time.Millisecond) // 保证 lastUsed 可比
+	c := pool.Acquire("u3", "m")     // 池满,u1 被淘汰
+	_ = c
+
+	// u1 的条目已被淘汰 → 再次 acquire u1 应新开
+	a2 := pool.Acquire("u1", "m")
+	if a2.SessionID == a.SessionID {
+		t.Fatal("被 LRU 淘汰的条目不应被复用")
+	}
+	// LRU 语义自洽:acquire u1 时池又满,u2 成为最旧被淘汰 → b2 也新开。
+	// created 计数 = 初始 3 + u1 重开 1 + u2 重开 1 = 5。
+	b2 := pool.Acquire("u2", "m")
+	if b2.SessionID == b.SessionID {
+		t.Fatal("u2 应已被 LRU 淘汰,不应复用")
+	}
+	if up.created != 5 {
+		t.Fatalf("created = %d, want 5", up.created)
+	}
+}
+
+// Cycle 5:显式信令 → 池内同 key 旧 entry 作废,强制新开(旧上游 session
+// 不主动删:删除调用本身是非真人请求,由上游/TTL 回收)。
+func TestAcquireNewSignalInvalidates(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
+
+	l1 := pool.Acquire("u1", "deepseek")
+	pool.Release(l1, "resp-1")
+
+	l2 := pool.AcquireNew("u1", "deepseek")
+	if l2.SessionID == l1.SessionID {
+		t.Fatal("显式新会话信令应强制新开,却复用了旧 session")
+	}
+	if l2.ParentMessageID != "" {
+		t.Fatalf("新会话 parent 应为空, got %q", l2.ParentMessageID)
+	}
+	if up.created != 2 {
+		t.Fatalf("created = %d, want 2", up.created)
+	}
+
+	// 信令后的下一轮(无信令)正常复用新 session
+	l3 := pool.Acquire("u1", "deepseek")
+	if l3.SessionID != l2.SessionID {
+		t.Fatalf("信令后的下一轮应复用新 session: got %q want %q", l3.SessionID, l2.SessionID)
+	}
+}
+
+// 并发冒烟:多 goroutine 同 key acquire/release 不死锁、不 panic、
+// 池内条目数不超上限。
+func TestPoolConcurrentAccess(t *testing.T) {
+	up := newFakeUpstream()
+	pool := NewPool(up, PoolConfig{Capacity: 4, CleanupInterval: -1})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			key := fmt.Sprintf("u%d", n%6)
+			l := pool.Acquire(key, "m")
+			if n%3 == 0 {
+				pool.AcquireNew(key, "m")
+			}
+			pool.Release(l, fmt.Sprintf("r-%d", n))
+		}(i)
+	}
+	wg.Wait()
+
+	pool.mu.Lock()
+	size := len(pool.entries)
+	pool.mu.Unlock()
+	if size > 4 {
+		t.Fatalf("池内条目 %d 超上限 4", size)
+	}
+}
