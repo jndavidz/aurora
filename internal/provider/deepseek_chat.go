@@ -305,39 +305,6 @@ func flattenChatItems(items []responsesInputItem, instructions string) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// chatStreamReplay 流式回放一轮已完成的 flow 结果。
-// 上游已整流消费完毕,无逐帧可推 —— 一次性下发全部 delta 后收尾(SSE
-// 事件形态与旧路径一致,客户端解析无感;真实逐帧 flush 见流式分支)。
-func (d *DeepSeek) chatStreamReplay(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest, out deepseekTurnOutput) {
-	w := newSSEWriter(c)
-	respID := "resp_" + uuid.NewString()
-	reasoningItemID := "rs_" + uuid.NewString()
-	messageItemID := "msg_" + uuid.NewString()
-
-	w.event("response.created", createdEvent(respID, req.Model))
-	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{"id": reasoningItemID, "type": "reasoning", "status": "in_progress"}))
-	w.event("response.output_item.added", outputItemAddedEvent(1, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
-
-	if out.reasoning != "" {
-		w.event("response.reasoning_text.delta", map[string]any{
-			"type": "response.reasoning_text.delta", "item_id": reasoningItemID,
-			"output_index": 0, "content_index": 0, "delta": out.reasoning,
-		})
-	}
-	if out.text != "" {
-		w.event("response.output_text.delta", map[string]any{
-			"type": "response.output_text.delta", "item_id": messageItemID,
-			"output_index": 1, "content_index": 0, "delta": out.text,
-		})
-	}
-
-	w.event("response.output_item.done", outputItemDoneEvent(0, reasoningItem(reasoningItemID, out.reasoning, "completed")))
-	w.event("response.output_item.done", outputItemDoneEvent(1, messageItem(messageItemID, out.text, "completed")))
-
-	outResp := official.NewResponsesResponse(out.text, out.reasoning, countInputChars(req), util.CountToken(out.text), util.CountToken(out.reasoning), 0, 0, req.Model)
-	w.event("response.completed", completedEvent(outResp))
-}
-
 // chatNonStreamReplay 非流式回放一轮已完成的 flow 结果。
 func (d *DeepSeek) chatNonStreamReplay(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest, out deepseekTurnOutput) {
 	outResp := official.NewResponsesResponse(out.text, out.reasoning, countInputChars(req), util.CountToken(out.text), util.CountToken(out.reasoning), 0, 0, req.Model)
