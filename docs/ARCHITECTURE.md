@@ -41,10 +41,17 @@ OpenAI 兼容客户端(pi / zcode / aurora-chat.html / codebuddy)
 3. **reasoning / function_call / web_search_call 都是 Responses 的第一类 item**,
    对 coding agent 更干净。
 
-**多轮 = 客户端无状态**:每轮客户端全量重发 `input` 数组(历史 message + function_call +
+**多轮 = 客户端持有上下文**:每轮客户端全量重发 `input` 数组(历史 message + function_call +
 function_call_output items)。**不依赖 `previous_response_id`/`store`**(DeepSeek 不支持,
-aurora 也无需)。网页通道每轮把完整 `input` 拍平成网页 prompt 发上游。`maxHistoryChars`
-(100000)预检保留,防长历史膨胀。
+aurora 也无需)`maxHistoryChars`(100000)预检保留,防长历史膨胀。
+
+**上游会话复用**(2026-09-27 起,spec:`.scratch/upstream-session-reuse/spec.md`):
+带 `X-Session-Key` 头(或 chat completions 的 `user` 字段)的连续请求,复用同一个上游
+网页 session、只发本轮增量(`parent_message_id` = 上轮 `response_message_id`);无 key
+的请求维持「每轮新会话 + 全量拍平」。拍平降级为**新会话引导**专用路径。aurora 仍是
+网页反代:不维护记忆、不校验客户端历史,何时新开由客户端决定(`X-Session-Action: new`
+头 / `user` 字段 `#new#` 前缀)。策略实现集中在 `internal/provider/session/`(deep module,
+acquire/release 小接口),一期仅 DeepSeek 接入;GLM/Grok/Minimax 协议同型,后续跟进。
 
 ## 三、Provider 抽象(`internal/provider`)
 
@@ -231,6 +238,12 @@ responsesToolCalling(/v1/responses) ──┘
 
 **认证**:`deepseek_tokens.txt` 每行一个 `localStorage["userToken"].value`。
 
+**会话复用**(一期唯一接入的上游):策略 module 在 `internal/provider/session/`,
+DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16、TTL 30min
+(惰性过期 + 后台清理),LRU 淘汰与失效时顺手删上游 session。续轮失败 → 丢弃池内条目 →
+新开重试一次 → 仍失败才报错。识图(vision)请求不进池。`DEEPSEEK_EXPERT_RESUME=0` 可让
+expert 档退回每轮新开。上游实测 `ttl_seconds=259200`(72h),远长于本地 TTL。
+
 ### 6.3 智谱 GLM(`internal/glmweb/` + `internal/provider/glm*.go`)
 
 **模型**:`glm-5.2-chat`(快速挡,默认)/`glm-5.2-chat-thinking`(思考挡)/`glm-5.2-coding`。
@@ -410,6 +423,8 @@ responsesToolCalling(/v1/responses) ──┘
 | `internal/provider/*_chat.go` | chat 变体实现 |
 | `internal/provider/*_coding.go` | coding 变体实现 |
 | `internal/provider/input.go` | 双接口共享的输入拍平助手 |
+| `internal/provider/session/` | 上游会话复用策略 module(池/TTL/信令/降级) |
+| `internal/provider/deepseek_chat_session.go` | DeepSeek 会话复用 adapter(flow loop) |
 | `internal/provider/sse.go` | Responses 流式事件输出器 |
 | `internal/*web/` | 各网页逆向客户端包(协议层) |
 | `internal/toolcall/` | 标签解析、recover、fence、prompt、params |

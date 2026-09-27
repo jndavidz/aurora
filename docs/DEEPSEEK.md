@@ -21,7 +21,7 @@
 | 6 | SSE | ✅ V4:`event: ready`(message id 是整数)→ 初始快照 `{"v":{"response":{"fragments":[{type:RESPONSE|THINK,content}]}}}` → 增量 `{"v":"文本"}`(纯 v 字符串)或 `{"p":"response/fragments/-1/content","o":"APPEND","v":"文本"}` → 结束 `{"p":"response/status","o":"SET","v":"FINISHED"}`(也有 `BATCH` op)+ `event: close` |
 | 7 | 工具调用 | ✅ coding 变体:模型遵循 `<|tool▁calls▁begin|>`(▁=U+2581)标签,但常丢前导 `|`(`<tool▁calls▁begin|>`)或混用 ASCII 下划线 —— 解析器已对全部变体归一化 + "半个标签"流式保护 |
 | 8 | 识图 | ✅ `upload_file`(multipart)→ `fetch_files`(READY)→ **`fork_file_task {file_id, to_model_type:"vision"}`**(关键,返回新 file_id)→ completion `model_type:"vision"` + fork 后的 `ref_file_ids`。缺 fork 步骤报"发送至识图模式" |
-| 9 | 多轮 | ✅ 网页无服务端历史需全量提交?否 —— **服务端按 session+parent_message_id 记忆**;aurora 每请求新会话,需把 input 全量拍平进 prompt(不加角色前缀,模型用专用 token 锚定角色) |
+| 9 | 多轮 | ✅ **服务端按 session+parent_message_id 记忆**。2026-09-27 起带 `X-Session-Key`(或 `user` 字段)的请求复用同一 session、只发本轮增量(`parent_message_id` = 上轮 `response_message_id`);无 key 的请求维持每请求新会话 + input 全量拍平(不加角色前缀,模型用专用 token 锚定角色)。拍平已降级为**新会话引导**专用路径 |
 | 10 | prompt | ✅ **不加 "User:"/"Assistant:" 前缀**(实测加前缀模型报"乱码");纯文本拼接 |
 
 > 遗留:识图 completion 在不同账号/网络下的稳定性未做大规模验证(浏览器本身在默认会话直接带图也会报"发送至识图模式",需 fork 步骤)。
@@ -66,7 +66,7 @@ DeepSeek 网页版**没有"工具调用"通道**,只有两个原生能力;客户
 不注入 `<|tool_calls_begin|>` 或任何工具说明,只携带网页模式开关(快速/专家、智能搜索、深度思考、识图)。
 
 - 这些开关是**真人点网页 UI 会产生的行为**,不暴露给大模型的"工具"。
-- 多轮历史用 `User:`/`Assistant:` 角色前缀拍平为单一 `prompt`(网页无服务端历史,每轮全量提交)。
+- 多轮历史:带会话键时只发本轮增量(上游服务端记忆);无会话键的新会话引导才把本轮内容拍平为单一 `prompt`。**不加 `User:`/`Assistant:` 角色前缀**(实测加前缀模型报"乱码";上面这句是历史表述,与 §一·9 一致)。
 - `function_call`/`function_call_output` item 防御性跳过(chat 变体不该出现)。
 - **识图(快速模式)与联网搜索互斥**:有图片时不带 `search_enabled`(DeepSeek 网页行为)。
 

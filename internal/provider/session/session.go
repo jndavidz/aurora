@@ -102,8 +102,9 @@ type poolEntry struct {
 
 // 生产默认值(spec 拍板)。
 const (
-	defaultCapacity = 16
-	defaultTTL      = 30 * time.Minute
+	defaultCapacity        = 16
+	defaultTTL             = 30 * time.Minute
+	defaultCleanupInterval = 10 * time.Minute
 )
 
 // NewPool 构造会话池。up 为该上游的 session 通道实现。
@@ -113,6 +114,9 @@ func NewPool(up upstream, cfg PoolConfig) *Pool {
 	}
 	if cfg.TTL <= 0 {
 		cfg.TTL = defaultTTL
+	}
+	if cfg.CleanupInterval == 0 {
+		cfg.CleanupInterval = defaultCleanupInterval
 	}
 	p := &Pool{up: up, cfg: cfg, entries: map[string]*poolEntry{}}
 	if cfg.CleanupInterval > 0 {

@@ -17,7 +17,7 @@
 | 模型字段 | `model` 固定 `gpt_175B_0404`(agent 主模型标识);**真正模型由 `chatModelId` 决定**:`hunyuan_gpt_175B_0404`(Hy3)/`deep_seek_v3`(DeepSeek) |
 | 联网搜索 | 模型均支持 `supportInternetSearch`;网页默认「自动联网搜索」(`supportFunctions:["openAutoSearchSwitch","autoInternetSearch"]` + extInfo 带 `internetSearch`) |
 | 工具调用 | 网页 API **无原生 function calling**(coding 变体是文本协议注入式模拟,见 §五) |
-| 多轮 | 每请求新会话(cid)+ 全量拍平 prompt,无服务端历史依赖(与 DeepSeek 网页通道一致) |
+| 多轮 | 每请求新会话(cid)+ 全量拍平 prompt,无服务端历史依赖(~~与 DeepSeek 网页通道一致~~:2026-09-27 起 DeepSeek 通道已支持上游会话复用,无会话键的请求才维持本行行为;见 `docs/ARCHITECTURE.md` §二。本通道已关停,此行为为其历史快照) |
 | WAF(TLS) | **必须 Chrome 指纹 TLS**(bogdanfinn tls-client `Chrome_146`);curl 可过,Go 标准库 / node 被 `stgw` 网关按 JA3 拦截(401/400) |
 | 凭据有效期 | X-Uskey 随登录有效,浏览器登录态过期即失效(实测会话中途失效,需重新登录后提取) |
 

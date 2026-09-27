@@ -117,6 +117,31 @@ func TestLoopResumeSendsIncrementOnly(t *testing.T) {
 	}
 }
 
+// 上游未给续轮锚点(response_message_id 为空)时不得入池:
+// 入池会让下轮在同一 session 上全量重发历史——既非续轮(无 parent)也非
+// 新会话引导(旧 session),违反 spec §会话策略。故丢弃并删上游。
+func TestLoopEmptyAnchorDoesNotPool(t *testing.T) {
+	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1"}}}
+	sender := &fakeChatSender{reply: "答1"} // msgID 空 = 上游没给锚点
+	flow := &deepseekChatFlow{
+		pool:      pool,
+		sender:    sender,
+		clientKey: "u1",
+		messages:  []deepseekTurn{{Text: "问1"}},
+	}
+	out := flow.runForTest(t)
+
+	if out.text != "答1" {
+		t.Fatalf("输出 = %q, want 答1", out.text)
+	}
+	if len(pool.released) != 0 {
+		t.Fatalf("无锚点不应 Release 入池, released=%v", pool.released)
+	}
+	if pool.discards != 1 {
+		t.Fatalf("无锚点应 Discard(下轮走新会话引导), discards=%d", pool.discards)
+	}
+}
+
 // 首轮/未命中:parent 为空 → prompt 为本轮全部内容(新会话引导)。
 func TestLoopFirstTurnBootstrap(t *testing.T) {
 	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1"}}}

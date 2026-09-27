@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"aurora/internal/apierrors"
 	"aurora/internal/deepseekweb"
@@ -93,10 +92,12 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 }
 
 // webPool 惰性构造并复用服务生命周期共享的会话池。
+// 竞态守卫:DeepSeek 是单例,并发首访必须只建一次池——否则旧池与其后台
+// 清理 goroutine 泄漏,且两批请求各用各的池(同 clientKey 无法复用)。
 func (d *DeepSeek) webPool(client *deepseekweb.Client) *session.Pool {
-	if d.sessionPool == nil {
-		d.sessionPool = session.NewPool(deepseekUpstream{client}, session.PoolConfig{CleanupInterval: 10 * time.Minute})
-	}
+	d.oncePool.Do(func() {
+		d.sessionPool = session.NewPool(deepseekUpstream{client}, session.PoolConfig{})
+	})
 	return d.sessionPool
 }
 
@@ -203,9 +204,7 @@ func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *officia
 		}
 		return
 	}
-	if poolable {
-		flow.pool.Release(l, res.ResponseMsgID)
-	}
+	flow.finish(l, res.ResponseMsgID)
 
 	w.event("response.output_item.done", outputItemDoneEvent(0, reasoningItem(reasoningItemID, res.Reasoning, "completed")))
 	w.event("response.output_item.done", outputItemDoneEvent(1, messageItem(messageItemID, res.Text, "completed")))
@@ -498,9 +497,7 @@ func (d *DeepSeek) chatStreamCompletion(c *gin.Context, m *deepseekModel, req *o
 		writeCompletionError(c, started, runErr)
 		return
 	}
-	if poolable {
-		flow.pool.Release(l, res.ResponseMsgID)
-	}
+	flow.finish(l, res.ResponseMsgID)
 
 	// 空响应(上游未吐任何增量但不报错):补建流头与 role 块,与旧路径形态一致。
 	begin()

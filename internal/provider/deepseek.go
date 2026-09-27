@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"aurora/internal/apierrors"
@@ -45,7 +46,10 @@ type DeepSeek struct {
 	// coding 限频(chat 不限)
 	limiter *CodingLimiter
 	// sessionPool 上游会话池(仅 chat 变体使用;惰性构造,服务生命周期共享)。
+	// oncePool 守卫惰性构造:DeepSeek 是进程内单例(router 处构造一次),
+	// 并发请求同时首访会各自建池——旧池与其后台清理 goroutine 双双泄漏。
 	sessionPool *session.Pool
+	oncePool    sync.Once
 }
 
 // defaultDeepSeekModels 是 DEEPSEEK_MODELS 未配置时的默认目录。

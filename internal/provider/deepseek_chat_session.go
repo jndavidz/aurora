@@ -55,13 +55,13 @@ type chatSender interface {
 }
 
 // deepseekSenderReq 是发送请求的最小视图(生产实现映射到 deepseekweb.CompletionRequest)。
+// ThinkingEnabled/SearchEnabled 不在此处传递:网页模式开关由 deepseekWebSender
+// 构造时确定(各表面开关口径不同),flow 层不感知。
 type deepseekSenderReq struct {
 	SessionID       string
 	ParentMessageID string
 	Prompt          string
 	ModelType       string
-	ThinkingEnabled bool
-	SearchEnabled   bool
 	RefFileIDs      []string
 }
 
@@ -229,11 +229,24 @@ func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
 			}
 		}
 
-		if poolable && l != nil {
-			f.pool.Release(l, out.responseMsgID)
-		}
+		f.finish(l, out.responseMsgID)
 		return out, nil
 	}
+}
+
+// finish 收尾一轮成功:仅当本轮拿到续轮锚点(上游 response_message_id)时
+// 才归还池供下轮续轮。锚点为空说明上游没给锚点,此时入池会让下轮在旧
+// session 上全量重发历史——既非续轮也非新会话引导(spec §会话策略的命中
+// 条件即 parent_message_id 非空),故丢弃并删上游,下轮走新会话引导。
+func (f *deepseekChatFlow) finish(l *session.Lease, responseMessageID string) {
+	if l == nil {
+		return
+	}
+	if !f.poolable() || responseMessageID == "" {
+		f.pool.Discard(l)
+		return
+	}
+	f.pool.Release(l, responseMessageID)
 }
 
 // flowError 把流级错误包装为 error。

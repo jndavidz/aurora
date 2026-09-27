@@ -27,8 +27,12 @@ _Avoid_: 对话模式/编程模式
 _Avoid_: 原生 function calling（智谱/Grok 的 `sandbox_code` 也非客户端工具）
 
 **拍平（flatten）**:
-把客户端全量 messages/input 历史压成单条网页 prompt 发上游（多轮 = 客户端无状态，不依赖 `previous_response_id`）。
+把客户端全量 messages/input 历史压成单条网页 prompt 发上游。**仅新会话引导路径使用**——带会话键的续轮只发本轮增量（见「上游会话复用」）。
 _Avoid_: 合并消息
+
+**上游会话复用（upstream session reuse）**:
+带会话键的连续请求复用同一上游网页 session、只发本轮增量，靠服务端 session + `parent_message_id` 记忆。策略 module 在 `internal/provider/session/`（acquire/release 小接口，吸收池化/TTL/信令/失效降级）。aurora 仍是网页反代：不维护记忆，何时新开由客户端信令决定。
+_Avoid_: 会话池（与 handler 层 SessionManager 混淆）、多轮记忆
 
 **token 池**:
 各 provider 的凭证文件集合（`*_tokens.txt` / `*_accounts.json`，见 `docs/ARCHITECTURE.md` §7.1）；**token 池文件非空**是该 provider 注册的前置条件（`router.go`）。

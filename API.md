@@ -273,6 +273,41 @@ curl --location 'http://你的服务器ip:8080/v1/models' \
 
 `DEEPSEEK_WEB_SEARCH` / `GLM_WEB_SEARCH`（默认关闭）：quick/chat 档是否带联网搜索。关闭可省首字延迟 1~2s；需要网页代查才设 1。详见 docs/NAS_DEPLOYMENT.md 与 DEEPSEEK.md §九。
 
+## 上游会话复用（2026-09-27）
+
+连续对话时复用同一个上游网页 session、只发本轮增量，省去建会话与全量历史重发（实测 quick 档 1.098s → 815ms，expert 档 1.462s → 871ms）。当前仅 DeepSeek 通道接入。
+
+| 头 / 字段 | 作用 |
+|---|---|
+| `X-Session-Key: <key>` | 会话键。连续对话的每轮带同一个值即可复用 |
+| `X-Session-Action: new` | 强制新开会话（话题切换） |
+| chat completions 的 `user` 字段 | 无 `X-Session-Key` 时作会话键；前缀 `#new#` 等价于 `X-Session-Action: new` |
+
+```bash
+# 连续两轮（第二轮复用上游 session）
+curl -N http://你的服务器ip:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' -H 'X-Session-Key: abc123' \
+  -d '{"model":"deepseek","messages":[{"role":"user","content":"记住数字 47"}]}'
+curl -N http://你的服务器ip:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' -H 'X-Session-Key: abc123' \
+  -d '{"model":"deepseek","messages":[{"role":"user","content":"我刚才说的数字是多少"}]}'
+
+# 换话题：两种等价写法
+-H 'X-Session-Action: new'          # 或
+-d '{...,"user":"#new#abc123"}'
+```
+
+语义要点：
+
+- **不带 `X-Session-Key` 且 `user` 为空** → 完全不进会话池，每次独立处理（一次性调用行为不变）。
+- 缓存键 = 会话键 + 暴露模型 id；不同模型不串池。
+- TTL 30min（空闲即失效，下一轮自动新开）；池上限 16，LRU 淘汰。识图请求不进池。
+- **aurora 只做网页反代**：不维护记忆、不校验历史。上下文权威在客户端侧；跨 TTL 的记忆断档由客户端解决。
+- 续轮失败（上游回收 session / 风控）自动降级为新开重试一次，客户端无感；仍失败才报错。
+- `DEEPSEEK_EXPERT_RESUME=0` 可让 expert 档退回每轮新开（默认复用）。
+
+策略实现：`internal/provider/session/`；spec 见 `.scratch/upstream-session-reuse/spec.md`。
+
 ## gpt-coding 与 CODING_ENABLED
 
 coding 变体已整体封存（2026-09-03，`/v1/models` 不再显示 `-coding` 变体）。
