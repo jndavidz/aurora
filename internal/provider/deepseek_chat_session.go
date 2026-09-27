@@ -149,10 +149,14 @@ func (f *deepseekChatFlow) runForTestErr(t interface{ Fatalf(string, ...any) }) 
 	return err
 }
 
+// poolable 报告本轮是否走会话池:有 clientKey 且非 vision(spec 拍板)。
+// 流式/非流式两条管线共用同一判定,避免判定条件漂移。
+func (f *deepseekChatFlow) poolable() bool { return f.clientKey != "" && !f.vision }
+
 // run 执行一轮:acquire → 构造请求 → send → consume → release/discard。
 // 失败降级:首次失败(任意上游错误)→ Discard → 新开重试一次 → 仍失败返回 error。
 func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
-	poolable := f.clientKey != "" && !f.vision
+	poolable := f.poolable()
 
 	var l *session.Lease
 	if poolable {

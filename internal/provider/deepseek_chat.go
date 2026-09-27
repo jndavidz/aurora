@@ -148,7 +148,7 @@ func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *officia
 		return res, true
 	}
 
-	poolable := flow.clientKey != "" && !flow.vision
+	poolable := flow.poolable()
 	var l *session.Lease
 	if poolable {
 		var err error
