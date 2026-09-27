@@ -56,6 +56,7 @@ aurora 对显式会话型上游启用会话复用：连续对话期间同一客�
 - Provider 侧通过可选接口（SessionAware 能力）接入：一期仅 DeepSeek 实现；GLM（conversation_id）、Grok（parent_response_id）、Minimax（session_id）协议同型，列为后续跟进项，不在本期。
 - 无可用会话通道的上游（qianwen/doubao/mimo/kimi-web）维持现状，不在本期改动。
 - token 轮换语义：session 与建立时的 token 绑定；池内 token 热加载或轮换后旧 entry 视为失效（降级新开）。
+  - **补充拍板（2026-09-28）**：池路径取 token 必须按 clientKey 确定性（`Client.TokenFor`，FNV-1a hash），不能用轮询 `NextToken()`——多 token 池下轮询令池命中恒为 0（每轮多付 create+delete，负收益）。空 clientKey（单发不进池）回落轮询保持负载均衡。修复 commit：见 `internal/deepseekweb/client.go` 的 `TokenFor` 注释。
 
 ### 失败降级
 
@@ -65,6 +66,10 @@ aurora 对显式会话型上游启用会话复用：连续对话期间同一客�
 
 - 池上限 16 entries，LRU 淘汰。
 - 复用使 aurora 流量形态回归真人网页行为（服务端会话 + 增量），对风控正面。
+
+### 流级错误取舍（B 项，2026-09-28 显式化）
+
+- 已吐增量后上游报错（`hint` 事件）：不降级、不报错，保持已发内容，正常收尾。有意识取舍：优先客户端透明（半途 error 帧会截断已播语音），牺牲该低频场景的完整性。代码两处判据（`deepseek_chat_session.go` flow.run、`deepseek_chat.go` chatStreamTurn）均有注释。
 
 ### open-xiaoai-bridge 侧（独立工作项，此处仅记录接口约定）
 

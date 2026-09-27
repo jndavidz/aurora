@@ -213,7 +213,9 @@ func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
 			out.promptTokens = res.PromptTokens
 			out.completionTokens = res.CompletionTokens
 			if res.Err != "" && out.text == "" && out.reasoning == "" {
-				// 流级失败按发送失败同型处理(降级重试一次)。
+				// B 项拍板(2026-09-28,spec 「流级错误取舍」):已吐增量后上游报错时
+				// 不降级、不报错 —— 半途 error 帧会截断客户端已收内容,透明性优先,
+				// 完整性舎弃(低频场景)。仅「零增量」才按发送失败同型降级重试。
 				if poolable {
 					f.pool.Discard(l)
 				}

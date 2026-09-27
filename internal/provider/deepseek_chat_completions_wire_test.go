@@ -292,6 +292,26 @@ func TestChatCompletionsStreamRetryIsTransparent(t *testing.T) {
 	}
 }
 
+// A 项拍板(2026-09-28)回归:多 token 池下同 clientKey 连续两轮必须复用
+// session(session 与建立时的 token 绑定;轮询 NextToken 会让池命中恒为 0)。
+// 修复前(TokFor 之前):第二次 completions 走 NextToken 取到不同 token,
+// creates=2 且 deletes=1 —— 本测试即红;修复后(TokenFor)全绿。
+func TestChatCompletionsMultiTokenPoolStillResumes(t *testing.T) {
+	w := &wireUpstream{}
+	d, closer := startChatWireWithTokens(t, w, "tok-A\ntok-B\n")
+	defer closer()
+
+	chatCompletionCall(t, d, nil, apiChatReq("u1", "你好"))
+	chatCompletionCall(t, d, nil, apiChatReq("u1", "还在吗"))
+
+	if w.creates != 1 {
+		t.Fatalf("多 token 池同 key 两轮应复用 session, creates=%d", w.creates)
+	}
+	if w.deletes != 0 {
+		t.Fatalf("复用期间不应删 session, deletes=%d", w.deletes)
+	}
+}
+
 // 硬规则回归:chat.completions 带 tools 时,prompt 不得注入任何工具信息
 // (chat 变体剥离 tools;ticket 04 的接线改走 flow 后仍需保持)。
 func TestChatCompletionsStripsTools(t *testing.T) {
@@ -320,4 +340,20 @@ func TestChatCompletionsStripsTools(t *testing.T) {
 	if !strings.Contains(prompt, "读一下") {
 		t.Fatalf("chat prompt 丢失正文: %q", prompt)
 	}
+}
+
+// startChatWireWithTokens 同 startChatWire,但注入多行 token 文件。
+func startChatWireWithTokens(t *testing.T, w *wireUpstream, tokens string) (*DeepSeek, func()) {
+	t.Helper()
+	srv := httptest.NewServer(w.handler(t))
+	tokFile := filepath.Join(t.TempDir(), "deepseek_tokens.txt")
+	if err := os.WriteFile(tokFile, []byte(tokens), 0o600); err != nil {
+		srv.Close()
+		t.Fatalf("write token file: %v", err)
+	}
+	return NewDeepSeek(&config.Config{
+		DeepSeekWebBase:   srv.URL,
+		DeepSeekWebTokens: tokFile,
+		DeepSeekModels:    []string{"deepseek"},
+	}), srv.Close
 }

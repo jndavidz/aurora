@@ -86,6 +86,41 @@ func (c *Client) NextToken() string {
 	return t
 }
 
+// TokenFor 按 clientKey 确定性选 token(会话复用专用)。
+//
+// 上游 session 与建立时的 token 绑定,因此同一 clientKey 的连续对话必须
+// 落到同一账号,否则 Pool.Acquire 的 token 比对恒不命中 → 每轮「摘条目 →
+// 删上游 session → 新建」,比不开复用还差(负收益)。轮询 NextToken() 在多
+// token 池下连续两次必不同,不能用于池路径 —— 本方法即为此而生。
+//
+// 空 clientKey(单发请求,不进池)回落轮询,保持负载均衡;clientKey 变化
+// (hash 空间)会整体重新分配,失效范围可预测(池内 token 比对兜底旧条目)。
+func (c *Client) TokenFor(clientKey string) string {
+	if clientKey == "" {
+		return c.NextToken()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reloadIfChangedLocked()
+	if len(c.tokens) == 0 {
+		return ""
+	}
+	if len(c.tokens) == 1 {
+		return c.tokens[0]
+	}
+	return c.tokens[int(fnv32a(clientKey))%len(c.tokens)]
+}
+
+// fnv32a 稳定 hash:FNV-1a,跨进程/重启结果一致,无需种子。
+func fnv32a(s string) uint32 {
+	h := uint32(2166136261)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
 // reloadIfChangedLocked 检查 tokenFile mtime,变化则整池重读。
 // 调用方必须已持有 c.mu。任何错误保持旧池不动(keep-last-good)。
 func (c *Client) reloadIfChangedLocked() {

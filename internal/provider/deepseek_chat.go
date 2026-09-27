@@ -41,7 +41,11 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 		apierrors.JSONError(c, 502, "api_error", "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
-	token := client.NextToken()
+	// 会话策略 ticket 02:clientKey 解析(头 → user 字段),空 = 不进池。
+	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
+	// token 按 clientKey 确定性选取:同一会话键落到同一账号(session 与
+	// token 绑定,轮询会令池命中恒为 0);空 key 回落轮询,单发负载均衡。
+	token := client.TokenFor(clientKey)
 	if token == "" {
 		apierrors.JSONError(c, 502, "api_error", "deepseek web token pool is empty", nil, "upstream_error")
 		return
@@ -53,8 +57,6 @@ func (d *DeepSeek) chatResponses(c *gin.Context, m *deepseekModel, req *official
 	refFileIDs, _ := uploadImages(client, token, req)
 	vision := len(refFileIDs) > 0
 
-	// 会话策略 ticket 02:clientKey 解析(头 → user 字段),空 = 不进池。
-	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
 	pool := d.webPool(client)
 
 	modelType := modelTypeFor(m)
@@ -177,6 +179,9 @@ func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *officia
 				})
 			}
 		})
+		// B 项拍板(2026-09-28,spec 「流级错误取舍」):已吐增量后上游报错时
+		// 不降级、不报错 —— 客户端已收到半截正文,追加 error 帧只会截断/混乱,
+		// 透明性优先。仅「零增量」才降级重试(下方 runErr 分支)。
 		if res != nil && res.Err != "" && fullText == "" && fullReasoning == "" {
 			return res, flowError(res.Err)
 		}
@@ -346,7 +351,10 @@ func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *offici
 		apierrors.JSONError(c, 502, "api_error", "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?", nil, "upstream_error")
 		return
 	}
-	token := client.NextToken()
+	// 会话策略 ticket 04:clientKey 解析与 Responses 表面同一规则
+	// (X-Session-Key 头 → user 字段剥 #new# → 空不进池),信令两表面统一。
+	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
+	token := client.TokenFor(clientKey)
 	if token == "" {
 		apierrors.JSONError(c, 502, "api_error", "deepseek web token pool is empty", nil, "upstream_error")
 		return
@@ -355,10 +363,6 @@ func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *offici
 	// 识图:从 messages 里收集图片上传并 fork 成 vision 版;带图不进池。
 	refFileIDs, _ := uploadImagesFromMessages(client, token, req.Messages)
 	vision := len(refFileIDs) > 0
-
-	// 会话策略 ticket 04:clientKey 解析与 Responses 表面同一规则
-	// (X-Session-Key 头 → user 字段剥 #new# → 空不进池),信令两表面统一。
-	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
 
 	modelType := modelTypeFor(m)
 	if vision {
@@ -472,6 +476,8 @@ func (d *DeepSeek) chatStreamCompletion(c *gin.Context, m *deepseekModel, req *o
 				writeChunk(official.NewChatCompletionChunk(dd.Text, model))
 			}
 		})
+		// B 项拍板(spec 「流级错误取舍」):emitted 后上游报错不降级不报错,
+		// 仅零增量才降级重试(透明性优先,低频场景舎弃完整性)。
 		if res != nil && res.Err != "" && !emitted {
 			return res, flowError(res.Err)
 		}
