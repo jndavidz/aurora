@@ -50,8 +50,11 @@ func TestAcquireDifferentModelsNoPoolSharing(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{})
 
-	l1 := pool.Acquire("u1", "deepseek")
-	l2 := pool.Acquire("u1", "deepseek-expert")
+	l1, err := pool.Acquire("u1", "deepseek")
+	l2, err2 := pool.Acquire("u1", "deepseek-expert")
+	if err != nil || err2 != nil {
+		t.Fatalf("Acquire: %v / %v", err, err2)
+	}
 
 	if l1.SessionID == l2.SessionID {
 		t.Fatalf("不同 model 应各自新开 session,got same %q", l1.SessionID)
@@ -66,11 +69,17 @@ func TestAcquireHitReusesSession(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
 
-	l1 := pool.Acquire("u1", "deepseek")
+	l1, err := pool.Acquire("u1", "deepseek")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
 	l1.ParentMessageID = "resp-1" // 模拟首轮完成
 	pool.Release(l1, "resp-1")
 
-	l2 := pool.Acquire("u1", "deepseek")
+	l2, err := pool.Acquire("u1", "deepseek")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
 	if l2.SessionID != l1.SessionID {
 		t.Fatalf("同 key 同 model 第二轮应复用 session: l1=%q l2=%q", l1.SessionID, l2.SessionID)
 	}
@@ -88,11 +97,17 @@ func TestAcquireTTLExpiredNewSession(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: -1, TTL: 10 * time.Millisecond})
 
-	l1 := pool.Acquire("u1", "deepseek")
+	l1, err := pool.Acquire("u1", "deepseek")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
 	pool.Release(l1, "resp-1")
 	time.Sleep(15 * time.Millisecond)
 
-	l2 := pool.Acquire("u1", "deepseek")
+	l2, err := pool.Acquire("u1", "deepseek")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
 	if l2.SessionID == l1.SessionID {
 		t.Fatal("TTL 过期后应新开 session,却复用了旧 session")
 	}
@@ -112,22 +127,31 @@ func TestAcquireLRUEviction(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{Capacity: 2, CleanupInterval: -1})
 
-	a := pool.Acquire("u1", "m")
+	a, err := pool.Acquire("u1", "m")
 	pool.Release(a, "r-a")
-	b := pool.Acquire("u2", "m")
+	b, err2 := pool.Acquire("u2", "m")
 	pool.Release(b, "r-b")
-	time.Sleep(2 * time.Millisecond) // 保证 lastUsed 可比
-	c := pool.Acquire("u3", "m")     // 池满,u1 被淘汰
+	time.Sleep(2 * time.Millisecond)   // 保证 lastUsed 可比
+	c, err3 := pool.Acquire("u3", "m") // 池满,u1 被淘汰
+	if err != nil || err2 != nil || err3 != nil {
+		t.Fatalf("Acquire: %v / %v / %v", err, err2, err3)
+	}
 	_ = c
 
 	// u1 的条目已被淘汰 → 再次 acquire u1 应新开
-	a2 := pool.Acquire("u1", "m")
+	a2, err4 := pool.Acquire("u1", "m")
+	if err4 != nil {
+		t.Fatalf("Acquire: %v", err4)
+	}
 	if a2.SessionID == a.SessionID {
 		t.Fatal("被 LRU 淘汰的条目不应被复用")
 	}
 	// LRU 语义自洽:acquire u1 时池又满,u2 成为最旧被淘汰 → b2 也新开。
 	// created 计数 = 初始 3 + u1 重开 1 + u2 重开 1 = 5。
-	b2 := pool.Acquire("u2", "m")
+	b2, err5 := pool.Acquire("u2", "m")
+	if err5 != nil {
+		t.Fatalf("Acquire: %v", err5)
+	}
 	if b2.SessionID == b.SessionID {
 		t.Fatal("u2 应已被 LRU 淘汰,不应复用")
 	}
@@ -141,16 +165,19 @@ func TestAcquireLRUEviction(t *testing.T) {
 	}
 }
 
-// Cycle 5:显式信令 → 池内同 key 旧 entry 作废,强制新开(旧上游 session
-// 不主动删:删除调用本身是非真人请求,由上游/TTL 回收)。
+// Cycle 5:显式信令 → 池内同 key 旧 entry 作废并顺手删上游 session
+// (用户拍板「淘汰时顺手删」,信令作废属主动淘汰,三路径策略统一)。
 func TestAcquireNewSignalInvalidates(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: -1})
 
-	l1 := pool.Acquire("u1", "deepseek")
+	l1, err := pool.Acquire("u1", "deepseek")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
 	pool.Release(l1, "resp-1")
 
-	l2 := pool.AcquireNew("u1", "deepseek")
+	l2, err := pool.AcquireNew("u1", "deepseek")
 	if l2.SessionID == l1.SessionID {
 		t.Fatal("显式新会话信令应强制新开,却复用了旧 session")
 	}
@@ -165,7 +192,10 @@ func TestAcquireNewSignalInvalidates(t *testing.T) {
 	}
 
 	// 信令后的下一轮(无信令)正常复用新 session
-	l3 := pool.Acquire("u1", "deepseek")
+	l3, err2 := pool.Acquire("u1", "deepseek")
+	if err2 != nil {
+		t.Fatalf("Acquire: %v", err2)
+	}
 	if l3.SessionID != l2.SessionID {
 		t.Fatalf("信令后的下一轮应复用新 session: got %q want %q", l3.SessionID, l2.SessionID)
 	}
@@ -183,9 +213,16 @@ func TestPoolConcurrentAccess(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			key := fmt.Sprintf("u%d", n%6)
-			l := pool.Acquire(key, "m")
+			l, err := pool.Acquire(key, "m")
+			if err != nil {
+				t.Errorf("Acquire: %v", err)
+				return
+			}
 			if n%3 == 0 {
-				pool.AcquireNew(key, "m")
+				if _, err := pool.AcquireNew(key, "m"); err != nil {
+					t.Errorf("AcquireNew: %v", err)
+					return
+				}
 			}
 			pool.Release(l, fmt.Sprintf("r-%d", n))
 		}(i)
@@ -205,7 +242,10 @@ func TestCleanupLoopDeletesUpstream(t *testing.T) {
 	up := newFakeUpstream()
 	pool := NewPool(up, PoolConfig{CleanupInterval: 20 * time.Millisecond, TTL: 10 * time.Millisecond})
 
-	l := pool.Acquire("u1", "m")
+	l, err := pool.Acquire("u1", "m")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
 	pool.Release(l, "r-1")
 
 	deadline := time.Now().Add(2 * time.Second)

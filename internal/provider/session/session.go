@@ -9,6 +9,7 @@
 package session
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -20,21 +21,23 @@ const newSignalPrefix = "#new#"
 
 // ResolveClientKey 按固定优先级解析会话键与显式新会话信令:
 //  1. X-Session-Key 请求头(信令 = 前缀 #new#)
-//  2. chat completions user 字段(信令 = 前缀 #new#)
-//  3. 皆空 → 空串(调用方不进池)
+//  2. X-Session-Action 请求头(信令 = 值 "new")
+//  3. chat completions user 字段(信令 = 前缀 #new#)
+//  4. 皆空 → 空串(调用方不进池)
 //
 // 返回 (clientKey, isNew):isNew 为 true 表示客户端显式要求新开会话,
-// 池内同 key 旧 entry 应作废。
-func ResolveClientKey(headerVal, userField string) (string, bool) {
+// 池内同 key 旧 entry 应作废。多通道信令叠加为 OR(任一生效)。
+func ResolveClientKey(keyHeader, actionHeader, userField string) (string, bool) {
 	// 通道 1:X-Session-Key 头(信令 = 前缀 #new#)
 	key, isNew := "", false
-	if headerVal != "" {
-		key, isNew = stripNewSignal(headerVal)
-		if isNew {
-			return key, true
-		}
+	if keyHeader != "" {
+		key, isNew = stripNewSignal(keyHeader)
 	}
-	// 通道 2:user 字段;头已给 key 时,信令仍可由 user 通道叠加
+	// 通道 2:X-Session-Action: new 头
+	if actionHeader == "new" {
+		isNew = true
+	}
+	// 通道 3:user 字段;头已给 key 时,信令仍可由 user 通道叠加
 	if userField != "" {
 		uKey, uNew := stripNewSignal(userField)
 		if key == "" {
@@ -123,9 +126,10 @@ func cacheKey(clientKey, modelID string) string {
 	return clientKey + "|" + modelID
 }
 
-// acquire 取一条续轮租约。命中池内活 entry(未过 TTL)则续轮
+// Acquire 取一条续轮租约。命中池内活 entry(未过 TTL)则续轮
 // (parent = 上轮 response_message_id);未命中/TTL 过期则新开。
-func (p *Pool) Acquire(clientKey, modelID string) *lease {
+// 上游建会话失败返回 error(调用方转 502),不 panic。
+func (p *Pool) Acquire(clientKey, modelID string) (*lease, error) {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
 	var victim *poolEntry
@@ -133,7 +137,7 @@ func (p *Pool) Acquire(clientKey, modelID string) *lease {
 		if time.Since(e.lastUsed) <= p.cfg.TTL {
 			e.lastUsed = time.Now()
 			p.mu.Unlock()
-			return &lease{SessionID: e.sid, ParentMessageID: e.parentID, token: e.token, key: ck}
+			return &lease{SessionID: e.sid, ParentMessageID: e.parentID, token: e.token, key: ck}, nil
 		}
 		// TTL 过期:摘出旧条目(条目已不在池内,无人能再取到)。
 		victim = e
@@ -143,7 +147,10 @@ func (p *Pool) Acquire(clientKey, modelID string) *lease {
 	if victim != nil {
 		p.deleteUpstream(victim) // 用户拍板:淘汰顺手删,不悬挂;锁外执行
 	}
-	l := p.newLease(clientKey, modelID, "")
+	l, err := p.newLease(clientKey, modelID, "")
+	if err != nil {
+		return nil, err
+	}
 	// 新开即占坑:容量满时先按 LRU 淘汰(含可能的本键 TTL 过期残留)。
 	// 淘汰挂在 acquire 而非 release:未 release 的在途租约不占池位,
 	// 同一 key 并发新开时后者 release 覆盖前者(最后写入胜)。
@@ -154,13 +161,12 @@ func (p *Pool) Acquire(clientKey, modelID string) *lease {
 	if evicted != nil {
 		p.deleteUpstream(evicted)
 	}
-	return l
+	return l, nil
 }
 
-// acquireNew 显式新会话:作废池内同 key 旧 entry 后强制新开。
-// 信令来源(X-Session-Action: new 头 / #new# 前缀)由调用方解析,
-// 本层只负责作废语义。
-func (p *Pool) AcquireNew(clientKey, modelID string) *lease {
+// AcquireNew 显式新会话:作废池内同 key 旧 entry 后强制新开。
+// 信令解析统一走 ResolveClientKey,本层只负责作废语义。
+func (p *Pool) AcquireNew(clientKey, modelID string) (*lease, error) {
 	ck := cacheKey(clientKey, modelID)
 	p.mu.Lock()
 	victim := p.removeEntryLocked(ck)
@@ -229,14 +235,14 @@ func (p *Pool) deleteUpstream(e *poolEntry) {
 	}
 }
 
-// newLease 新开上游 session 并构造租约。
-func (p *Pool) newLease(clientKey, modelID, token string) *lease {
+// newLease 新开上游 session 并构造租约。token 为建立时绑定的凭证;
+// 失败透传 error(ticket 03 的降级重试建立在它之上)。
+func (p *Pool) newLease(clientKey, modelID, token string) (*lease, error) {
 	sid, err := p.up.CreateSession(token)
 	if err != nil {
-		// Cycle 3(失败降级)处理错误传播;此处先 panic 暴露问题。
-		panic(err)
+		return nil, fmt.Errorf("session create: %w", err)
 	}
-	return &lease{SessionID: sid, token: token, key: cacheKey(clientKey, modelID)}
+	return &lease{SessionID: sid, token: token, key: cacheKey(clientKey, modelID)}, nil
 }
 
 // cleanupLoop 后台扫描过期条目(参照 handler 层 SessionManager 模式)。
