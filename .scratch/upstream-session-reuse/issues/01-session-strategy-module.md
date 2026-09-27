@@ -19,4 +19,4 @@
 - [x] `X-Session-Action: new` 与 `#new#` 前缀解析单测
 - [x] LRU 淘汰与后台清理循环单测（超上限淘汰最旧、TTL 过期条目被清）
 
-**Review 备注（用户待拍板）**：TTL 过期/淘汰时不主动调上游 DeleteSession（删除调用本身是非真人请求，由上游回收）；cleanupLoop 只清 map。信令叠加语义（头 + user 任一生效）为 spec 盲区，已固化测试。
+**Review 备注（已拍板落地 c8eddd2）**：TTL 过期/LRU 淘汰/信令作废/后台清理四条路径均主动调上游 DeleteSession（锁内摘条目、锁外删，网络 I/O 不持池锁；删除失败仅记日志）。信令叠加语义（头 + user 任一生效）为 spec 盲区，已固化测试。
