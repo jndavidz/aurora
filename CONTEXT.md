@@ -31,7 +31,7 @@ _Avoid_: 原生 function calling（智谱/Grok 的 `sandbox_code` 也非客户�
 _Avoid_: 合并消息
 
 **上游会话复用（upstream session reuse）**:
-带会话键的连续请求复用同一上游网页 session、只发本轮增量，靠服务端 session + `parent_message_id` 记忆。策略 module 在 `internal/provider/session/`（acquire/release 小接口，吸收池化/TTL/信令/失效降级）。aurora 仍是网页反代：不维护记忆，何时新开由客户端信令决定。
+带会话键的连续请求复用同一上游网页 session、只发本轮增量，靠服务端 session + `parent_message_id` 记忆。策略 module 在 `internal/provider/session/`（acquire/release 小接口，吸收池化/TTL/信令/失效降级）。aurora 仍是网页反代：不维护记忆，何时新开由客户端信令决定。会话键的请求按 clientKey 确定性绑定同一账号（`Client.TokenFor`），多 token 池下轮询会令池命中恒为 0。
 _Avoid_: 会话池（与 handler 层 SessionManager 混淆）、多轮记忆
 
 **token 池**:

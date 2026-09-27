@@ -50,8 +50,16 @@ aurora 也无需)`maxHistoryChars`(100000)预检保留,防长历史膨胀。
 网页 session、只发本轮增量(`parent_message_id` = 上轮 `response_message_id`);无 key
 的请求维持「每轮新会话 + 全量拍平」。拍平降级为**新会话引导**专用路径。aurora 仍是
 网页反代:不维护记忆、不校验客户端历史,何时新开由客户端决定(`X-Session-Action: new`
-头 / `user` 字段 `#new#` 前缀)。策略实现集中在 `internal/provider/session/`(deep module,
+头 / `user` 字段 `#new#` 前缀;**信令三通道叠加为 OR**,任一生效即强制新开)。
+策略实现集中在 `internal/provider/session/`(deep module,
 acquire/release 小接口),一期仅 DeepSeek 接入;GLM/Grok/Minimax 协议同型,后续跟进。
+
+> **token 绑定(A 项拍板,2026-09-28)**:上游 session 与建立时的 token 绑定,
+> 池命中条件含 `entry.token == 本轮 token`,不等即失效新开(spec §token 轮换语义)。
+> 因此多 token 池下,带会话键的请求按 clientKey **确定性选 token**(`Client.TokenFor`,
+> FNV-1a hash)——轮询 `NextToken()` 会令池命中恒为 0(每轮多付 create+delete,负收益);
+> 空会话键(单发)回落轮询保持负载均衡。运维含义:增减 token 文件行会改变 hash 分配,
+> 全量旧 entry 失效一轮(降级新开,自愈)。
 
 ## 三、Provider 抽象(`internal/provider`)
 
@@ -241,8 +249,11 @@ responsesToolCalling(/v1/responses) ──┘
 **会话复用**(一期唯一接入的上游):策略 module 在 `internal/provider/session/`,
 DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16、TTL 30min
 (惰性过期 + 后台清理),LRU 淘汰与失效时顺手删上游 session。续轮失败 → 丢弃池内条目 →
-新开重试一次 → 仍失败才报错。识图(vision)请求不进池。`DEEPSEEK_EXPERT_RESUME=0` 可让
-expert 档退回每轮新开。上游实测 `ttl_seconds=259200`(72h),远长于本地 TTL。
+新开重试一次 → 仍失败才报错。**流级错误取舍(B 项拍板)**:已吐增量后上游报错时
+不降级、不报错,保持已发内容正常收尾(半途 error 帧会截断客户端已收内容,
+透明性优先;仅零增量才按发送失败同型降级)。识图(vision)请求不进池。
+`DEEPSEEK_EXPERT_RESUME=0` 可让 expert 档退回每轮新开。上游实测
+`ttl_seconds=259200`(72h),远长于本地 TTL。
 
 ### 6.3 智谱 GLM(`internal/glmweb/` + `internal/provider/glm*.go`)
 

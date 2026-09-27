@@ -106,7 +106,9 @@ DEEPSEEK_PROXY=http://proxy:port
 - 认证不限号、一用就封是常态;多为 24h 临时风控自动解封。
 - **池内只放可丢弃小号**(gmail `+tag` 子账号、临时邮箱;勿用主域名注册),主号永不入池。
 - 行为仿真:新号先人工网页登录/简单对话几次;会话用完即删、不驻留。
+  > **勘误(2026-09-28)**:「不驻留」指旧版每请求新建即删;会话复用上线后,带会话键的池路径 session 驻留至 TTL 30min(或 LRU/信令淘汰时顺手删),无会话键请求仍每请求建删。整体仍符合「不驻留」风控意图(有界、有 TTL、可预测)。
 - 并发控制:并行数 ≈ 账号数/2;限流检测 + 指数退避重试。
+  > **注记(2026-09-28)**:多 token 池下,带会话键的请求按 clientKey 确定性绑定同一账号(`Client.TokenFor`,FNV-1a hash)——轮询会令池命中恒为 0(每轮多付 create+delete,负收益);空会话键(单发)仍走轮询保持负载均衡。等效于把单账号请求串行化,与「并行 ≈ 账号数/2」不冲突。
 - 非美区出口代理;每账号独立出口,避免多账号共享 IP 快速轮换。
 
 ## 七、对外接口
@@ -115,6 +117,7 @@ DEEPSEEK_PROXY=http://proxy:port
 - **`/v1/chat/completions`**(zcode / 测试 HTML 等):同样走 DeepSeek provider(chat/coding 双变体),输出 chat.completion 格式。两接口共享同一上游核心,仅输出格式不同。
 - **`/v1/models`**:DeepSeek 模型带 `owned_by: "deepseek"` + `capabilities` 标注。
 - **别名路由**:`POST /v1/models/responses` → 同一个 `Responses` handler(pi 的 responses 适配器实际路径)。
+- **会话复用双头**:`X-Session-Key`(会话键)/ `X-Session-Action: new`(强制新开)在两表面语义一致;详见 API.md「上游会话复用」章节。
 
 ## 八、联调冒烟清单
 
@@ -136,6 +139,22 @@ curl -N -X POST http://10.10.10.2:65432/v1/responses \
 
 # 4. /v1/models 应包含 deepseek-* 且带 capabilities
 curl -s -H "Authorization: Bearer david" http://10.10.10.2:65432/v1/models
+
+# 5. 会话复用连续两轮(第二轮 815ms 级,问上轮内容应答出)
+curl -N -X POST http://10.10.10.2:65432/v1/responses \
+  -H "Authorization: Bearer david" -H "Content-Type: application/json" \
+  -H "X-Session-Key: smoke-1" \
+  -d '{"model":"deepseek","input":"记住数字 47","stream":true}'
+curl -N -X POST http://10.10.10.2:65432/v1/responses \
+  -H "Authorization: Bearer david" -H "Content-Type: application/json" \
+  -H "X-Session-Key: smoke-1" \
+  -d '{"model":"deepseek","input":"我刚才说的数字是多少","stream":true}'
+
+# 6. 换话题(X-Session-Action: new;user 字段 #new# 前缀等价)
+curl -N -X POST http://10.10.10.2:65432/v1/responses \
+  -H "Authorization: Bearer david" -H "Content-Type: application/json" \
+  -H "X-Session-Key: smoke-1" -H "X-Session-Action: new" \
+  -d '{"model":"deepseek","input":"换个话题:今天天气","stream":true}'
 ```
 
 ## 九、性能专项（2026-09-02 实测）
@@ -156,6 +175,8 @@ curl -s -H "Authorization: Bearer david" http://10.10.10.2:65432/v1/models
 ### 9.2 差距拆解（官方 1 步 vs aurora 5 步）
 
 aurora 每次对话串行走 5 步（`deepseek_chat.go:36-44` + `client.go:200-253`）：
+
+> **勘误（2026-09-28）**：本节及 §9.5 的「每请求新建会话」「~2.4s 稳态理论下限」是无会话键单发请求的历史快照；会话复用上线后续轮跳过 ①⑤（实测 quick 档 815ms / expert 档 871ms，见 API.md「上游会话复用」），理论下限已被打破。无会话键请求仍走完整 5 步。
 
 ```
 ① POST /chat_session/create        每请求新建会话
