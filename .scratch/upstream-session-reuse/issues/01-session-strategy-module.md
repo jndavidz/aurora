@@ -11,10 +11,12 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** done (901a8f3)
 
-- [ ] 池化/TTL/LRU 全部穿过 acquire/release seam，用内存 fake 上游测试，无网络依赖
-- [ ] clientKey 优先级解析单测：头 → user 字段剥 `#new#` → 不进池三档
-- [ ] 缓存键 = clientKey + model id，同 clientKey 不同 model 不串池
-- [ ] `X-Session-Action: new` 与 `#new#` 前缀解析单测
-- [ ] LRU 淘汰与后台清理循环单测（超上限淘汰最旧、TTL 过期条目被清）
+- [x] 池化/TTL/LRU 全部穿过 acquire/release seam，用内存 fake 上游测试，无网络依赖
+- [x] clientKey 优先级解析单测：头 → user 字段剥 `#new#` → 不进池三档
+- [x] 缓存键 = clientKey + model id，同 clientKey 不同 model 不串池
+- [x] `X-Session-Action: new` 与 `#new#` 前缀解析单测
+- [x] LRU 淘汰与后台清理循环单测（超上限淘汰最旧、TTL 过期条目被清）
+
+**Review 备注（用户待拍板）**：TTL 过期/淘汰时不主动调上游 DeleteSession（删除调用本身是非真人请求，由上游回收）；cleanupLoop 只清 map。信令叠加语义（头 + user 任一生效）为 spec 盲区，已固化测试。
