@@ -56,4 +56,4 @@ Issues are local markdown files under `.scratch/<feature>/`. See `docs/agents/is
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` at repo root + `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: `GLOSSARY.md` at repo root + `docs/adr/`. See `docs/agents/domain.md`.

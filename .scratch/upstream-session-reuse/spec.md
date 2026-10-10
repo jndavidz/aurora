@@ -109,4 +109,4 @@ aurora 对显式会话型上游启用会话复用：连续对话期间同一客�
 - 风控收益：流量形态回归真人（增量发送），呼应 coding 限频的既有拍板逻辑。
 - 上游会话有效期未实测（可能短于 30min TTL）：失败降级路径兜底，最坏退回每轮新开。
 - expert（thinking）模式续轮行为未实测：live 验证项；若上游异常，expert 档退回每轮新开（配置开关），quick 档先行。
-- 实现落地时同步改写 `docs/ARCHITECTURE.md`「多轮 = 客户端无状态」一节（该表述将不再成立）与 `docs/DEEPSEEK.md` 多轮说明；CONTEXT.md「拍平」词条补注「仅新会话引导路径使用」。
+- 实现落地时同步改写 `docs/ARCHITECTURE.md`「多轮 = 客户端无状态」一节（该表述将不再成立）与 `docs/DEEPSEEK.md` 多轮说明；GLOSSARY.md「拍平」词条补注「仅新会话引导路径使用」。
