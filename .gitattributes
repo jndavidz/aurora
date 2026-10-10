@@ -1,1 +1,30 @@
+# 行尾与二进制规则（2026-10-11 补）
+#
+# 本仓含 4 个 Powershell 脚本（scripts/cdp/*.ps1），由 Windows 侧执行。
+# AGENTS.md §2 第 3 条：Windows 执行的脚本须纯 ASCII + CRLF。显式锁定。
+#
+# 其余：本仓现有 0 个 CRLF 文件（历史都是 LF），保持 LF。
+
+# ---- Windows 侧执行：必须 CRLF ----
+*.ps1   text eol=crlf
+
+# ---- Linux 侧执行 / 跨平台：必须 LF ----
+*.sh    text eol=lf
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+
+# ---- 二进制与测试基准数据（勿做行尾转换，否则 golden 比对全错）----
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.golden binary
+
+# ---- 保持既有 linguist 声明（勿删）----
 *.html linguist-language=Go
