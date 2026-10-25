@@ -162,69 +162,87 @@ func (f *deepseekChatFlow) poolable() bool {
 	return f.clientKey != "" && !f.vision && !f.noResume
 }
 
-// run 执行一轮:acquire → 构造请求 → send → consume → release/discard。
-// 失败降级:首次失败(任意上游错误)→ Discard → 新开重试一次 → 仍失败返回 error。
-func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
-	poolable := f.poolable()
-
-	var l *session.Lease
-	if poolable {
-		var err error
-		if f.isNew {
-			l, err = f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
-		} else {
-			l, err = f.pool.Acquire(f.clientKey, f.modelID(), f.token)
-		}
-		if err != nil {
-			return deepseekTurnOutput{}, err
-		}
+// acquireLease 按池化条件取租约(建会话);非池化返回 nil。
+// 建会话失败发生在任何流式输出之前,调用方据此走干净的 JSON 502。
+func (f *deepseekChatFlow) acquireLease() (*session.Lease, error) {
+	if !f.poolable() {
+		return nil, nil
 	}
+	if f.isNew {
+		return f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
+	}
+	return f.pool.Acquire(f.clientKey, f.modelID(), f.token)
+}
+
+// run 执行一轮(非流式两表面共用):acquire → runStreaming(无增量回调)。
+func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
+	l, err := f.acquireLease()
+	if err != nil {
+		return deepseekTurnOutput{}, err
+	}
+	out, _, err := f.runStreaming(l, nil)
+	return out, err
+}
+
+// runStreaming 是会话复用发送/降级/归还循环的唯一所在地(spec arch-deepening-phase2
+// WP1;此前 run 与两条流式路径三份手抄)。onDelta 非 nil 时增量逐帧实时回调
+// (流式出口交给调用方的 wire emitter);emitted 报告是否吐过增量 —— 调用方据此
+// 选择错误帧(已开流)或干净 JSON 502(未开流)。
+// 失败降级:首次失败(发送错误或零增量流级错误)→ Discard → 新开重试一次 →
+// 仍失败返回 error。
+func (f *deepseekChatFlow) runStreaming(l *session.Lease, onDelta func(deepseekDelta)) (out deepseekTurnOutput, emitted bool, err error) {
+	poolable := f.poolable()
 
 	for attempt := 0; ; attempt++ {
 		req := f.buildRequest(l)
-		stream, err := f.sender.Send(f.token, req)
-		if err != nil {
+		stream, serr := f.sender.Send(f.token, req)
+		if serr != nil {
 			if attempt > 0 || !poolable {
-				return deepturnFail(l, f.pool, poolable, err)
+				// 发送失败不可能吐过增量,emitted 恒 false。
+				out, err := deepturnFail(l, f.pool, poolable, serr)
+				return out, false, err
 			}
 			// 失败降级:丢弃失败租约 → 新开重试一次(spec §失败降级)。
-			if poolable {
-				f.pool.Discard(l)
-			}
+			f.pool.Discard(l)
 			l2, cerr := f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
 			if cerr != nil {
-				return deepseekTurnOutput{}, cerr
+				return deepseekTurnOutput{}, false, cerr
 			}
 			l = l2
 			continue
 		}
 
-		var out deepseekTurnOutput
 		res := seamConsume(stream, func(d deepseekDelta) {
 			if d.Text != "" {
 				out.text += d.Text
+				emitted = true
 			}
 			if d.Reasoning != "" {
 				out.reasoning += d.Reasoning
+				emitted = true
+			}
+			if onDelta != nil {
+				onDelta(d)
 			}
 		})
 		if res != nil {
 			out.responseMsgID = res.ResponseMsgID
 			out.promptTokens = res.PromptTokens
 			out.completionTokens = res.CompletionTokens
-			if res.Err != "" && out.text == "" && out.reasoning == "" {
-				// B 项拍板(2026-09-28,spec 「流级错误取舍」):已吐增量后上游报错时
-				// 不降级、不报错 —— 半途 error 帧会截断客户端已收内容,透明性优先,
-				// 完整性舎弃(低频场景)。仅「零增量」才按发送失败同型降级重试。
+			if res.Err != "" && !emitted {
+				// B 项拍板(2026-09-28,spec 「流级错误取舍」;本注释唯一一份):
+				// 已吐增量后上游报错时不降级、不报错 —— 半途 error 帧会截断客户端
+				// 已收内容,透明性优先,完整性舎弃(低频场景)。仅「零增量」才按
+				// 发送失败同型降级重试。
 				if poolable {
 					f.pool.Discard(l)
 				}
 				if attempt > 0 || !poolable {
-					return deepseekTurnOutput{}, flowError(res.Err)
+					return deepseekTurnOutput{}, false, flowError(res.Err)
 				}
 				l2, cerr := f.pool.AcquireNew(f.clientKey, f.modelID(), f.token)
 				if cerr != nil {
-					return deepseekTurnOutput{}, cerr
+					return deepseekTurnOutput{}, false, cerr
 				}
 				l = l2
 				continue
@@ -232,7 +250,7 @@ func (f *deepseekChatFlow) run() (deepseekTurnOutput, error) {
 		}
 
 		f.finish(l, out.responseMsgID)
-		return out, nil
+		return out, emitted, nil
 	}
 }
 

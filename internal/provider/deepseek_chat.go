@@ -125,74 +125,23 @@ func deepseekTurnsFromItems(items []responsesInputItem) []deepseekTurn {
 // 池交互(acquire/降级/release)与 flow.run 同型。
 func (d *DeepSeek) chatStreamTurn(c *gin.Context, m *deepseekModel, req *official.ResponsesAPIRequest, flow *deepseekChatFlow) {
 	// 建会话失败在 SSE 头设置前返回:保持干净的 JSON 502(建会话失败非续轮失败)。
-	poolable := flow.poolable()
-	var l *session.Lease
-	if poolable {
-		var err error
-		if flow.isNew {
-			l, err = flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
-		} else {
-			l, err = flow.pool.Acquire(flow.clientKey, flow.modelID(), flow.token)
-		}
-		if err != nil {
-			apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
-			return
-		}
+	l, err := flow.acquireLease()
+	if err != nil {
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
+		return
 	}
 
 	e := NewResponsesEmitter(c, req.Model, true)
-
-	runOnce := func(l *session.Lease) (*deepseekStreamResult, error) {
-		stream, err := flow.sender.Send(flow.token, flow.buildRequest(l))
-		if err != nil {
-			return nil, err
-		}
-		var fullText, fullReasoning string
-		// seamConsume 对 live 流逐帧回调(帧序化):delta 到达即 flush SSE,
-		// 首字延迟来自真流式;测试预置流则一次性回放。
-		res := seamConsume(stream, func(dd deepseekDelta) {
-			if dd.Reasoning != "" {
-				fullReasoning += dd.Reasoning
-				e.ReasoningDelta(dd.Reasoning)
-			}
-			if dd.Text != "" {
-				fullText += dd.Text
-				e.TextDelta(dd.Text)
-			}
-		})
-		// B 项拍板(2026-09-28,spec 「流级错误取舍」):已吐增量后上游报错时
-		// 不降级、不报错 —— 客户端已收到半截正文,追加 error 帧只会截断/混乱,
-		// 透明性优先。仅「零增量」才降级重试(下方 runErr 分支)。
-		if res != nil && res.Err != "" && fullText == "" && fullReasoning == "" {
-			return res, flowError(res.Err)
-		}
-		return res, nil
-	}
-
-	res, runErr := runOnce(l)
-	if runErr != nil && poolable {
-		// 失败降级(spec §失败降级):丢弃失败租约 → 新开重试一次。
-		// 上报失败时不会 flush 任何 delta(正文与思维链皆空),故重试对客户端透明。
-		flow.pool.Discard(l)
-		l3, cerr := flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
-		if cerr != nil {
-			e.Fail(cerr.Error())
-			return
-		}
-		res, runErr = runOnce(l3)
-		l = l3
-	}
-	if runErr != nil {
-		e.Fail(runErr.Error())
-		if poolable {
-			flow.pool.Discard(l)
-		}
+	out, _, rerr := flow.runStreaming(l, func(dd deepseekDelta) {
+		e.ReasoningDelta(dd.Reasoning)
+		e.TextDelta(dd.Text)
+	})
+	if rerr != nil {
+		e.Fail(rerr.Error())
 		return
 	}
-	flow.finish(l, res.ResponseMsgID)
-
-	outResp := official.NewResponsesResponse(res.Text, res.Reasoning, countInputChars(req), util.CountToken(res.Text), util.CountToken(res.Reasoning), 0, 0, req.Model)
-	e.Complete(outResp, res.Text, res.Reasoning)
+	outResp := official.NewResponsesResponse(out.text, out.reasoning, countInputChars(req), util.CountToken(out.text), util.CountToken(out.reasoning), 0, 0, req.Model)
+	e.Complete(outResp, out.text, out.reasoning)
 }
 
 // modelTypeFor chat 变体的网页 model_type 映射。
@@ -349,20 +298,11 @@ func thinkingEnabledAPI(m *deepseekModel, req *official.APIRequest) bool {
 // 逐帧 flush → release),增量在 delta 回调里实时 flush。
 // 失败降级对客户端透明:重试成功则只可见一条完整正常流。
 func (d *DeepSeek) chatStreamCompletion(c *gin.Context, m *deepseekModel, req *official.APIRequest, flow *deepseekChatFlow) {
-	poolable := flow.poolable()
-	var l *session.Lease
-	if poolable {
-		var err error
-		if flow.isNew {
-			l, err = flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
-		} else {
-			l, err = flow.pool.Acquire(flow.clientKey, flow.modelID(), flow.token)
-		}
-		if err != nil {
-			// 建会话失败在 SSE 头设置前:保持干净的 JSON 502。
-			apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
-			return
-		}
+	// 建会话失败在 SSE 头设置前:保持干净的 JSON 502。
+	l, err := flow.acquireLease()
+	if err != nil {
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
+		return
 	}
 
 	model := req.Model
@@ -372,54 +312,16 @@ func (d *DeepSeek) chatStreamCompletion(c *gin.Context, m *deepseekModel, req *o
 	// 头部与 role 块均延迟到首个增量时才写出(ChunkStream deferred 模式):
 	// 降级重试对客户端不可见的同时,保留旧路径的失败形态——尚未写出任何
 	// 内容时的上游失败仍走干净的 JSON 502。
+	// 池交互/零增量降级/归还全部在 flow.runStreaming 单点(spec WP1)。
 	s := NewDeferredChunkStream(c, model)
-
-	// runOnce 发一轮并把增量实时吐成 chunk。仅在"一个增量都没吐"时才算失败
-	// (与 flow.run 同判据),因此重试对客户端不可见。
-	runOnce := func(l *session.Lease) (*deepseekStreamResult, error) {
-		var emitted bool
-		stream, err := flow.sender.Send(flow.token, flow.buildRequest(l))
-		if err != nil {
-			return nil, err
-		}
-		res := seamConsume(stream, func(dd deepseekDelta) {
-			if dd.Reasoning != "" {
-				emitted = true
-				s.ReasoningDelta(dd.Reasoning)
-			}
-			if dd.Text != "" {
-				emitted = true
-				s.TextDelta(dd.Text)
-			}
-		})
-		// B 项拍板(spec 「流级错误取舍」):emitted 后上游报错不降级不报错,
-		// 仅零增量才降级重试(透明性优先,低频场景舎弃完整性)。
-		if res != nil && res.Err != "" && !emitted {
-			return res, flowError(res.Err)
-		}
-		return res, nil
-	}
-
-	res, runErr := runOnce(l)
-	if runErr != nil && poolable {
-		// 失败降级(spec §失败降级):丢弃失败租约 → 新开重试一次。
-		flow.pool.Discard(l)
-		l2, cerr := flow.pool.AcquireNew(flow.clientKey, flow.modelID(), flow.token)
-		if cerr != nil {
-			writeCompletionError(s, cerr)
-			return
-		}
-		res, runErr = runOnce(l2)
-		l = l2
-	}
-	if runErr != nil {
-		if poolable {
-			flow.pool.Discard(l)
-		}
-		writeCompletionError(s, runErr)
+	_, _, rerr := flow.runStreaming(l, func(dd deepseekDelta) {
+		s.ReasoningDelta(dd.Reasoning)
+		s.TextDelta(dd.Text)
+	})
+	if rerr != nil {
+		writeCompletionError(s, rerr)
 		return
 	}
-	flow.finish(l, res.ResponseMsgID)
 
 	// 空响应(上游未吐任何增量但不报错):补建流头与 role 块,与旧路径形态一致。
 	s.Stop("stop")

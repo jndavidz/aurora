@@ -364,3 +364,130 @@ func TestLoopExpertResumeDefaultStillPools(t *testing.T) {
 		t.Fatalf("默认应续轮, parent = %q", sender.sent[0].ParentMessageID)
 	}
 }
+
+// ── runStreaming 流式收口用例(spec arch-deepening-phase2 WP1) ──
+// 零增量降级重试 / 已吐增量不降级 / 双重失败报错,经 onDelta 断言增量到达。
+
+// scriptedChatSender 按脚本依次返回预置流(Send 层错误用 nil 流 + err 表达)。
+type scriptedChatSender struct {
+	steps []scriptedStep
+	n     int
+	sent  int
+}
+
+type scriptedStep struct {
+	stream *preConsumedStream
+	err    error
+}
+
+func (s *scriptedChatSender) Send(token string, req deepseekSenderReq) (*preConsumedStream, error) {
+	i := s.n
+	if i >= len(s.steps) {
+		i = len(s.steps) - 1
+	}
+	s.n++
+	s.sent++
+	st := s.steps[i]
+	if st.err != nil {
+		return nil, st.err
+	}
+	return st.stream, nil
+}
+
+func newRunStreamingFlow(pool chatSessionPool, sender chatSender) *deepseekChatFlow {
+	return &deepseekChatFlow{
+		pool: pool, sender: sender, clientKey: "u1", token: "tok-a",
+		messages: []deepseekTurn{{Text: "问"}},
+	}
+}
+
+// TestRunStreamingZeroDeltaDegradesAndRetries 首轮零增量流级错误 → 丢弃租约换新
+// 重试一次 → 次轮成功;onDelta 只收到次轮增量。
+func TestRunStreamingZeroDeltaDegradesAndRetries(t *testing.T) {
+	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1"}}}
+	sender := &scriptedChatSender{steps: []scriptedStep{
+		{stream: &preConsumedStream{result: &deepseekStreamResult{Err: "upstream boom"}}},
+		{stream: &preConsumedStream{result: &deepseekStreamResult{Text: "答", ResponseMsgID: "m1"}, deltas: []deepseekDelta{{Text: "答"}}}},
+	}}
+	flow := newRunStreamingFlow(pool, sender)
+	l, err := flow.acquireLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	out, emitted, rerr := flow.runStreaming(l, func(d deepseekDelta) {
+		if d.Text != "" {
+			got = append(got, d.Text)
+		}
+	})
+	if rerr != nil {
+		t.Fatalf("runStreaming err: %v", rerr)
+	}
+	if out.text != "答" || !emitted {
+		t.Fatalf("out=%+v emitted=%v, want text=答 emitted=true", out, emitted)
+	}
+	if len(got) != 1 || got[0] != "答" {
+		t.Fatalf("onDelta got %v, want [答](首轮零增量不回调)", got)
+	}
+	if pool.discards != 1 || pool.acqNew < 1 {
+		t.Fatalf("pool discards=%d acqNew=%d, want 1/1+", pool.discards, pool.acqNew)
+	}
+	if len(pool.released) != 1 || pool.released[0] != "m1" {
+		t.Fatalf("released=%v, want [m1]", pool.released)
+	}
+}
+
+// TestRunStreamingEmittedThenErrKeepsOutput 已吐增量后上游报错:B 项拍板——
+// 不降级、不报错,正常归还收尾(onDelta 已收到半截正文)。
+func TestRunStreamingEmittedThenErrKeepsOutput(t *testing.T) {
+	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1"}}}
+	sender := &scriptedChatSender{steps: []scriptedStep{
+		{stream: &preConsumedStream{
+			result: &deepseekStreamResult{Err: "late failure", ResponseMsgID: "m2"},
+			deltas: []deepseekDelta{{Text: "半截"}},
+		}},
+	}}
+	flow := newRunStreamingFlow(pool, sender)
+	l, _ := flow.acquireLease()
+	var got []string
+	out, emitted, rerr := flow.runStreaming(l, func(d deepseekDelta) {
+		if d.Text != "" {
+			got = append(got, d.Text)
+		}
+	})
+	if rerr != nil {
+		t.Fatalf("emitted-then-err must not error, got %v", rerr)
+	}
+	if out.text != "半截" || !emitted || len(got) != 1 {
+		t.Fatalf("out=%+v emitted=%v deltas=%v", out, emitted, got)
+	}
+	// 不降级(无 AcquireNew),成功收尾按锚点归还
+	if pool.acqNew != 0 {
+		t.Fatalf("acqNew=%d, want 0(已吐增量不降级)", pool.acqNew)
+	}
+	if len(pool.released) != 1 || pool.released[0] != "m2" {
+		t.Fatalf("released=%v, want [m2]", pool.released)
+	}
+}
+
+// TestRunStreamingDoubleFailureReturnsError 两轮零增量失败 → 报错且不发增量。
+func TestRunStreamingDoubleFailureReturnsError(t *testing.T) {
+	pool := &fakeSessionPool{leases: []*session.Lease{{SessionID: "s1"}, {SessionID: "s2"}}}
+	sender := &scriptedChatSender{steps: []scriptedStep{
+		{stream: &preConsumedStream{result: &deepseekStreamResult{Err: "e1"}}},
+		{stream: &preConsumedStream{result: &deepseekStreamResult{Err: "e2"}}},
+	}}
+	flow := newRunStreamingFlow(pool, sender)
+	l, _ := flow.acquireLease()
+	var got int
+	_, emitted, rerr := flow.runStreaming(l, func(d deepseekDelta) { got++ })
+	if rerr == nil || rerr.Error() != "e2" {
+		t.Fatalf("err=%v, want e2", rerr)
+	}
+	if emitted || got != 0 {
+		t.Fatalf("emitted=%v deltas=%d, want false/0", emitted, got)
+	}
+	if pool.acqNew != 1 || pool.discards != 2 {
+		t.Fatalf("acqNew=%d discards=%d, want 1/2", pool.acqNew, pool.discards)
+	}
+}
