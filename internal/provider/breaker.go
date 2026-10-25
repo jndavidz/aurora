@@ -3,7 +3,36 @@ package provider
 import (
 	"sync"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
+
+// ProviderNameCtxKey 是 handler 分发处注入 provider 名的 gin context 键
+// (流式失败上报熔断器用,见 ReportStreamFailure)。
+const ProviderNameCtxKey = "aurora_provider_name"
+
+// streamFailureReporter 由 router 在 Registry 构建后注入(指向 Registry 的
+// ProviderBreaker.RecordFailure);测试/未注入时失败上报为空操作。
+var streamFailureReporter func(name, reason string)
+
+// SetStreamFailureReporter 注入流式失败上报通道(通常传 registry.Breaker().RecordFailure)。
+func SetStreamFailureReporter(r func(name, reason string)) { streamFailureReporter = r }
+
+// ReportStreamFailure 在流式失败发射点(emitter Fail / writeCompletionError)
+// 上报 provider 熔断器。流式失败恒以 200 + failed 事件/错误帧收场,handler 的
+// HTTP status 旁敲(recordProviderOutcome)看不见 —— 这里是流式路径唯一的
+// 成败通道(spec .scratch/arch-hardening WP6)。非 provider 路径(ChatGPT 兜底,
+// context 无 provider 名)与未注入 reporter 时为空操作。
+func ReportStreamFailure(c *gin.Context, reason string) {
+	if streamFailureReporter == nil || c == nil {
+		return
+	}
+	name := c.GetString(ProviderNameCtxKey)
+	if name == "" {
+		return
+	}
+	streamFailureReporter(name, reason)
+}
 
 // ProviderBreaker Registry 级 provider 熔断器(E1/G2):
 //   - 某 provider 连续失败达阈值后短暂摘除(Resolve 跳过),冷却到期自动恢复

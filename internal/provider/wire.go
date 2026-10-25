@@ -233,7 +233,9 @@ func (e *ResponsesEmitter) Done() {
 	}
 }
 
-// Fail 发 response.failed 收尾(已发事件无法撤回,失败即终态)。
+// Fail 发 response.failed 收尾(已发事件无法撤回,失败即终态),
+// 并上报 provider 熔断器(流式失败对 HTTP status 旁敲不可见,WP6)。
 func (e *ResponsesEmitter) Fail(msg string) {
+	ReportStreamFailure(e.w.c, msg)
 	e.w.event("response.failed", failedEvent(msg))
 }

@@ -431,9 +431,12 @@ func (d *DeepSeek) chatStreamCompletion(c *gin.Context, m *deepseekModel, req *o
 //   - 已开流:发一个 OpenAI 形态的 data: {"error": ...} 帧再以 [DONE] 收尾
 func writeCompletionError(s *ChunkStream, err error) {
 	if !s.Started() {
+		// 未开流的干净 JSON 502 由 handler 的 status 旁敲记熔断,无需重复上报。
 		apierrors.JSONError(s.c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
 	}
+	// 已开流的错误帧对 status 旁敲不可见,这里上报熔断器(WP6)。
+	ReportStreamFailure(s.c, err.Error())
 	b, _ := json.Marshal(map[string]any{
 		"error": map[string]any{"message": err.Error(), "type": "upstream_error"},
 	})

@@ -29,6 +29,9 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	// 现走 CDP 桥通道(真浏览器执行,家庭 PC 上的 scripts/cdp/bridge.mjs):
 	// NAS 只做 HTTP 转发,GEMINI_CDP_URL 配置后注册(见 docs/GEMINI.md §八)。
 	registry := provider.NewRegistry()
+	// 流式失败上报通道(WP6):emitter 的 Fail/错误帧对 HTTP status 旁敲不可见,
+	// 经此把 Registry 熔断器接进 provider 包的失败发射点。
+	provider.SetStreamFailureReporter(func(name, reason string) { registry.Breaker().RecordFailure(name, reason) })
 	// if cfg.GeminiAccounts != "" {
 	// 	registry.Register(provider.NewGemini(cfg))
 	// }

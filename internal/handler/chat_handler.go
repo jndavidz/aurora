@@ -92,6 +92,8 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 			}
 			// E1/G2 熔断:按响应状态码记录 provider 成败(>=500 计失败,连续 3 次摘除 60s)
 			defer h.recordProviderOutcome(p.Name(), c)
+			// 流式失败上报熔断器用(WP6):emitter Fail 经 context 取 provider 名
+			c.Set(provider.ProviderNameCtxKey, p.Name())
 			p.ChatCompletions(c, &original_request)
 			return
 		}
@@ -325,6 +327,7 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 				responsesRequest.Model = canonical
 			}
 			defer h.recordProviderOutcome(p.Name(), c)
+			c.Set(provider.ProviderNameCtxKey, p.Name())
 			p.Responses(c, &responsesRequest)
 			return
 		}

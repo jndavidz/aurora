@@ -127,3 +127,32 @@ func TestResponsesEmitterFunctionCallAndFail(t *testing.T) {
 		t.Fatalf("function_call sequence:\n got %s\nwant %s\n%s", got2, want2, rec2.Body.String())
 	}
 }
+
+// TestReportStreamFailureOnFail 流式失败发射点上报熔断器(WP6):
+// context 带 provider 名时 Fail 触发 reporter;无 provider 名(ChatGPT 兜底路径)
+// 或未注入 reporter 时空操作。
+func TestReportStreamFailureOnFail(t *testing.T) {
+	var gotName, gotReason string
+	SetStreamFailureReporter(func(name, reason string) { gotName, gotReason = name, reason })
+	t.Cleanup(func() { SetStreamFailureReporter(nil) })
+
+	rec, c := wireCtx()
+	c.Set(ProviderNameCtxKey, "glm")
+	e := NewResponsesEmitter(c, "glm-5.2-chat", false)
+	e.Fail("boom")
+	if gotName != "glm" || gotReason != "boom" {
+		t.Fatalf("reporter got (%q, %q), want (glm, boom)", gotName, gotReason)
+	}
+	if !strings.Contains(rec.Body.String(), "response.failed") {
+		t.Fatalf("failed event missing")
+	}
+
+	// 非 provider 路径:context 无 provider 名 → 不上报
+	gotName = ""
+	rec2, c2 := wireCtx()
+	NewResponsesEmitter(c2, "auto", false).Fail("x")
+	if gotName != "" {
+		t.Fatalf("unexpected report without provider name")
+	}
+	_ = rec2
+}
