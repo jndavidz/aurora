@@ -53,3 +53,7 @@ _Avoid_: 浏览器代理
 **引用标记剥离（citationStripper）**:
 多 provider 在正文嵌入引用标记（`[citation:N]`、私有区字符等），aurora 流式跨帧安全地剥离。
 _Avoid_: 清洗
+
+**wire emitter（流式出口序列化器）**:
+两表面流式 wire format 的序列骨架单点（`internal/provider/wire.go`）：`ChunkStream` 发 chat.completions 的 role→delta→stop→[DONE]，`ResponsesEmitter` 发 Responses 的事件骨架。各家只提供 delta；失败发射点（`Fail`/错误帧）顺带上报 provider 熔断器。此前同一套协议在 4 份平行词表上手搓。
+_Avoid_: SSE 工具类、事件工厂

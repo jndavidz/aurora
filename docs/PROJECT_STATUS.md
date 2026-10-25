@@ -58,6 +58,22 @@
 | doubao-hook | `db120b4`/`710d533` | Network 主通道（前端改 XHR 后 fetch hook 失效的对策）；a_bogus 非空校验 |
 | 豆包 CDP 桥 | `6b2eb84` | bridge doubao adapter（页内 fetch）+ aurora doubao_cdp.go |
 
+### 架构收敛一期 arch-hardening（2026-10-26，spec `.scratch/arch-hardening/`）
+
+修复 3 个实锤 bug + wire emitter 地基，7 个 WP 全部完成、全量测试绿：
+
+| 项 | commit | 说明 |
+|---|---|---|
+| WP1 拒绝清洗收 seam | `4ffb16d` | 纯 chat 请求历史不再被 coding 域防锚定策略静默改写 |
+| WP2 CDP 基类转正 | `4822741` | `cdpBase` 组合化 + `-chat` 后缀归一 `internalID` 单点；**修复 Responses 表面 gpt-5.6 404** |
+| WP3 token 池补锁 | `7df3b7e` | glmweb/kimiweb/qianwenweb NextToken 系列加互斥 + GLM ensureToken tokMu（-race 全绿） |
+| WP4 Kimi 开关入 Config | `8dcda74` | `KIMI_WEB_SEARCH` 三轨制归一（默认值不变） |
+| WP7 拍平归家 | `b77dc0e` | flatten 家族迁 input.go（纯移动） |
+| WP5 wire emitter | `c1311a9` | `ResponsesEmitter`/`ChunkStream` 收编全部活 call site（净删 149 行、4 份词表→1） |
+| WP6 熔断接通流式 | `4fe0b28` | emitter 失败发射点 `ReportStreamFailure` 直调 breaker（status 旁敲保留非流式兜底） |
+
+二期候选（spec Out of Scope）：DeepSeek 流式降级状态机收口（flow.runStreaming）、ChatGPT 兜底 turnLoop 三副本合并。
+
 ### 模型命名统一（09-04/05，`31b8df8`+`5416b19`）
 
 **15 个模型 id 全部小写 `-` 形式**（NAS live 已验证）：

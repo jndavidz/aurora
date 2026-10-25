@@ -39,7 +39,7 @@ func (d *Grok) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 	var fullText, fullReasoning string
 	// 流式剥离 "Thinking about your request" 前缀:前缀(可能跨 delta 分片)
 	// 不输出正文;前缀前的文本作为推理输出。
-	const_prefix := "Thinking about your request"
+	thinkingPrefix := "Thinking about your request"
 	prefixBuf := ""
 	prefixDone := false
 	res := client.Complete(streamReq, func(delta grokweb.Delta) {
@@ -48,13 +48,13 @@ func (d *Grok) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 		}
 		if !prefixDone {
 			prefixBuf += delta.Text
-			if idx := strings.Index(prefixBuf, const_prefix); idx >= 0 {
+			if idx := strings.Index(prefixBuf, thinkingPrefix); idx >= 0 {
 				if pre := strings.TrimSpace(prefixBuf[:idx]); pre != "" {
 					fullReasoning = pre
 					e.ReasoningDelta(pre)
 				}
 				// 前缀后的内容输出
-				rest := prefixBuf[idx+len(const_prefix):]
+				rest := prefixBuf[idx+len(thinkingPrefix):]
 				prefixBuf = ""
 				prefixDone = true
 				if rest != "" {

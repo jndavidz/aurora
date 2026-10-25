@@ -123,6 +123,11 @@ if h.providers != nil {
 // 未命中 → ChatGPT 兜底
 ```
 
+> **熔断的成败通道(2026-10-26 起)**:非流式按 HTTP status 旁敲(handler `recordProviderOutcome`);
+> 流式失败恒以 200+failed 事件/错误帧收场,status 看不见 —— 由 wire emitter 的失败发射点
+> (`ResponsesEmitter.Fail` / deepseek 错误帧)经 `ReportStreamFailure` 直调 Registry 熔断器,
+> provider 名由 handler 分发处注入 gin context。
+
 > 历史 bug:最初 Nightmare 没有 Provider 分发(/v1/chat/completions 的 DeepSeek 请求
 > 之前永远回 ChatGPT,只有 Responses 有分派)。已在 commit `edf0025` 修复。
 
@@ -433,15 +438,17 @@ DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16
 | `internal/provider/*.go` | 各 provider 入口(模型解析、chat/coding 变体路由) |
 | `internal/provider/*_chat.go` | chat 变体实现 |
 | `internal/provider/*_coding.go` | coding 变体实现 |
-| `internal/provider/input.go` | 双接口共享的输入拍平助手 |
+| `internal/provider/input.go` | 双接口共享的输入拍平助手(含「拍平」flatten 家族) |
 | `internal/provider/session/` | 上游会话复用策略 module(池/TTL/信令/降级) |
 | `internal/provider/deepseek_chat_session.go` | DeepSeek 会话复用 adapter(flow loop) |
-| `internal/provider/sse.go` | Responses 流式事件输出器 |
+| `internal/provider/wire.go` | 流式 wire emitter(`ResponsesEmitter`/`ChunkStream`)——两表面序列骨架单点,失败发射点顺带上报熔断器 |
+| `internal/provider/sse.go` | Responses 流式事件输出器(emitter 底层 SSE 写入) |
+| `internal/provider/gemini_cdp.go` | CDP 桥公共底座 `cdpBase`(桥池/熔断/唤醒/模型归一)+ Gemini 桥 provider |
 | `internal/*web/` | 各网页逆向客户端包(协议层) |
 | `internal/toolcall/` | 标签解析、recover、fence、prompt、params |
 | `internal/handler/chat_handler.go` | `Nightmare`/`Responses` 入口 + provider 分发 + 工具调用路径 |
-| `internal/handler/shared.go` | `toolCallingEnabled`、拒绝分类器、`sanitizeRefusalHistory` |
-| `internal/handler/router.go` | Registry 构建 + 路由注册 |
+| `internal/handler/shared.go` | `toolCallingEnabled`、拒绝分类器、`sanitizeRefusalHistory`(仅工具路径调用) |
+| `internal/handler/router.go` | Registry 构建 + 路由注册 + 流式失败上报通道注入 |
 | `internal/handler/models_handler.go` | ChatGPT 模型目录 + `normalizeCodingModel` |
 | `internal/config/config.go` | 各 provider 环境变量 |
 | `internal/accounts/` | 账号池、能力(CapToolCalling/CapResponses) |
@@ -476,7 +483,7 @@ DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16
 | ChatGPT | `access_tokens.txt`(路径固定,`tokenFilePath`) | 硬编码 `models_handler.go` | `TOOL_CALLING_ENABLED`、`REFUSAL_RETRIES` |
 | DeepSeek | `DEEPSEEK_WEB_TOKENS` | `DEEPSEEK_MODELS` | `DEEPSEEK_WEB_BASE`、`DEEPSEEK_PROXY` |
 | GLM | `GLM_WEB_TOKENS` | `GLM_MODELS` | `GLM_WEB_BASE`、`GLM_PROXY` |
-| Kimi | `KIMI_WEB_TOKENS` | `KIMI_MODELS` | `KIMI_WEB_BASE`、`KIMI_PROXY` |
+| Kimi | `KIMI_WEB_TOKENS` | `KIMI_MODELS` | `KIMI_WEB_BASE`、`KIMI_PROXY`、`KIMI_WEB_SEARCH`(默认关,走 Config) |
 | Grok | `GROK_COOKIES` | `GROK_MODELS` | — |
 | Gemini | `GEMINI_CDP_URL`(桥转发;直连 `GEMINI_ACCOUNTS` 已停用) | `GEMINI_MODELS` | `GEMINI_CDP_KEY`(可选,桥鉴权) |
 | Claude | `CLAUDE_CDP_URL`(默认复用 `GEMINI_CDP_URL`,同一桥服务) | `CLAUDE_MODELS` | `CLAUDE_CDP_KEY`(可选) |

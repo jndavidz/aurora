@@ -90,8 +90,7 @@ func ginCtxForCDP() (*httptest.ResponseRecorder, *gin.Context) {
 // TestChatgptCDPResponsesNoSuffix404 Responses 表面:外部裸名 gpt-5.6 不再 404,
 // 事件序列完整(created → delta → completed)。
 func TestChatgptCDPResponsesNoSuffix404(t *testing.T) {
-	rec0, srv := newFakeBridge(t)
-	_ = rec0
+	_, srv := newFakeBridge(t)
 	p := newChatgptCDPForTest(srv.URL)
 
 	items := []map[string]any{{"type": "message", "role": "user", "content": "hi"}}
