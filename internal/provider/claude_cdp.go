@@ -4,6 +4,9 @@ import (
 	"time"
 
 	"aurora/internal/config"
+	"aurora/typings/official"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ClaudeCDP 通过家庭/办公室 PC 上的 CDP 桥(scripts/cdp/bridge.mjs 的 claude 适配器)
@@ -16,7 +19,7 @@ import (
 //
 // 复用 GeminiCDP 的全部转发/桥池熔断/自动唤醒/限频逻辑(仅模型目录与名字不同)。
 type ClaudeCDP struct {
-	*GeminiCDP
+	base *cdpBase
 }
 
 // defaultClaudeCDPModels 默认目录(网页实测模型 claude-sonnet-5)。
@@ -34,5 +37,17 @@ func NewClaudeCDP(cfg *config.Config) *ClaudeCDP {
 	return &ClaudeCDP{base}
 }
 
-// Name 覆盖嵌入的 GeminiCDP.Name()。
+// Provider 表面:Name 各自定,其余转发底座。
 func (d *ClaudeCDP) Name() string { return "anthropic" }
+
+func (d *ClaudeCDP) Models() []Model { return d.base.Models() }
+
+func (d *ClaudeCDP) Handles(model string) bool { return d.base.Handles(model) }
+
+func (d *ClaudeCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
+	d.base.ChatCompletions(c, req)
+}
+
+func (d *ClaudeCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
+	d.base.Responses(c, req)
+}

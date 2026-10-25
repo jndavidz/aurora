@@ -4,6 +4,9 @@ import (
 	"time"
 
 	"aurora/internal/config"
+	"aurora/typings/official"
+
+	"github.com/gin-gonic/gin"
 )
 
 // HunyuanCDP 通过 CDP 桥(scripts/cdp/bridge.mjs 的 hunyuan 适配器)执行腾讯元宝
@@ -15,7 +18,7 @@ import (
 //
 // 复用 GeminiCDP 的转发/桥池熔断/自动唤醒逻辑;限频最保守(风控敏感)。
 type HunyuanCDP struct {
-	*GeminiCDP
+	base *cdpBase
 }
 
 // defaultHunyuanCDPModels 默认目录(网页实测混元模型 hunyuan_gpt_175B_0404)。
@@ -34,5 +37,17 @@ func NewHunyuanCDP(cfg *config.Config) *HunyuanCDP {
 	return &HunyuanCDP{base}
 }
 
-// Name 覆盖嵌入的 GeminiCDP.Name()。
+// Provider 表面:Name 各自定,其余转发底座。
 func (d *HunyuanCDP) Name() string { return "tencent" }
+
+func (d *HunyuanCDP) Models() []Model { return d.base.Models() }
+
+func (d *HunyuanCDP) Handles(model string) bool { return d.base.Handles(model) }
+
+func (d *HunyuanCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
+	d.base.ChatCompletions(c, req)
+}
+
+func (d *HunyuanCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
+	d.base.Responses(c, req)
+}

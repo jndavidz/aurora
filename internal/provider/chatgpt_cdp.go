@@ -28,10 +28,11 @@ import (
 // 桥地址默认复用 GEMINI_CDP_URL(同一桥服务多 provider)。
 //
 // 模型:gpt-5.6 / gpt-5.6-mini(用户直接以这两个 id 请求;aurora 原样转给桥,
-// 桥侧 chatgpt adapter 以 "gpt-" 前缀特判)。内部以 "-chat" 后缀注册以满足基类
-// newCdpBase 的后缀约定,对外(/v1/models)与转发时剥除该后缀。
+// 桥侧 chatgpt adapter 以 "gpt-" 前缀特判)。内部以 "-chat" 后缀注册以满足
+// newCdpBase 的后缀约定;外部裸名与内部名的互转收在 cdpBase.internalID
+// 单一归一点(此前 ChatCompletions 手工补后缀而 Responses 漏补 → 404)。
 type ChatgptCDP struct {
-	*GeminiCDP
+	base *cdpBase
 }
 
 // defaultChatgptCDPModels 内部注册名(带 -chat 后缀,桥侧只用模板的固定 model)。
@@ -69,27 +70,21 @@ func NewChatgptCDP(cfg *config.Config) *ChatgptCDP {
 // chatgptAutoModel 是 ChatGPT 默认模型标识,桥侧原生支持(清洗逻辑含 auto)。
 const chatgptAutoModel = "auto"
 
-// Handles 同时接受 "gpt-5.6" 与内部 "gpt-5.6-chat" 形态,以及 "auto"(ChatGPT 默认)。
+// Handles 同时接受 "gpt-5.6" 与内部 "gpt-5.6-chat" 形态(internalID 归一),
+// 以及 "auto"(ChatGPT 默认)。
 func (d *ChatgptCDP) Handles(model string) bool {
 	if model == chatgptAutoModel {
 		return true
 	}
-	if _, ok := d.byID[model]; ok {
-		return true
-	}
-	if _, ok := d.byID[model+"-chat"]; ok {
-		return true
-	}
-	return false
+	return d.base.Handles(model)
 }
 
-// Name 覆盖嵌入的 GeminiCDP.Name()。
 func (d *ChatgptCDP) Name() string { return "openai" }
 
 // Models 对外暴露不带 -chat 后缀的真实模型 id。
 func (d *ChatgptCDP) Models() []Model {
-	out := make([]Model, 0, len(d.models))
-	for _, m := range d.models {
+	out := make([]Model, 0, len(d.base.models))
+	for _, m := range d.base.models {
 		id := strings.TrimSuffix(m.ID, "-chat")
 		out = append(out, Model{ID: id, OwnedBy: m.OwnedBy, Caps: m.Caps})
 	}
@@ -119,7 +114,7 @@ func (d *ChatgptCDP) runCodingWithRetry(model, prompt string, tools []official.T
 		if attempt > 0 {
 			p += chatgptRetryNudge
 		}
-		text, err := d.completePrompt(model, p)
+		text, err := d.base.completePrompt(model, p)
 		if err != nil {
 			lastErr = err
 			continue
@@ -151,7 +146,7 @@ func (d *ChatgptCDP) runCodingWithRetry(model, prompt string, tools []official.T
 // 流式统一改为"先攒全文(含重试)再合成 SSE":agent 场景需要完整 tool_call,
 // 逐字实时性无意义;桥侧每请求 ~25s,合成对体感无差。
 func (d *ChatgptCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
-	d.limiter.Wait()
+	d.base.limiter.Wait()
 	forwardToolsChatgpt(req.Tools)
 	req.Input = forwardResponsesInput(req.Input)
 	c.Writer = newBashAliasWriter(c.Writer)
@@ -165,7 +160,7 @@ func (d *ChatgptCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIR
 }
 
 func (d *ChatgptCDP) codingCompletions(c *gin.Context, req *official.APIRequest) {
-	d.limiter.Wait()
+	d.base.limiter.Wait()
 	forwardToolsChatgpt(req.Tools)
 	forwardChatMsgs(req.Messages)
 	c.Writer = newBashAliasWriter(c.Writer)
@@ -285,24 +280,25 @@ func (d *ChatgptCDP) emitCodingResponses(c *gin.Context, req *official.Responses
 func (d *ChatgptCDP) codingEnvPrompt(tools []official.Tool) string { return "" }
 
 // Responses 对 /v1/responses 的 gpt-coding 保持"必须携带 tools"约束(与 ChatCompletions
-// 对称;其余透传基类 —— coding variant 走 codingResponses 整包协议,chat 变体走桥)。
+// 对称;其余透传底座 —— coding variant 走 codingResponses 整包协议,chat 变体走桥,
+// 模型归一/404 判定由 cdpBase.Responses 的 internalID 统一处理)。
 func (d *ChatgptCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	if req != nil && req.Model == "gpt-coding" && len(req.Tools) == 0 {
 		apierrors.JSONError(c, 400, "invalid_request_error", "coding 模型(gpt-coding)需要携带 tools 参数", apierrors.Param("tools"), "missing_tools")
 		return
 	}
 	// coding variant 在子类层接管(同 ChatCompletions 注释)
-	if v, ok := d.byID[req.Model]; ok && v == "coding" {
+	if v, ok := d.base.byID[d.base.internalID(req.Model)]; ok && v == "coding" {
 		d.codingResponses(c, req)
 		return
 	}
-	d.GeminiCDP.Responses(c, req)
+	d.base.Responses(c, req)
 }
 
-// ChatCompletions 在转发前把无后缀 model 补成内部 "-chat" 形态(基类按 byID 路由),
-// 桥侧 chatgpt adapter 以 "gpt-" 前缀特判,UI 模式按页面当前选中模型实际发送。
-// gpt-coding 走 coding variant(codingCompletions 整包 prompt + FenceParser),
-// 前置校验 tools 非空 —— 原校验在 chat_handler 的官方 API 路径,走桥后不再经过。
+// ChatCompletions:gpt-coding 走 coding variant(codingCompletions 整包 prompt +
+// FenceParser),前置校验 tools 非空 —— 原校验在 chat_handler 的官方 API 路径,
+// 走桥后不再经过。chat 变体的模型归一(裸名补 -chat)由 cdpBase.ChatCompletions
+// 的 internalID 统一处理,不再手工补丁。
 func (d *ChatgptCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 	if req != nil && req.Model == "gpt-coding" {
 		if len(req.Tools) == 0 {
@@ -310,15 +306,10 @@ func (d *ChatgptCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 			return
 		}
 	}
-	if req != nil && !strings.HasSuffix(req.Model, "-chat") {
-		if _, ok := d.byID[req.Model+"-chat"]; ok {
-			req.Model = req.Model + "-chat"
-		}
-	}
 	// coding variant 在子类层接管(见 codingCompletions 注释:基类内部调用不可达子类覆写)
-	if v, ok := d.byID[req.Model]; ok && v == "coding" {
+	if v, ok := d.base.byID[d.base.internalID(req.Model)]; ok && v == "coding" {
 		d.codingCompletions(c, req)
 		return
 	}
-	d.GeminiCDP.ChatCompletions(c, req)
+	d.base.ChatCompletions(c, req)
 }

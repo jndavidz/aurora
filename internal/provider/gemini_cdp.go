@@ -24,23 +24,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// GeminiCDP 通过家庭/办公室 PC 上的 CDP 桥(scripts/cdp/bridge.mjs)执行 gemini.google.com 对话。
+// cdpBase 是 CDP 桥 provider 的公共底座,桥用真实浏览器的页内 fetch() 发请求
+// (cookie/TLS/指纹/JS 运行时全部由浏览器自带,零指纹模拟),aurora 侧只做
+// OpenAI 兼容的 HTTP 转发:桥池轮询/熔断/自动唤醒/coding 限频/byID 模型注册
+// 与两个表面的完整实现。Gemini/Claude/Hunyuan/Doubao/ChatGPT 五个桥 provider
+// 持有它(组合)并按需覆盖 Provider 方法 —— 不用 embed:Go 无虚方法,基类内部
+// 回调不到子类覆盖(chatgpt_coding 两次实测踩坑,历史教训)。
 //
-// 桥用真实浏览器的页内 fetch() 发请求 —— cookie/TLS/指纹/JS 运行时全部由浏览器自带
-// (零指纹模拟),aurora 侧只做 OpenAI 兼容的 HTTP 转发。直连通道(geminweb)因数据中心
-// IP + 模拟指纹被 Google 风控(commit ff4af80)已停用,本 Provider 是 Gemini 的正式通道。
-//
-// 配置:
-//   - GEMINI_CDP_URL=http://<PC1>:8799[,http://<PC2>:8799...] —— 桥池,逗号分隔;
-//     轮询 + 故障转移(某桥网络不通/5xx 时自动换下一个),每个桥登录不同的小号
-//     (也摊薄 Google 限频:桥数 = 账号数 = 吞吐翻倍)。仅配置时注册。
-//   - GEMINI_CDP_KEY 可选,与桥的 BRIDGE_AUTH 一致。
+// 模型 id 约定(归一点 internalID):byID 键是内部注册名;带 -chat 后缀的内部名
+// (如 gpt-5.6-chat)与外部裸名(gpt-5.6)同接受。gemini-3-flash 等外部名与内部名
+// 一致,直接命中。
 //
 // 变体:
 //   - -chat  :纯对话(桥直通,请求原样转发)
 //   - -coding:工具调用 —— aurora 侧注入工具指令 prompt + FenceParser 解析
 //     (复用直连时代 gemini_coding.go 的同一套 prompt/解析,桥只当纯 chat 用)
-type GeminiCDP struct {
+type cdpBase struct {
 	cfg    *config.Config
 	models []Model
 	byID   map[string]string // model id → variant("chat" | "coding")
@@ -60,8 +59,8 @@ var defaultGeminiCDPModels = []string{"gemini-3-flash", "gemini-3-flash-coding"}
 
 // newCdpBase 构造 CDP 桥 provider 的通用部分(桥池/熔断/限频/模型解析)。
 // GeminiCDP 与 ClaudeCDP 共用:二者都只是"把请求转发给真浏览器桥",差异仅模型目录与名字。
-func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, prefix, ownedBy string, limiter *CodingLimiter) *GeminiCDP {
-	d := &GeminiCDP{
+func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, prefix, ownedBy string, limiter *CodingLimiter) *cdpBase {
+	d := &cdpBase{
 		cfg:       cfg,
 		byID:      make(map[string]string),
 		deadUntil: make(map[string]time.Time),
@@ -109,30 +108,62 @@ func newCdpBase(cfg *config.Config, urlList string, defaultModels []string, pref
 	return d
 }
 
+// GeminiCDP 是 Gemini 桥 provider:cdpBase 的薄壳(Gemini 无任何覆盖,
+// 外部模型名即内部注册名,归一直接命中)。
+type GeminiCDP struct {
+	base *cdpBase
+}
+
 // NewGeminiCDP 构造 Gemini CDP 桥 provider。
 func NewGeminiCDP(cfg *config.Config) *GeminiCDP {
-	return newCdpBase(cfg, cfg.GeminiCDPURL, defaultGeminiCDPModels, "gemini-", "google",
-		NewCodingLimiter(2*time.Second, 1500*time.Millisecond)) // Google 最严
+	return &GeminiCDP{base: newCdpBase(cfg, cfg.GeminiCDPURL, defaultGeminiCDPModels, "gemini-", "google",
+		NewCodingLimiter(2*time.Second, 1500*time.Millisecond))} // Google 最严
 }
 
 func (d *GeminiCDP) Name() string { return "google" }
 
-func (d *GeminiCDP) Models() []Model { return d.models }
+func (d *GeminiCDP) Models() []Model { return d.base.Models() }
 
-func (d *GeminiCDP) Handles(model string) bool {
-	_, ok := d.byID[model]
+func (d *GeminiCDP) Handles(model string) bool { return d.base.Handles(model) }
+
+func (d *GeminiCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
+	d.base.ChatCompletions(c, req)
+}
+
+func (d *GeminiCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
+	d.base.Responses(c, req)
+}
+
+func (d *cdpBase) Models() []Model { return d.models }
+
+// internalID 把外部模型 id 归一为 byID 键(后缀约定的单一归一点):
+// 裸名 gpt-5.6 → 内部 gpt-5.6-chat;gemini-3-flash 等外部名与内部名一致直接命中。
+// 此前 ChatCompletions 手工补后缀而 Responses 漏补,导致 Responses 表面 404
+// (Handles 命中路由进来,基类查表落空)——归一收进此处后两表面一致。
+func (d *cdpBase) internalID(model string) string {
+	if _, ok := d.byID[model]; ok {
+		return model
+	}
+	if _, ok := d.byID[model+"-chat"]; ok {
+		return model + "-chat"
+	}
+	return model
+}
+
+func (d *cdpBase) Handles(model string) bool {
+	_, ok := d.byID[d.internalID(model)]
 	return ok
 }
 
 // ─── 桥池调用(轮询 + 故障转移)────────────────────────────────────
 
-func (d *GeminiCDP) bridgeURLFor(u string) string {
+func (d *cdpBase) bridgeURLFor(u string) string {
 	return strings.TrimRight(u, "/") + "/v1/chat/completions"
 }
 
 // post 向桥池发请求:从轮询游标起逐个尝试,网络错误/5xx 熔断该桥并换下一个;
 // 全失败时自动唤醒各 PC 上的 keeper(拉起 Chrome+桥)后重试一轮。
-func (d *GeminiCDP) post(body []byte) (*http.Response, error) {
+func (d *cdpBase) post(body []byte) (*http.Response, error) {
 	if len(d.urls) == 0 {
 		return nil, fmt.Errorf("GEMINI_CDP_URL not configured")
 	}
@@ -152,7 +183,7 @@ func (d *GeminiCDP) post(body []byte) (*http.Response, error) {
 }
 
 // tryPost 单轮桥池尝试(带熔断跳过)。
-func (d *GeminiCDP) tryPost(body []byte) (*http.Response, error) {
+func (d *cdpBase) tryPost(body []byte) (*http.Response, error) {
 	now := time.Now()
 	start := int(atomic.AddInt64(&d.rr, 1)-1) % len(d.urls)
 	var lastErr error
@@ -186,7 +217,7 @@ func (d *GeminiCDP) tryPost(body []byte) (*http.Response, error) {
 
 // wakeAll 向每个桥所在主机的唤醒守护(scripts/cdp/keeper.mjs)发 POST /wake。
 // 幂等:桥已在线的立即返回;keeper 不在线则静默忽略(由下一次请求再试)。
-func (d *GeminiCDP) wakeAll() {
+func (d *cdpBase) wakeAll() {
 	seen := make(map[string]bool)
 	for _, u := range d.urls {
 		pu, err := url.Parse(u)
@@ -215,25 +246,25 @@ func (d *GeminiCDP) wakeAll() {
 	}
 }
 
-func (d *GeminiCDP) clearAllDead() {
+func (d *cdpBase) clearAllDead() {
 	d.mu.Lock()
 	clear(d.deadUntil)
 	d.mu.Unlock()
 }
 
-func (d *GeminiCDP) markDead(u string) {
+func (d *cdpBase) markDead(u string) {
 	d.mu.Lock()
 	d.deadUntil[u] = time.Now().Add(60 * time.Second)
 	d.mu.Unlock()
 }
 
-func (d *GeminiCDP) clearDead(u string) {
+func (d *cdpBase) clearDead(u string) {
 	d.mu.Lock()
 	delete(d.deadUntil, u)
 	d.mu.Unlock()
 }
 
-func (d *GeminiCDP) postTo(u string, body []byte) (*http.Response, error) {
+func (d *cdpBase) postTo(u string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequest(http.MethodPost, d.bridgeURLFor(u), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -248,7 +279,7 @@ func (d *GeminiCDP) postTo(u string, body []byte) (*http.Response, error) {
 // ─── 桥的流式/非流式调用助手 ──────────────────────────────────────
 
 // streamPrompt 把 prompt 作为单条 user 消息发给桥(stream),逐块回调 delta 文本。
-func (d *GeminiCDP) streamPrompt(model, prompt string, onDelta func(string)) error {
+func (d *cdpBase) streamPrompt(model, prompt string, onDelta func(string)) error {
 	body, _ := json.Marshal(map[string]any{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
@@ -298,7 +329,7 @@ func (d *GeminiCDP) streamPrompt(model, prompt string, onDelta func(string)) err
 }
 
 // completePrompt 非流式取全文。
-func (d *GeminiCDP) completePrompt(model, prompt string) (string, error) {
+func (d *cdpBase) completePrompt(model, prompt string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
@@ -347,7 +378,8 @@ func messagesFromItems(items []responsesInputItem, instructions string) []map[st
 
 // ─── ChatCompletions ──────────────────────────────────────────────
 
-func (d *GeminiCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
+func (d *cdpBase) ChatCompletions(c *gin.Context, req *official.APIRequest) {
+	req.Model = d.internalID(req.Model)
 	variant, ok := d.byID[req.Model]
 	if !ok {
 		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
@@ -380,7 +412,7 @@ func (d *GeminiCDP) ChatCompletions(c *gin.Context, req *official.APIRequest) {
 }
 
 // relayStream 逐块透传桥的 SSE(桥已输出标准 OpenAI SSE)。
-func (d *GeminiCDP) relayStream(c *gin.Context, resp *http.Response) {
+func (d *cdpBase) relayStream(c *gin.Context, resp *http.Response) {
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
 		ct = "text/event-stream"
@@ -408,7 +440,7 @@ func (d *GeminiCDP) relayStream(c *gin.Context, resp *http.Response) {
 }
 
 // relayJSON 透传桥的非流式 JSON(含错误体)。
-func (d *GeminiCDP) relayJSON(c *gin.Context, resp *http.Response) {
+func (d *cdpBase) relayJSON(c *gin.Context, resp *http.Response) {
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
@@ -445,7 +477,8 @@ type bridgeCompletion struct {
 	} `json:"error"`
 }
 
-func (d *GeminiCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
+func (d *cdpBase) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
+	req.Model = d.internalID(req.Model)
 	variant, ok := d.byID[req.Model]
 	if !ok {
 		apierrors.JSONError(c, 404, "invalid_request_error", "model not found", nil, "model_not_found")
@@ -468,7 +501,7 @@ func (d *GeminiCDP) Responses(c *gin.Context, req *official.ResponsesAPIRequest)
 }
 
 // responsesStream 把桥的 SSE delta 转成 Responses 事件流。
-func (d *GeminiCDP) responsesStream(c *gin.Context, req *official.ResponsesAPIRequest, msgs []map[string]string) {
+func (d *cdpBase) responsesStream(c *gin.Context, req *official.ResponsesAPIRequest, msgs []map[string]string) {
 	w := newSSEWriter(c)
 	respID := "resp_" + uuid.NewString()
 	messageItemID := "msg_" + uuid.NewString()
@@ -530,7 +563,7 @@ func (d *GeminiCDP) responsesStream(c *gin.Context, req *official.ResponsesAPIRe
 }
 
 // responsesNonStream 非流式 Responses。
-func (d *GeminiCDP) responsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, msgs []map[string]string) {
+func (d *cdpBase) responsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, msgs []map[string]string) {
 	body, _ := json.Marshal(map[string]any{"model": req.Model, "messages": msgs, "stream": false})
 	resp, err := d.post(body)
 	if err != nil {
@@ -568,13 +601,13 @@ func (d *GeminiCDP) responsesNonStream(c *gin.Context, req *official.ResponsesAP
 // glm 温和版)。基类为空(Gemini 保持原行为);子类可覆写注入强协议完整指令
 // —— ChatGPT 网页模型对 glm"尽力而为"版遵守度差(声称"环境不存在该目录/无执行
 // 接口"而拒绝调用,见 docs/CHATGPT_TOOL_BRIDGE.md §八),需要强规则+环境纠正。
-func (d *GeminiCDP) codingEnvPrompt(tools []official.Tool) string { return "" }
+func (d *cdpBase) codingEnvPrompt(tools []official.Tool) string { return "" }
 
 // ─── coding 变体(工具调用:aurora 侧注入 + 解析,桥只当纯 chat)────────
 
 // codingResponses 处理 coding 变体(/v1/responses)。
 // prompt 构建与解析复用直连时代 gemini_coding.go 的同一套(围栏 JSON + FenceParser)。
-func (d *GeminiCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
+func (d *cdpBase) codingResponses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	prompt := geminiCodingPromptFromResponses(req, d.codingEnvPrompt(req.Tools))
 	if req.Stream {
@@ -584,7 +617,7 @@ func (d *GeminiCDP) codingResponses(c *gin.Context, req *official.ResponsesAPIRe
 	d.codingResponsesNonStream(c, req, prompt)
 }
 
-func (d *GeminiCDP) codingResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, prompt string) {
+func (d *cdpBase) codingResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, prompt string) {
 	w := newSSEWriter(c)
 	respID := "resp_" + uuid.NewString()
 	messageItemID := "msg_" + uuid.NewString()
@@ -650,7 +683,7 @@ func (d *GeminiCDP) codingResponsesStream(c *gin.Context, req *official.Response
 	w.event("response.completed", completedEvent(outResp))
 }
 
-func (d *GeminiCDP) codingResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, prompt string) {
+func (d *cdpBase) codingResponsesNonStream(c *gin.Context, req *official.ResponsesAPIRequest, prompt string) {
 	fullText, err := d.completePrompt(req.Model, prompt)
 	if err != nil {
 		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
@@ -672,7 +705,7 @@ func (d *GeminiCDP) codingResponsesNonStream(c *gin.Context, req *official.Respo
 }
 
 // codingCompletions 处理 coding 变体(/v1/chat/completions)。
-func (d *GeminiCDP) codingCompletions(c *gin.Context, req *official.APIRequest) {
+func (d *cdpBase) codingCompletions(c *gin.Context, req *official.APIRequest) {
 	d.limiter.Wait() // 仅 coding 限频,chat 不限
 	prompt := geminiCodingPromptFromAPI(req, d.codingEnvPrompt(req.Tools))
 	if req.Stream {
@@ -682,7 +715,7 @@ func (d *GeminiCDP) codingCompletions(c *gin.Context, req *official.APIRequest) 
 	d.codingCompletionsNonStream(c, req, prompt)
 }
 
-func (d *GeminiCDP) codingCompletionsStream(c *gin.Context, req *official.APIRequest, prompt string) {
+func (d *cdpBase) codingCompletionsStream(c *gin.Context, req *official.APIRequest, prompt string) {
 	model := req.Model
 	if model == "" {
 		model = "auto"
@@ -752,7 +785,7 @@ func (d *GeminiCDP) codingCompletionsStream(c *gin.Context, req *official.APIReq
 	}
 }
 
-func (d *GeminiCDP) codingCompletionsNonStream(c *gin.Context, req *official.APIRequest, prompt string) {
+func (d *cdpBase) codingCompletionsNonStream(c *gin.Context, req *official.APIRequest, prompt string) {
 	fullText, err := d.completePrompt(req.Model, prompt)
 	if err != nil {
 		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
