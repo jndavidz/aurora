@@ -332,3 +332,46 @@ func guessExt(mime string) string {
 		return "png"
 	}
 }
+
+// ─── 拍平(flatten):双接口共享的 chat prompt 构建 ───────────────────
+// 原寄居 deepseek_chat.go;grok/gemini/minimax/mimo/yuanbao 跨家共用,
+// 迁至共享输入助手之家(input.go),与 GLOSSARY「拍平」词汇对应。
+// flattenChatInput 把 Responses input 拍平成网页 prompt 的真人对话文本。
+//   - chat 变体:完全忽略 tools/tool_choice
+//   - 不加 "User:"/"Assistant:" 前缀:网页真实请求的 prompt 是纯文本(角色锚点
+//     由模型专用 token 承担),实测加前缀会被模型当成乱码/怪文本。
+//   - 多轮 history 直接拼接(网页服务端按 session+parent_message_id 记忆,
+//     aurora 每请求新会话,需全量提交)
+func flattenChatInput(req *official.ResponsesAPIRequest, quickMode bool) string {
+	return flattenChatItems(responsesInputItems(req.Input), rawResponsesText(req.Instructions))
+}
+
+// flattenChatInputAPI 从 chat.completions messages 拍平 prompt(同上,共享实现)。
+func flattenChatInputAPI(req *official.APIRequest) string {
+	return flattenChatItems(apiMessagesToItems(req.Messages), "")
+}
+
+// flattenChatItems 双接口共享的 chat prompt 构建(纯文本,跳过工具 item)。
+func flattenChatItems(items []responsesInputItem, instructions string) string {
+	var sb strings.Builder
+	if instructions != "" {
+		sb.WriteString(instructions)
+		sb.WriteString("\n\n")
+	}
+	for _, item := range items {
+		switch item.Type {
+		case "function_call", "function_call_output":
+			// chat 变体不应出现工具 item;防御性跳过(不注入上游)。
+			continue
+		default:
+			text := item.Text
+			if text == "" {
+				continue
+			}
+			sb.WriteString(text)
+			sb.WriteString("\n\n")
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
+
