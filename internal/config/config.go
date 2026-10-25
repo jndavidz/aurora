@@ -57,6 +57,9 @@ type Config struct {
 	KimiWebTokens string   // 网页 token 注入池文件路径(每行一个 refresh_token)
 	KimiModels    []string // 暴露的模型目录
 	KimiProxy     string   // 网页通道出口代理
+	// KimiWebSearch 控制是否带原生搜索工具(TOOL_TYPE_SEARCH)。
+	// 默认关闭(与 glm 同做法):联网使纯对话延迟显著增加;KIMI_WEB_SEARCH=1 开启。
+	KimiWebSearch bool // 默认 false
 
 	// 豆包(www.doubao.com)网页逆向通道配置。
 	DoubaoAccounts string   // 网页账号池 JSON 文件路径(见 docs/DOUBAO.md)
@@ -173,6 +176,7 @@ func Load() Config {
 		KimiWebBase:   getEnv("KIMI_WEB_BASE", "https://www.kimi.com"),
 		KimiWebTokens: os.Getenv("KIMI_WEB_TOKENS"),
 		KimiModels:    splitCSV(os.Getenv("KIMI_MODELS")),
+		KimiWebSearch: getBoolEnv("KIMI_WEB_SEARCH", false),
 		KimiProxy:     os.Getenv("KIMI_PROXY"),
 
 		DoubaoAccounts: os.Getenv("DOUBAO_ACCOUNTS"),

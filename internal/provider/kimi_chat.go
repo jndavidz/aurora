@@ -3,7 +3,6 @@ package provider
 import (
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -24,14 +23,11 @@ const kimiRefreshSkew = 3 * time.Minute
 // kimiweb.ConsumeStream 剥离)。
 var kimiSearchTool = []kimiweb.Tool{{Type: "TOOL_TYPE_SEARCH", Search: map[string]any{}}}
 
-// kimiWebSearchEnabled 默认关闭(KIMI_WEB_SEARCH=1 才开启,复刻 deepseek/glm 做法):
-// 网页端默认带 TOOL_TYPE_SEARCH,联网使纯对话延迟显著增加(kimi 是直连最慢通道
-// 3.6–7.8s);aurora 纯对话定位无实时信息需求,搜索由 env 显式开启。
-var kimiWebSearchEnabled = os.Getenv("KIMI_WEB_SEARCH") == "1"
-
-// searchTools 按 KIMI_WEB_SEARCH 开关返回原生工具列表。
+// searchTools 按 KIMI_WEB_SEARCH 开关(cfg.KimiWebSearch,与 GLM/DeepSeek 同走
+// Config 单一来源)返回原生工具列表。默认关闭:联网使纯对话延迟显著增加
+// (kimi 是直连最慢通道 3.6–7.8s);aurora 纯对话定位无实时信息需求。
 func (d *Kimi) searchTools() []kimiweb.Tool {
-	if !kimiWebSearchEnabled {
+	if d.cfg == nil || !d.cfg.KimiWebSearch {
 		return nil
 	}
 	return kimiSearchTool
