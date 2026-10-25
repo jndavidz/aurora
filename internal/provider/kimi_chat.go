@@ -12,7 +12,6 @@ import (
 	"aurora/util"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // kimiRefreshSkew 是 access_token 的提前换发余量(Kimi access 仅 ~15 分钟)。
@@ -147,14 +146,7 @@ func (d *Kimi) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 	}
 	defer resp.Body.Close()
 
-	w := newSSEWriter(c)
-	respID := "resp_" + uuid.NewString()
-	reasoningItemID := "rs_" + uuid.NewString()
-	messageItemID := "msg_" + uuid.NewString()
-
-	w.event("response.created", createdEvent(respID, req.Model))
-	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{"id": reasoningItemID, "type": "reasoning", "status": "in_progress"}))
-	w.event("response.output_item.added", outputItemAddedEvent(1, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
+	e := NewResponsesEmitter(c, req.Model, true)
 
 	var fullText, fullReasoning string
 	res := kimiweb.ConsumeStream(resp.Body, func(delta kimiweb.Delta) {
@@ -162,29 +154,17 @@ func (d *Kimi) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 		if delta.ToolCall != nil {
 			return
 		}
-		if delta.Reasoning != "" {
-			fullReasoning += delta.Reasoning
-			w.event("response.reasoning_text.delta", map[string]any{
-				"type": "response.reasoning_text.delta", "item_id": reasoningItemID,
-				"output_index": 0, "content_index": 0, "delta": delta.Reasoning,
-			})
-		}
-		if delta.Text != "" {
-			fullText += delta.Text
-			w.event("response.output_text.delta", map[string]any{
-				"type": "response.output_text.delta", "item_id": messageItemID,
-				"output_index": 1, "content_index": 0, "delta": delta.Text,
-			})
-		}
+		fullReasoning += delta.Reasoning
+		fullText += delta.Text
+		e.ReasoningDelta(delta.Reasoning)
+		e.TextDelta(delta.Text)
 	})
 	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		w.event("response.failed", failedEvent(res.Err))
+		e.Fail(res.Err)
 		return
 	}
-	w.event("response.output_item.done", outputItemDoneEvent(0, reasoningItem(reasoningItemID, fullReasoning, "completed")))
-	w.event("response.output_item.done", outputItemDoneEvent(1, messageItem(messageItemID, fullText, "completed")))
 	outResp := official.NewResponsesResponse(fullText, fullReasoning, countInputChars(req), util.CountToken(fullText), util.CountToken(fullReasoning), 0, 0, req.Model)
-	w.event("response.completed", completedEvent(outResp))
+	e.Complete(outResp, fullText, fullReasoning)
 }
 
 // chatResponsesNonStream 非流式。
@@ -285,36 +265,15 @@ func (d *Kimi) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 	if model == "" {
 		model = "auto"
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	flusher, _ := c.Writer.(http.Flusher)
-	writeChunk := func(chunk official.ChatCompletionChunk) {
-		c.Writer.WriteString("data: " + chunk.String() + "\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	roleChunk := official.NewChatCompletionChunk("", model)
-	roleChunk.Choices[0].Delta.Role = "assistant"
-	writeChunk(roleChunk)
+	s := NewChunkStream(c, model)
 	_ = kimiweb.ConsumeStream(resp.Body, func(delta kimiweb.Delta) {
 		if delta.ToolCall != nil {
 			return
 		}
-		if delta.Reasoning != "" {
-			writeChunk(official.NewReasoningChunk(delta.Reasoning, model))
-		}
-		if delta.Text != "" {
-			writeChunk(official.NewChatCompletionChunk(delta.Text, model))
-		}
+		s.ReasoningDelta(delta.Reasoning)
+		s.TextDelta(delta.Text)
 	})
-	writeChunk(official.StopChunk("stop", model))
-	c.Writer.WriteString("data: [DONE]\n\n")
-	if flusher != nil {
-		flusher.Flush()
-	}
+	s.Stop("stop")
 }
 
 // chatCompletionsNonStream 非流式 ChatCompletion。

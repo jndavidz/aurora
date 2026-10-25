@@ -2,7 +2,6 @@ package provider
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 
 	"aurora/internal/apierrors"
@@ -11,7 +10,6 @@ import (
 	"aurora/util"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // chatResponses 处理 Grok chat 变体(/v1/responses)。
@@ -36,19 +34,12 @@ func (d *Grok) chatResponses(c *gin.Context, m *grokModel, req *official.Respons
 
 // chatResponsesStream 流式输出 Responses 事件。
 func (d *Grok) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *grokweb.Client, streamReq grokweb.CompletionRequest) {
-	w := newSSEWriter(c)
-	respID := "resp_" + uuid.NewString()
-	reasoningItemID := "rs_" + uuid.NewString()
-	messageItemID := "msg_" + uuid.NewString()
-
-	w.event("response.created", createdEvent(respID, req.Model))
-	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{"id": reasoningItemID, "type": "reasoning", "status": "in_progress"}))
-	w.event("response.output_item.added", outputItemAddedEvent(1, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
+	e := NewResponsesEmitter(c, req.Model, true)
 
 	var fullText, fullReasoning string
 	// 流式剥离 "Thinking about your request" 前缀:前缀(可能跨 delta 分片)
 	// 不输出正文;前缀前的文本作为推理输出。
-	const prefix = "Thinking about your request"
+	const_prefix := "Thinking about your request"
 	prefixBuf := ""
 	prefixDone := false
 	res := client.Complete(streamReq, func(delta grokweb.Delta) {
@@ -57,46 +48,35 @@ func (d *Grok) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIReq
 		}
 		if !prefixDone {
 			prefixBuf += delta.Text
-			if idx := strings.Index(prefixBuf, prefix); idx >= 0 {
+			if idx := strings.Index(prefixBuf, const_prefix); idx >= 0 {
 				if pre := strings.TrimSpace(prefixBuf[:idx]); pre != "" {
 					fullReasoning = pre
-					w.event("response.reasoning_text.delta", map[string]any{
-						"type": "response.reasoning_text.delta", "item_id": reasoningItemID,
-						"output_index": 0, "content_index": 0, "delta": pre,
-					})
+					e.ReasoningDelta(pre)
 				}
 				// 前缀后的内容输出
-				rest := prefixBuf[idx+len(prefix):]
+				rest := prefixBuf[idx+len(const_prefix):]
 				prefixBuf = ""
 				prefixDone = true
 				if rest != "" {
 					fullText += rest
-					w.event("response.output_text.delta", map[string]any{
-						"type": "response.output_text.delta", "item_id": messageItemID,
-						"output_index": 1, "content_index": 0, "delta": rest,
-					})
+					e.TextDelta(rest)
 				}
 			}
 			return
 		}
 		fullText += delta.Text
-		w.event("response.output_text.delta", map[string]any{
-			"type": "response.output_text.delta", "item_id": messageItemID,
-			"output_index": 1, "content_index": 0, "delta": delta.Text,
-		})
+		e.TextDelta(delta.Text)
 	})
 	if !prefixDone && strings.TrimSpace(prefixBuf) != "" {
 		// 整个流都没出现前缀:prefixBuf 是普通正文
 		fullText = prefixBuf + fullText
 	}
 	if res.Err != "" && fullText == "" && fullReasoning == "" {
-		w.event("response.failed", failedEvent(res.Err))
+		e.Fail(res.Err)
 		return
 	}
-	w.event("response.output_item.done", outputItemDoneEvent(0, reasoningItem(reasoningItemID, fullReasoning, "completed")))
-	w.event("response.output_item.done", outputItemDoneEvent(1, messageItem(messageItemID, fullText, "completed")))
 	outResp := official.NewResponsesResponse(fullText, fullReasoning, countInputChars(req), util.CountToken(fullText), util.CountToken(fullReasoning), 0, 0, req.Model)
-	w.event("response.completed", completedEvent(outResp))
+	e.Complete(outResp, fullText, fullReasoning)
 }
 
 // chatResponsesNonStream 非流式。
@@ -134,27 +114,14 @@ func (d *Grok) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 	if model == "" {
 		model = "auto"
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	flusher, _ := c.Writer.(http.Flusher)
-	writeChunk := func(chunk official.ChatCompletionChunk) {
-		c.Writer.WriteString("data: " + chunk.String() + "\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	roleChunk := official.NewChatCompletionChunk("", model)
-	roleChunk.Choices[0].Delta.Role = "assistant"
-	writeChunk(roleChunk)
+	s := NewChunkStream(c, model)
 	var fullText string
 	_ = client.Complete(streamReq, func(delta grokweb.Delta) {
 		if delta.Text == "" {
 			return
 		}
 		fullText += delta.Text
-		writeChunk(official.NewChatCompletionChunk(delta.Text, model))
+		s.TextDelta(delta.Text)
 	})
 	// 流式完成后补 reasoning(如果有 Thinking 前缀)
 	clean, reasoning := splitGrokThinking(fullText)
@@ -162,11 +129,7 @@ func (d *Grok) chatCompletionsStream(c *gin.Context, req *official.APIRequest, c
 		// 流式已发出原始文本,这里不做回溯;非流式才有完整分离。
 		_ = clean
 	}
-	writeChunk(official.StopChunk("stop", model))
-	c.Writer.WriteString("data: [DONE]\n\n")
-	if flusher != nil {
-		flusher.Flush()
-	}
+	s.Stop("stop")
 }
 
 // chatCompletionsNonStream 非流式 ChatCompletion。

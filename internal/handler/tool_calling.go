@@ -10,7 +10,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"aurora/internal/apierrors"
 	"aurora/internal/chatgpt"
 	"aurora/internal/httpstream"
+	"aurora/internal/provider"
 	"aurora/internal/toolcall"
 	officialtypes "aurora/typings/official"
 	"aurora/util"
@@ -41,32 +41,16 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 	streamRequested := originalRequest.Stream && h.cfg.StreamMode
 
 	// 流式:先写 response.created + output_item.added(message) 事件头,再收集。
-	var respID, messageItemID string
-	var flusher http.Flusher
+	var e *provider.ResponsesEmitter
 	if streamRequested {
-		respID = "resp_" + uuid.NewString()
-		messageItemID = "msg_" + uuid.NewString()
-		c.Writer.Header().Set("Content-Type", "text/event-stream")
-		c.Writer.Header().Set("Cache-Control", "no-cache")
-		c.Writer.Header().Set("Connection", "keep-alive")
-		c.Writer.Header().Set("X-Accel-Buffering", "no")
-		flusher, _ = c.Writer.(http.Flusher)
-		c.Writer.WriteString("event: response.created\ndata: " + responsesCreatedEvent(respID, st.reqModel) + "\n\n")
-		c.Writer.WriteString("event: response.output_item.added\ndata: " + responsesOutputItemAddedEvent(0, messageItemID, "message") + "\n\n")
-		if flusher != nil {
-			c.Writer.WriteHeader(200)
-			flusher.Flush()
-		}
+		e = provider.NewResponsesEmitter(c, st.reqModel, false)
 	}
 
 	out, terr := h.toolCallingRetry(c, originalRequest, account, st)
 	if terr != nil {
 		if streamRequested {
 			// header 已写 200,只能发 response.failed 事件。
-			c.Writer.WriteString("event: response.failed\ndata: " + responsesFailedEvent(terr.msg) + "\n\n")
-			if flusher != nil {
-				flusher.Flush()
-			}
+			e.Fail(terr.msg)
 			return
 		}
 		apierrors.JSONError(c, terr.status, terr.typ, terr.msg, nil, terr.code)
@@ -75,11 +59,9 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 
 	outputTokens := util.CountToken(out.text)
 	if streamRequested {
-		if out.text != "" {
-			c.Writer.WriteString("event: response.output_text.delta\ndata: " + responsesTextDeltaEventText(messageItemID, 0, out.text) + "\n\n")
-		}
+		e.TextDelta(out.text)
 		// 先完成 message item(index 0),再按序发 function_call items(index 1..n)。
-		c.Writer.WriteString("event: response.output_item.done\ndata: " + responsesOutputItemDoneEvent(0, messageItemID, "message", out.text) + "\n\n")
+		e.MessageDone(out.text)
 
 		responsesResponse := officialtypes.NewResponsesResponse(out.text, "", st.inputTokens, outputTokens, 0, 0, 0, st.reqModel)
 		for i, tc := range out.calls {
@@ -89,17 +71,14 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 			if callID == "" {
 				callID = "call_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:24]
 			}
-			writeResponsesFunctionCallEvent(c, idx, fcID, callID, tc)
+			e.FunctionCall(idx, fcID, callID, tc.Function.Name, tc.Function.Arguments)
 			responsesResponse.Output = append(responsesResponse.Output, officialtypes.ResponsesOutputItem{
 				ID: fcID, Type: "function_call", Status: "completed",
 				CallID: callID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
 			})
 		}
-		c.Writer.WriteString("event: response.completed\ndata: " + responsesCompletedEvent(responsesResponse) + "\n\n")
-		c.Writer.WriteString("data: [DONE]\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
+		e.Completed(responsesResponse)
+		e.Done()
 		return
 	}
 
@@ -111,59 +90,6 @@ func (h *ChatHandler) responsesToolCalling(c *gin.Context, originalRequest *offi
 		})
 	}
 	c.JSON(200, outResp)
-}
-
-// responsesTextDeltaEventText 构造 response.output_text.delta 事件字符串。
-
-func responsesTextDeltaEventText(itemID string, outputIndex int, delta string) string {
-	evt := officialtypes.ResponsesTextDeltaEvent{
-		Type:         "response.output_text.delta",
-		ItemID:       itemID,
-		OutputIndex:  outputIndex,
-		ContentIndex: 0,
-		Delta:        delta,
-	}
-	return evt.String()
-}
-
-// writeResponsesFunctionCallEvent 输出一条 function_call 的完整事件序列
-// (output_item.added → arguments.delta → arguments.done → output_item.done),
-// 使用给定的 output_index 与 item/call id。
-
-func writeResponsesFunctionCallEvent(c *gin.Context, outputIndex int, fcID, callID string, tc officialtypes.ToolCall) {
-	added := map[string]interface{}{
-		"type": "response.output_item.added", "output_index": outputIndex,
-		"item": map[string]interface{}{
-			"id": fcID, "type": "function_call", "status": "in_progress",
-			"call_id": callID, "name": tc.Function.Name, "arguments": "",
-		},
-	}
-	b, _ := json.Marshal(added)
-	c.Writer.WriteString("event: response.output_item.added\ndata: " + string(b) + "\n\n")
-
-	argDelta := map[string]interface{}{
-		"type": "response.function_call_arguments.delta", "item_id": fcID,
-		"output_index": outputIndex, "delta": tc.Function.Arguments,
-	}
-	b, _ = json.Marshal(argDelta)
-	c.Writer.WriteString("event: response.function_call_arguments.delta\ndata: " + string(b) + "\n\n")
-
-	argDone := map[string]interface{}{
-		"type": "response.function_call_arguments.done", "item_id": fcID,
-		"output_index": outputIndex, "arguments": tc.Function.Arguments,
-	}
-	b, _ = json.Marshal(argDone)
-	c.Writer.WriteString("event: response.function_call_arguments.done\ndata: " + string(b) + "\n\n")
-
-	done := map[string]interface{}{
-		"type": "response.output_item.done", "output_index": outputIndex,
-		"item": map[string]interface{}{
-			"id": fcID, "type": "function_call", "status": "completed",
-			"call_id": callID, "name": tc.Function.Name, "arguments": tc.Function.Arguments,
-		},
-	}
-	b, _ = json.Marshal(done)
-	c.Writer.WriteString("event: response.output_item.done\ndata: " + string(b) + "\n\n")
 }
 
 type chatRequestState struct {

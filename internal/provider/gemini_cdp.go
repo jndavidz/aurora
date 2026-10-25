@@ -500,26 +500,20 @@ func (d *cdpBase) Responses(c *gin.Context, req *official.ResponsesAPIRequest) {
 	d.responsesNonStream(c, req, msgs)
 }
 
-// responsesStream 把桥的 SSE delta 转成 Responses 事件流。
+// responsesStream 把桥的 SSE delta 转成 Responses 事件流(wire emitter 骨架)。
 func (d *cdpBase) responsesStream(c *gin.Context, req *official.ResponsesAPIRequest, msgs []map[string]string) {
-	w := newSSEWriter(c)
-	respID := "resp_" + uuid.NewString()
-	messageItemID := "msg_" + uuid.NewString()
-	w.event("response.created", createdEvent(respID, req.Model))
-	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{
-		"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant",
-	}))
+	e := NewResponsesEmitter(c, req.Model, false)
 
 	body, _ := json.Marshal(map[string]any{"model": req.Model, "messages": msgs, "stream": true})
 	resp, err := d.post(body)
 	if err != nil {
-		w.event("response.failed", failedEvent("gemini cdp bridge unreachable: "+err.Error()))
+		e.Fail("gemini cdp bridge unreachable: " + err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		w.event("response.failed", failedEvent(fmt.Sprintf("gemini cdp bridge http %d: %s", resp.StatusCode, truncateStr(string(data), 300))))
+		e.Fail(fmt.Sprintf("gemini cdp bridge http %d: %s", resp.StatusCode, truncateStr(string(data), 300)))
 		return
 	}
 
@@ -540,26 +534,22 @@ func (d *cdpBase) responsesStream(c *gin.Context, req *official.ResponsesAPIRequ
 			continue
 		}
 		if chunk.Error != nil && fullText == "" {
-			w.event("response.failed", failedEvent(chunk.Error.Message))
+			e.Fail(chunk.Error.Message)
 			return
 		}
 		for _, ch := range chunk.Choices {
 			if ch.Delta.Content != "" {
 				fullText += ch.Delta.Content
-				w.event("response.output_text.delta", map[string]any{
-					"type": "response.output_text.delta", "item_id": messageItemID,
-					"output_index": 0, "content_index": 0, "delta": ch.Delta.Content,
-				})
+				e.TextDelta(ch.Delta.Content)
 			}
 		}
 	}
 	if fullText == "" {
-		w.event("response.failed", failedEvent("empty reply from gemini cdp bridge"))
+		e.Fail("empty reply from gemini cdp bridge")
 		return
 	}
-	w.event("response.output_item.done", outputItemDoneEvent(0, messageItem(messageItemID, fullText, "completed")))
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
-	w.event("response.completed", completedEvent(outResp))
+	e.Complete(outResp, fullText, "")
 }
 
 // responsesNonStream 非流式 Responses。

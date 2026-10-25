@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"net/http"
 
 	"aurora/internal/apierrors"
 	"aurora/internal/geminweb"
@@ -9,7 +8,6 @@ import (
 	"aurora/util"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // chatResponses 处理 Gemini chat 变体(/v1/responses)。
@@ -33,11 +31,7 @@ func (d *Gemini) chatResponses(c *gin.Context, m *geminiModel, req *official.Res
 
 // chatResponsesStream 流式输出 Responses 事件。
 func (d *Gemini) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIRequest, client *geminweb.Client, streamReq geminweb.CompletionRequest) {
-	w := newSSEWriter(c)
-	respID := "resp_" + uuid.NewString()
-	messageItemID := "msg_" + uuid.NewString()
-	w.event("response.created", createdEvent(respID, req.Model))
-	w.event("response.output_item.added", outputItemAddedEvent(0, map[string]any{"id": messageItemID, "type": "message", "status": "in_progress", "role": "assistant"}))
+	e := NewResponsesEmitter(c, req.Model, false)
 
 	var fullText string
 	res := client.Complete(streamReq, func(delta geminweb.Delta) {
@@ -45,18 +39,14 @@ func (d *Gemini) chatResponsesStream(c *gin.Context, req *official.ResponsesAPIR
 			return
 		}
 		fullText += delta.Text
-		w.event("response.output_text.delta", map[string]any{
-			"type": "response.output_text.delta", "item_id": messageItemID,
-			"output_index": 0, "content_index": 0, "delta": delta.Text,
-		})
+		e.TextDelta(delta.Text)
 	})
 	if res.Err != "" && fullText == "" {
-		w.event("response.failed", failedEvent(res.Err))
+		e.Fail(res.Err)
 		return
 	}
-	w.event("response.output_item.done", outputItemDoneEvent(0, messageItem(messageItemID, fullText, "completed")))
 	outResp := official.NewResponsesResponse(fullText, "", countInputChars(req), util.CountToken(fullText), 0, 0, 0, req.Model)
-	w.event("response.completed", completedEvent(outResp))
+	e.Complete(outResp, fullText, "")
 }
 
 // chatResponsesNonStream 非流式。
@@ -93,30 +83,13 @@ func (d *Gemini) chatCompletionsStream(c *gin.Context, req *official.APIRequest,
 	if model == "" {
 		model = "auto"
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	flusher, _ := c.Writer.(http.Flusher)
-	writeChunk := func(chunk official.ChatCompletionChunk) {
-		c.Writer.WriteString("data: " + chunk.String() + "\n\n")
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	roleChunk := official.NewChatCompletionChunk("", model)
-	roleChunk.Choices[0].Delta.Role = "assistant"
-	writeChunk(roleChunk)
+	s := NewChunkStream(c, model)
 	_ = client.Complete(streamReq, func(delta geminweb.Delta) {
 		if delta.Text != "" {
-			writeChunk(official.NewChatCompletionChunk(delta.Text, model))
+			s.TextDelta(delta.Text)
 		}
 	})
-	writeChunk(official.StopChunk("stop", model))
-	c.Writer.WriteString("data: [DONE]\n\n")
-	if flusher != nil {
-		flusher.Flush()
-	}
+	s.Stop("stop")
 }
 
 // chatCompletionsNonStream 非流式 ChatCompletion。
