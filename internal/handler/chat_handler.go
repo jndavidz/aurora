@@ -136,8 +136,12 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 	toolsEnabled := toolCallingEnabled(original_request.Tools, h.cfg)
 
 	// 发送上游前清洗历史里的"绕开工具"回复,防止模型被自己之前的
-	// 拒绝/推诿文本锚定而每轮重复同样的行为
-	sanitizeRefusalHistory(original_request.Messages)
+	// 拒绝/推诿文本锚定而每轮重复同样的行为。
+	// 仅工具路径清洗:防锚定是 coding 域策略,纯 chat 请求历史必须原样发上游
+	// (chat 变体硬规则:绝不注入工具调用语义)。
+	if toolsEnabled {
+		sanitizeRefusalHistory(original_request.Messages)
+	}
 
 	// Convert the chat request to a ChatGPT request
 	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
@@ -372,8 +376,11 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		client = setupClientWithProxy(proxyUrl)
 	}
 
-	// 发送上游前清洗历史里的"绕开工具"回复(同 Nightmare)
-	sanitizeRefusalHistory(original_request.Messages)
+	// 发送上游前清洗历史里的"绕开工具"回复(同 Nightmare;仅工具路径,
+	// 纯 chat 历史原样发上游。responsesToolCalling 入口内部亦有同型清洗)。
+	if toolCallingEnabled(original_request.Tools, h.cfg) {
+		sanitizeRefusalHistory(original_request.Messages)
+	}
 
 	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
 
