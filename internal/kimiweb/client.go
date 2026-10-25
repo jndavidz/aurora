@@ -106,6 +106,8 @@ func (c *Client) ClearAccessToken() {
 // "距重抓还剩多久");池空但直传了单 token 时解析直传值。
 // Kimi 的 refresh_token 每次换发都会轮换,这里反映的是当前池内值的到期时间。
 func (c *Client) RefreshTokenExps() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	exps := make([]time.Time, 0, len(c.tokens)+1)
 	for _, tok := range c.tokens {
 		if exp, ok := jwtutil.Exp(tok); ok {
@@ -121,10 +123,17 @@ func (c *Client) RefreshTokenExps() []time.Time {
 }
 
 // HasToken 报告是否有可用的 refresh_token(池或直传)。
-func (c *Client) HasToken() bool { return c.refreshToken != "" }
+func (c *Client) HasToken() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshToken != ""
+}
 
 // NextToken 轮询取下一个 refresh_token;池空返回当前 token。
+// cursor/tokens 与换发互斥同锁(handler 并发下轮询是 data race,同 deepseekweb E3 修复)。
 func (c *Client) NextToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.tokens) == 0 {
 		return c.refreshToken
 	}
@@ -134,8 +143,10 @@ func (c *Client) NextToken() string {
 }
 
 // SetRefreshToken 切换当前生效的 refresh_token(轮换时用),并从其 JWT claims
-// 解出账号身份头(device_id/session_id/sub)。
+// 解出账号身份头(device_id/session_id/sub)。claims 写入的身份字段与 token 同锁。
 func (c *Client) SetRefreshToken(t string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.refreshToken = t
 	if claims, err := parseClaims(t); err == nil {
 		if s, ok := claims["device_id"].(string); ok && s != "" {
@@ -152,6 +163,8 @@ func (c *Client) SetRefreshToken(t string) {
 
 // PoolSize 返回 token 池大小;直传单 token 时视为 1。
 func (c *Client) PoolSize() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.tokens) == 0 {
 		return 1
 	}

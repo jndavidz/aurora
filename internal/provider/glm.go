@@ -2,6 +2,7 @@ package provider
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"aurora/internal/apierrors"
@@ -31,6 +32,9 @@ type Glm struct {
 	client *glmweb.Client
 	models []Model
 	byID   map[string]*glmModel
+	// tokMu 护 ensureToken 的换发序列(NextToken/SetRefreshToken/RefreshAccessToken
+	// 与 lastToken 读改写),并发请求同时换发会互相作废轮换链 —— 同 kimi 侧。
+	tokMu sync.Mutex
 	// lastToken 记录当前生效的池 token,轮换失败时避免死循环。
 	lastToken string
 	// coding 限频(chat 不限)

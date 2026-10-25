@@ -1,6 +1,7 @@
 package glmweb
 
 import (
+	"sync"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,5 +67,45 @@ func TestNewClientDirect(t *testing.T) {
 	}
 	if c.NextToken() != "direct-token" {
 		t.Fatalf("NextToken = %q, want direct-token", c.NextToken())
+	}
+}
+
+// TestNextTokenConcurrent 验证并发轮询无 data race(go test -race)且不丢轮次。
+// 修复前 NextToken 的 cursor/tokens 无锁,handler 并发请求下为真实竞态
+// (同 deepseekweb E3 修复;spec .scratch/arch-hardening WP3)。
+func TestNextTokenConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "tokens.txt")
+	if err := os.WriteFile(f, []byte("t1\nt2\nt3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient("", f, "", "", "")
+	var wg sync.WaitGroup
+	const workers, iters = 16, 50
+	seen := make(chan string, workers*iters)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iters; j++ {
+				seen <- c.NextToken()
+			}
+		}()
+	}
+	wg.Wait()
+	close(seen)
+	pool := map[string]bool{"t1": true, "t2": true, "t3": true}
+	n := 0
+	for tok := range seen {
+		if !pool[tok] {
+			t.Fatalf("unexpected token %q", tok)
+		}
+		n++
+	}
+	if n != workers*iters {
+		t.Fatalf("got %d tokens, want %d", n, workers*iters)
+	}
+	if c.PoolSize() != 3 {
+		t.Fatalf("PoolSize = %d, want 3", c.PoolSize())
 	}
 }

@@ -44,7 +44,10 @@ func (d *Glm) chatResponses(c *gin.Context, m *glmModel, req *official.Responses
 }
 
 // ensureToken 确保有有效 access_token(必要时换发;换发失败轮询下一个池 token)。
+// tokMu 护整个换发序列(同 kimi 侧):并发请求同时换发会互相作废轮换链。
 func (d *Glm) ensureToken(client *glmweb.Client) error {
+	d.tokMu.Lock()
+	defer d.tokMu.Unlock()
 	if client == nil || !client.HasToken() {
 		return fmt.Errorf("glm web client unavailable: missing GLM_WEB_TOKENS?")
 	}

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"aurora/httpclient"
@@ -41,8 +42,11 @@ const (
 type Client struct {
 	baseURL   string
 	tlsClient factory.Client
-	cookies   string // 当前生效的 cookie header(ticket + x5sec 等)
-	userID    string // ut / x-device-id(非空即可,服务端不校验绑定)
+	// mu 护 cookies/tokens/cursor 的读写(handler 并发下轮询是 data race,
+	// 同 deepseekweb E3 修复;qianwen 此前完全无锁)。
+	mu      sync.Mutex
+	cookies string // 当前生效的 cookie header(ticket + x5sec 等)
+	userID  string // ut / x-device-id(非空即可,服务端不校验绑定)
 	// token 池(从文件加载,每行一个完整 cookie header)
 	tokens []string
 	cursor int
@@ -76,10 +80,16 @@ func NewClient(baseURL, tokenFile, cookies, userID string) *Client {
 }
 
 // HasToken 报告是否有可用的 cookie header(池或直传)。
-func (c *Client) HasToken() bool { return c.cookies != "" }
+func (c *Client) HasToken() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cookies != ""
+}
 
 // NextToken 轮询取下一个 cookie header;池空返回当前值。
 func (c *Client) NextToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.tokens) == 0 {
 		return c.cookies
 	}
@@ -89,10 +99,16 @@ func (c *Client) NextToken() string {
 }
 
 // SetCookieHeader 切换当前生效的 cookie header(轮换时用)。
-func (c *Client) SetCookieHeader(h string) { c.cookies = h }
+func (c *Client) SetCookieHeader(h string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cookies = h
+}
 
 // PoolSize 返回 token 池大小;直传单 token 时视为 1。
 func (c *Client) PoolSize() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.tokens) == 0 {
 		return 1
 	}
@@ -153,7 +169,11 @@ func AssistantMsg(text string) Message {
 //
 // 每轮用 first_turn + 随机 session/topic id + 全量 messages 历史(无状态,服务端自动建档)。
 func (c *Client) Complete(req ChatRequest) (*http.Response, error) {
-	if c.cookies == "" {
+	// 取 cookie 快照:请求期间轮换(SetCookieHeader)不应撕裂本次请求的 header。
+	c.mu.Lock()
+	cookies := c.cookies
+	c.mu.Unlock()
+	if cookies == "" {
 		return nil, fmt.Errorf("qianwen: no cookie header")
 	}
 	reqID := uuidNoDash()
@@ -210,8 +230,8 @@ func (c *Client) Complete(req ChatRequest) (*http.Response, error) {
 		"x-platform":      "pc_tongyi",
 		"prod_id":         "tongyi",
 	}
-	cookies := parseCookies(c.cookies)
-	resp, err := c.tlsClient.Request(httpclient.POST, c.baseURL+chatPath+"?"+q.Encode(), headers, cookies, bytes.NewReader(buf))
+	cookieHeader := parseCookies(cookies)
+	resp, err := c.tlsClient.Request(httpclient.POST, c.baseURL+chatPath+"?"+q.Encode(), headers, cookieHeader, bytes.NewReader(buf))
 	if err != nil {
 		return nil, err
 	}

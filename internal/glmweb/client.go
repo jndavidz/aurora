@@ -95,6 +95,8 @@ func (c *Client) ClearAccessToken() {
 // "距重抓还剩多久");池空但直传了单 token 时解析直传值。
 // 无法解析的条目跳过 —— 非即时报错路径,解析率由健康端点的 accounts 字段体现。
 func (c *Client) RefreshTokenExps() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	exps := make([]time.Time, 0, len(c.tokens)+1)
 	for _, tok := range c.tokens {
 		if exp, ok := jwtutil.Exp(tok); ok {
@@ -110,10 +112,17 @@ func (c *Client) RefreshTokenExps() []time.Time {
 }
 
 // HasToken 报告是否有可用的 refresh_token(池或直传)。
-func (c *Client) HasToken() bool { return c.refreshToken != "" }
+func (c *Client) HasToken() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshToken != ""
+}
 
 // NextToken 轮询取下一个 refresh_token;池空返回当前 token。
+// cursor/tokens 与换发互斥同锁(handler 并发下轮询是 data race,同 deepseekweb E3 修复)。
 func (c *Client) NextToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.tokens) == 0 {
 		return c.refreshToken
 	}
@@ -123,10 +132,16 @@ func (c *Client) NextToken() string {
 }
 
 // SetRefreshToken 切换当前生效的 refresh_token(轮换时用)。
-func (c *Client) SetRefreshToken(t string) { c.refreshToken = t }
+func (c *Client) SetRefreshToken(t string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshToken = t
+}
 
 // PoolSize 返回 token 池大小;直传单 token 时视为 1。
 func (c *Client) PoolSize() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.tokens) == 0 {
 		return 1
 	}
