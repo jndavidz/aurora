@@ -79,6 +79,7 @@ Status: ready-for-agent
 - 通道健康：单发确认新 TLS 栈（tls-client 1.16.0 / Chrome_150 + UA 150）下无 403、无握手失败（2026-10-26 已过：HTTP 200，无拦截）。
 - 人工：真机语音一轮连续对话，验收首音体感与流式播报连续性（分段不断流、不念思考）。
 - **决策门（每次只动一个变量）**：L1 达标但 L2 不达标 → 收紧首句约束（prompt），不动 bridge 分段门槛（不可配置，属代码变更）；L2 达标但 L3 不达标 → 查 TTS（豆包另立项）。**注意**：`deepseek` 是 `SearchAlways` 模型，`DEEPSEEK_WEB_SEARCH` 开关对它无效——「关搜索」不再是可用杠杆；若 L1 超标，记录为已知约束，免搜索变体另立项。
+- **prompt 长度是首 token 的主导杠杆（2026-10-26 探针实证）**：同一问题、单发——无 system prompt 1.42s；system ≈100 字 3.08s；短 system（16 字）1.65s；天气类（触发搜索）4.35s。据此已把 bridge `system_prompt` 压到 30 字内，并把每轮追加的 `rule_prompt`（原「300 字以内」长句，既拖慢又与 70 字冲突）改为「简短口语，不用 markdown」。若首音仍不达标，下一步才是「免搜索变体」的代码立项。
 - aurora 侧回归：新镜像部署前本地全量测试绿——2026-10-26 吸收后在 `local-toolfix` 实测 `go test ./...` 37 包全绿（`-p 1`），UA 对齐后 `internal/deepseekweb`、`internal/provider` 复测绿；WSL 侧 `-race` 关键包尚未在吸收后补跑，部署前需补。
 
 **全局约束**：一切 live 请求遵守防风控纪律（单发、真人节奏、不复跑不重放）；凭证（aurora 鉴权值、上游 token）不进 git、不进文档、不进对话记录——此前一次探查已意外回显 NAS 侧若干服务 token，本次所有远程命令必须先过滤键值再输出；NAS 侧变更执行后回读验证。
