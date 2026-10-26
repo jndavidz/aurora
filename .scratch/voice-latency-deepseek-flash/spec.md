@@ -63,14 +63,16 @@ Status: ready-for-agent
 - `max_tokens` 300 → 220、`history_max_messages` 20 → 10：
   - `max_tokens` 只作用于尾部时长，且必须与 `rule_prompt` 的「300 字以内」自洽——200 tokens 对中文可能中途截断（播报断流的体验问题），故取 220–260；若验收出现截断，先调 `rule_prompt` 到 150 字，不要先动 stream（保持单变量）。
   - `history_max_messages` 只影响会话未命中轮（池命中时 aurora 只发末条，已核实）：10 条 = 5 轮，用于 TTL 过期/新话题后重建上下文。
-- **TTS 前置审计（只读确认生产配置，不改代码）**：记录生产 `tts_provider`。若为 `xiaoai` 原生 TTS（阻塞式「合成落盘 → play_url」），L3 首音含固定合成开销，验收主指标取 L2；若为豆包，确认 `tts.doubao.stream: true`（默认已开）以边合成边播。
-- **工具注册表审计（只读）**：bridge 的流式路径在工具注册表非空且 `tool_calls_enabled` 为真时走「探测式流式」——首帧若出现 `tool_calls` 会放弃该请求并整轮转非流式（多付一次请求、延迟翻倍）。语音闲聊不需要工具，故确认该 provider 的工具注册表为空；若非空，配置 `tool_calls_enabled: false` 把它锁在纯对话路径。
+- **TTS 已确认（2026-10-26 用户拍板）**：生产为 `xiaoai` 原生 TTS（阻塞式「合成落盘 → play_url」），L3 首音含固定合成开销 —— 验收以 L2 为主指标，L3 只记录基线；豆包/流式 TTS 以后另议，不在本 spec。
+- **工具能力边界（用户拍板 2026-10-26：aurora 只做对话，不做工具/编程）**：bridge 的工具注册表**永远非空**（内置 hass / weather / music / device_status / ir_send 五个模块自动注册），且 `tool_calls_enabled` 默认 true —— 即每轮都会把 `tools` 带给后端；而 aurora DeepSeek **chat** 路径不消费 tools（`deepseekSenderReq` 无 tools 字段，工具协议只在已封存的 `-coding` 变体里）。因此：
+  - 本期显式配置 `tool_calls_enabled: false`：消除无效 tools 载荷，也避免 bridge 走「探测式流式」（首帧 tool_calls 会放弃请求整轮转非流式）。
+  - **能力边界（须告知用户）**：KWS 直连短语命令（`core/commands` 的 `direct_table`，不进对话）不受影响；依赖 LLM 工具的自然语言设备控制（如「把客厅灯调暗一点」）在切到 aurora 后会失效。若要保留，需另立项（aurora 侧工具支持或 bridge 侧意图路由），不在本 spec。
 - 变更后重启 bridge 容器；回退 = 配置改回官方 API 三项（base_url/model/stream），其余参数可保留。
 
 **WP3 验收**（三段预算；目标值是设计目标，不是实测值）：
 - **L1 HTTP 首 delta**（aurora chat/completions 流式端点，与测速同口径同 prompt）：首轮目标 ≤2.0s（吸收前实测 1.8–1.9s）；**会话续轮目标 ≤1.5s**（复用上游 session，省掉建会话与全量重发，这是本 spec 的核心增量）。
 - **L2 bridge 首段就绪**（`turn_trace` 首条 `tts_start` − `llm_start`）：目标 ≤2.6s，= L1 + 首句生成；首句约束是这里的主要杠杆。
-- **L3 真机首音**（`turn_trace` 首条 `play_url` − `llm_start`）：目标 ≤3.0s 体感；若生产为 `xiaoai` 原生 TTS，以 L2 为主指标，L3 只记录不设硬门槛。
+- **L3 真机首音**（`turn_trace` 首条 `play_url` − `llm_start`）：生产为 xiaoai 原生 TTS，**L3 只记录基线、不设硬门槛**（含固定合成开销，主指标看 L2）。
 - 通道健康：单发确认新 TLS 栈（tls-client 1.16.0 / Chrome_150 + UA 150）下无 403、无握手失败。
 - 人工：真机语音一轮连续对话，验收首音体感与流式播报连续性（分段不断流、不念思考）。
 - **决策门（每次只动一个变量）**：L1 > 2.0s → 先关 `DEEPSEEK_WEB_SEARCH` 复测；L1 达标但 L2 不达标 → 收紧首句约束（prompt），不动 bridge 分段门槛（不可配置，属代码变更）；L2 达标但 L3 不达标 → 查 TTS provider / `stream` 设置。
@@ -94,6 +96,8 @@ Status: ready-for-agent
 - `DEEPSEEK_WEB_SEARCH` 默认值变更（维持「智能搜索恒开」拍板；仅在 WP3 决策门触发时作为单变量复测项）。
 - aurora 其他通道（GLM/Kimi/MiniMax 等）的接入与调优;CDP 桥类通道一律不用于语音。
 - open-xiaoai 仓库模板配置与 NAS 生产副本的一致性同步（该仓库自身纪律）。
+- **自然语言设备控制（LLM 工具）**：aurora 只做对话，不实现工具调用；切到 aurora 后依赖工具的请求由 bridge 侧另行设计（本地意图路由或专用后端），另立项。
+- TTS 换豆包/流式合成（用户 2026-10-26 拍板：以后再说）。
 
 ## Further Notes
 
@@ -106,5 +110,5 @@ Status: ready-for-agent
 - **已否决的加速手段（如实记录）**：
   - **预热会话**（唤醒时预建上游 session）：能消掉首轮建会话成本，但等于每唤醒多打一次上游请求，与防风控纪律（减少机器化痕迹）冲突，且首轮收益无法复用到「用户换话题」场景——不做。
   - **bridge 分段门槛参数化**（如首段强制 4 字切）：`SentenceSegmenter` 门槛目前是构造参数、未暴露配置，改它属 bridge 代码变更，超出本 spec「bridge 零改动」；改用 prompt 首句约束达到同等效果。
-  - **切换豆包流式 TTS**：能压 L3，但引入外部 TTS 依赖与音色变更，且不属于延迟主矛盾（L1/L2 更大）；仅在 L2 达标而 L3 明显拖累时另行评估。
+  - **切换豆包流式 TTS**：能压 L3，但引入外部 TTS 依赖与音色变更；用户 2026-10-26 拍板「以后再说」，本期不做。
 - **首轮 vs 续轮的验收分工**：桥接连续对话默认开启，第二轮起才触发会话复用；L1 续轮目标（≤1.5s）必须单独测一组「同 session_key 的第二轮」，不能拿首轮数据代替。
