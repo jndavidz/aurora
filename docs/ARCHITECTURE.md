@@ -440,13 +440,14 @@ DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16
 | `internal/provider/*_coding.go` | coding 变体实现 |
 | `internal/provider/input.go` | 双接口共享的输入拍平助手(含「拍平」flatten 家族) |
 | `internal/provider/session/` | 上游会话复用策略 module(池/TTL/信令/降级) |
-| `internal/provider/deepseek_chat_session.go` | DeepSeek 会话复用 adapter(flow loop) |
+| `internal/provider/deepseek_chat_session.go` | DeepSeek 会话复用 adapter(池交互/降级/归还循环单点 `runStreaming`,流式与非流式共用) |
 | `internal/provider/wire.go` | 流式 wire emitter(`ResponsesEmitter`/`ChunkStream`)——两表面序列骨架单点,失败发射点顺带上报熔断器 |
 | `internal/provider/sse.go` | Responses 流式事件输出器(emitter 底层 SSE 写入) |
 | `internal/provider/gemini_cdp.go` | CDP 桥公共底座 `cdpBase`(桥池/熔断/唤醒/模型归一)+ Gemini 桥 provider |
 | `internal/*web/` | 各网页逆向客户端包(协议层) |
 | `internal/toolcall/` | 标签解析、recover、fence、prompt、params |
 | `internal/handler/chat_handler.go` | `Nightmare`/`Responses` 入口 + provider 分发 + 工具调用路径 |
+| `internal/handler/chatgpt_turnloop.go` | ChatGPT 兜底 continue 轮询循环单点(`chatgptTurnLoop`,三入口共用;ping 参数化;sendTurn 可注入 seam) |
 | `internal/handler/shared.go` | `toolCallingEnabled`、拒绝分类器、`sanitizeRefusalHistory`(仅工具路径调用) |
 | `internal/handler/router.go` | Registry 构建 + 路由注册 + 流式失败上报通道注入 |
 | `internal/handler/models_handler.go` | ChatGPT 模型目录 + `normalizeCodingModel` |

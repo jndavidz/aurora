@@ -74,6 +74,15 @@
 
 二期候选（spec Out of Scope）：DeepSeek 流式降级状态机收口（flow.runStreaming）、ChatGPT 兜底 turnLoop 三副本合并。
 
+### 架构收敛二期 arch-deepening-phase2（2026-10-26，spec `.scratch/arch-deepening-phase2/`）
+
+两块「三份手抄」收口，均行为保全（细节微差见各 commit），全量测试绿：
+
+| 项 | commit | 说明 |
+|---|---|---|
+| WP1 DeepSeek 流式降级收口 | `88ef55d` | flow.acquireLease+runStreaming 单点（池交互/零增量降级/归还），两流式表面薄壳化；B 项拍板注释三合一；新增 3 个流式降级用例 |
+| WP2 ChatGPT 兜底 turnLoop | `eb2728a` | 三份 continue 轮询循环合为 chatgptTurnLoop；sentinel ping 参数化（行为保全，仅 chat/completions 发，是否全开为观察项）；共享前奏 prepareChatGPTTurn；**兜底路径首个自动化测试**（sendTurn 注入 seam，4 用例） |
+
 ### 模型命名统一（09-04/05，`31b8df8`+`5416b19`）
 
 **15 个模型 id 全部小写 `-` 形式**（NAS live 已验证）：
