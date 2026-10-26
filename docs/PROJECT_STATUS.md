@@ -11,7 +11,8 @@
 > MCP 方案文档已移回 [MCP_INTEGRATION_2026-09-01.md](MCP_INTEGRATION_2026-09-01.md)（暂不执行，独立保留）。
 > 仍保留在 docs/ 的：各通道 `*.md`（活协议文档）、`NUC_RESOURCE_ANALYSIS_2026-08-31.md`
 >（音频隔离实测数据基线，长期有效）、`PI_AGENT_DEBUG.md`（pi 路由适配活运维知识，
-> router.go:115 引用）、`ARCHITECTURE_AUDIT_2026-08-31.md`（1712 行全量审计，查阅用）。
+> router.go:115 引用）、`ARCHITECTURE_AUDIT_2026-08-31.md`（1712 行全量审计，查阅用）、
+> [UPSTREAM_ABSORB_AUDIT_2026-10-26.md](UPSTREAM_ABSORB_AUDIT_2026-10-26.md)（上游 8 提交吸收 + 21 commit 并入主干的复核记录与缺陷清单）。
 >
 > 最后更新：2026-09-05（下午）｜ 基线：`local-toolfix`（5416b19 之后新增 E2 收口 + 遗留缺陷清零 + C2/C3/N3）｜ 31 包测试全绿
 
