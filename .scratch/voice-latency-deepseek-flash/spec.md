@@ -64,9 +64,9 @@ Status: ready-for-agent
   - `max_tokens` 只作用于尾部时长，且必须与 `rule_prompt` 的「300 字以内」自洽——200 tokens 对中文可能中途截断（播报断流的体验问题），故取 220–260；若验收出现截断，先调 `rule_prompt` 到 150 字，不要先动 stream（保持单变量）。
   - `history_max_messages` 只影响会话未命中轮（池命中时 aurora 只发末条，已核实）：10 条 = 5 轮，用于 TTL 过期/新话题后重建上下文。
 - **TTS 已确认（2026-10-26 用户拍板）**：生产为 `xiaoai` 原生 TTS（阻塞式「合成落盘 → play_url」），L3 首音含固定合成开销 —— 验收以 L2 为主指标，L3 只记录基线；豆包/流式 TTS 以后另议，不在本 spec。
-- **工具能力边界（用户拍板 2026-10-26：aurora 只做对话，不做工具/编程）**：bridge 的工具注册表**永远非空**（内置 hass / weather / music / device_status / ir_send 五个模块自动注册），且 `tool_calls_enabled` 默认 true —— 即每轮都会把 `tools` 带给后端；而 aurora DeepSeek **chat** 路径不消费 tools（`deepseekSenderReq` 无 tools 字段，工具协议只在已封存的 `-coding` 变体里）。因此：
+- **工具能力边界（用户拍板 2026-10-26：aurora 只做对话；语音控制走命令表，不依赖 LLM 工具）**：bridge 的工具注册表**永远非空**（内置 hass / weather / music / device_status / ir_send 五个模块自动注册），且 `tool_calls_enabled` 默认 true —— 即每轮都会把 `tools` 带给后端；而 aurora DeepSeek **chat** 路径不消费 tools（`deepseekSenderReq` 无 tools 字段，工具协议只在已封存的 `-coding` 变体里）。处置：
   - 本期显式配置 `tool_calls_enabled: false`：消除无效 tools 载荷，也避免 bridge 走「探测式流式」（首帧 tool_calls 会放弃请求整轮转非流式）。
-  - **能力边界（须告知用户）**：KWS 直连短语命令（`core/commands` 的 `direct_table`，不进对话）不受影响；依赖 LLM 工具的自然语言设备控制（如「把客厅灯调暗一点」）在切到 aurora 后会失效。若要保留，需另立项（aurora 侧工具支持或 bridge 侧意图路由），不在本 spec。
+  - **无用户可见功能损失**：设备控制由命令表命中（KWS `direct_table`）完成、不进对话，本来就不走 LLM 工具；只有「自然语言随口控制」这类未使用的形态会失去，不构成回退理由。
 - 变更后重启 bridge 容器；回退 = 配置改回官方 API 三项（base_url/model/stream），其余参数可保留。
 
 **WP3 验收**（三段预算；目标值是设计目标，不是实测值）：
@@ -96,7 +96,7 @@ Status: ready-for-agent
 - `DEEPSEEK_WEB_SEARCH` 默认值变更（维持「智能搜索恒开」拍板；仅在 WP3 决策门触发时作为单变量复测项）。
 - aurora 其他通道（GLM/Kimi/MiniMax 等）的接入与调优;CDP 桥类通道一律不用于语音。
 - open-xiaoai 仓库模板配置与 NAS 生产副本的一致性同步（该仓库自身纪律）。
-- **自然语言设备控制（LLM 工具）**：aurora 只做对话，不实现工具调用；切到 aurora 后依赖工具的请求由 bridge 侧另行设计（本地意图路由或专用后端），另立项。
+- **自然语言设备控制（LLM 工具）**：不是需求——用户确认语音控制走命令表命中（KWS `direct_table`），不依赖 LLM 工具；本 spec 显式关闭 `tool_calls_enabled` 即可。
 - TTS 换豆包/流式合成（用户 2026-10-26 拍板：以后再说）。
 
 ## Further Notes
