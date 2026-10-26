@@ -7,6 +7,12 @@ Aurora 是「网页端 → OpenAI 兼容 API」网关(Go):对外暴露 `/v1/chat
 - 构建 `go build -o aurora .`;测试 `go test ./...`(文件名含 `_live` 的用例由 `DS_TEST_TOKEN` 等环境变量守卫,缺省自动跳过)
 - NAS 一键部署:`bash scripts/deploy_nas.sh`
 
+## 分支与同步
+
+- **主干 = `local-toolfix`**（origin 默认分支）：开发、构建、部署都以它为准；镜像 tag 仍是 `aurora:local-toolfix`（分支不改名）。
+- **`main` = 上游镜像**：跟踪 `aurora-develop/aurora` 的 main，只做上游同步、不承载自有开发。同步走 `main` 上 `git fetch upstream && git merge --ff-only upstream/main`，再 `git merge main` 回 `local-toolfix`。
+- feature 分支短命：做完 fast-forward 并入主干后即删除，不长期叠加（2026-10-26 已并入 `arch-hardening`、`arch-deepening-phase2` 并删除）。
+
 ## 目录地图
 
 | 路径 | 职责 |

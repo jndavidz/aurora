@@ -7,7 +7,7 @@
 - 每个 feature 一个目录：`.scratch/<feature-slug>/`
 - Spec 是 `.scratch/<feature-slug>/spec.md`
 - Implementation issues 每个 ticket 一个文件，路径为 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`，从 `01` 开始编号；绝不要写成一个 combined tickets file
-- Triage state 记录为每个 issue file 顶部附近的 `Status:` 行（role 字符串见 `triage-labels.md`）
+- Triage state 记录为每个 issue file 顶部附近的 `Status:` 行：ticket 用 `pending` / `claimed` / `done`，spec 用 `ready-for-agent` / `closed`
 - Comments 和 conversation history 追加到文件底部的 `## Comments` heading 下
 
 ## When a skill says "publish to the issue tracker"

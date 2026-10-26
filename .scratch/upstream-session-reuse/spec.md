@@ -1,6 +1,6 @@
 # Spec: 上游会话复用（Upstream Session Reuse）
 
-Status: ready-for-agent
+Status: closed
 
 ## Problem Statement
 
