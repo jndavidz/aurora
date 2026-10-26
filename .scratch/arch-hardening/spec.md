@@ -1,6 +1,6 @@
 # Spec: 架构收敛一期——bug 止血 + 流式 wire emitter 地基
 
-Status: ready-for-agent
+Status: closed（2026-10-26：全部 ticket done，两分支已并入主干 local-toolfix 并删除）
 
 来源：2026-10-26 架构审查（深读源码 + 对照 one-api / Bifrost / LiteLLM 业界实践），9 个候选中按「bug 修复 < deepening；改动面小 < 大；被依赖地基 < 上层」排序后的一期范围。所有 bug 断言均已经过二次代码复核实锤，非推演。
 

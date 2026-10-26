@@ -1,6 +1,6 @@
 # Spec: 架构收敛二期——DeepSeek 流式降级收口 + ChatGPT 兜底 turnLoop 合并
 
-Status: ready-for-agent
+Status: closed（2026-10-26：全部 ticket done，已并入主干 local-toolfix 并删除分支）
 
 来源：2026-10-26 架构审查候选 4/5，一期（`arch-hardening`，2026-10-26 完成）的 Out of Scope 续章。一期已落地的 wire emitter（`ResponsesEmitter`/`ChunkStream`）是本 spec 两项工作的直接地基：收口后的循环只调 emitter 发输出，不再关心 wire 格式。
 

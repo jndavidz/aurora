@@ -1,6 +1,6 @@
 # Spec: 语音链路降延迟——选定 deepseek-v4-flash,bridge 切 aurora 并开流式
 
-Status: ready-for-agent
+Status: closed（2026-10-26 T07 收口）
 
 来源：2026-10-26 面向主要消费者 open-xiaoai（小爱语音）的通道测速与降延迟方案，用户拍板「模型选 deepseek flash」。**注意（2026-10-26 部署时校正）**：原测速（每通道单发×2 轮、真人节奏）跑在 NAS 旧镜像上，当时暴露的是 `deepseek-v4-flash`（TTFT 1.8–1.9s、总时长 2.8–3.1s、无思考直接出正文、~43 字/s）；主干自 2026-09-27 起已下线 v4-flash/v4-pro，只暴露 `deepseek`（快速模式 + **智能搜索恒开** + 非深度思考）。因此旧数据仅作方向参考，验收必须用 `deepseek` 重测（新基线见 WP3）。对照数据：minimax-m3 TTFT 1.4s 但吐字 ~17 字/s、总时长 8s+；kimi/glm 1.5–1.8s 但带思考拖长；deepseek-v4-pro 有思考文本泄漏进正文（TTS 会念出）；mimo-v2.5-pro 两发皆空回复；qwen 3.9s。
 
@@ -101,7 +101,7 @@ Status: ready-for-agent
 - aurora 其他通道（GLM/Kimi/MiniMax 等）的接入与调优;CDP 桥类通道一律不用于语音。
 - open-xiaoai 仓库模板配置与 NAS 生产副本的一致性同步（该仓库自身纪律）。
 - **自然语言设备控制（LLM 工具）**：不是需求——用户确认语音控制走命令表命中（KWS `direct_table`），不依赖 LLM 工具；本 spec 显式关闭 `tool_calls_enabled` 即可。
-- TTS 换豆包/流式合成（用户 2026-10-26 拍板：以后再说）。
+- TTS 换豆包/流式合成（用户 2026-10-26 拍板：以后再说；收口再确认：只留 bridge 既有 stream 接口形态，不实施）。
 
 ## Further Notes
 
@@ -117,3 +117,14 @@ Status: ready-for-agent
   - **bridge 分段门槛参数化**（如首段强制 4 字切）：`SentenceSegmenter` 门槛目前是构造参数、未暴露配置，改它属 bridge 代码变更，超出本 spec「bridge 零改动」；改用 prompt 首句约束达到同等效果。
   - **切换豆包流式 TTS**：能压 L3，但引入外部 TTS 依赖与音色变更；用户 2026-10-26 拍板「以后再说」，本期不做。
 - **首轮 vs 续轮的验收分工**：桥接连续对话默认开启，第二轮起才触发会话复用；L1 续轮目标（≤1.5s）必须单独测一组「同 session_key 的第二轮」，不能拿首轮数据代替。
+
+### 2026-10-26 收口记录（T07）
+
+- **验收结论**：L1 单发 1.42s（≤2.0s 达标）；L2 受埋点限制取近似值（`llm_ms` 为流结束口径），属已知约束；L3 只记基线。真机四轮听感：首音/断流/不念思考/首句先结论/「退下」退出全部通过（详见 T05/T06）。
+- **首音拆解**（T06 第三轮 trace）：LLM 首 token ~1.5s + 首句生成 ~0.3–0.5s + 首段 TTS 合成 0.4–1.1s + 起播 0.1–0.2s ≈ 2.3–3.3s；prompt 长度是首 token 主导杠杆（已压 system_prompt ≤30 字、rule_prompt 改短）。
+- **三优化项拍板（用户 2026-10-26）与落地**：
+  1. 豆包流式 TTS：**只留接口**——bridge speaker 的 `stream: true` 形态保留，不实施（本 spec Out of Scope 相应条目升级为「不实施,仅保留接口」）。
+  2. aurora 免搜索变体：**已落地** `deepseek-no-search`（快速模式 + 非深度思考 + `SearchNever` 恒关搜索），与 `deepseek`（搜索变体,SearchAlways 不变）并存于默认目录，**由消费者请求的 `model` 字段指令选择**。WP3 决策门里「免搜索变体另立项」至此完成。生产生效需重建镜像部署 NAS,bridge `openai.model` 切 `deepseek-no-search` 为语音默认——属远程变更,待单独批准执行（同 T04 模式）,回退 = model 改回 `deepseek`。
+  3. bridge 首段埋点：**已落地** `turn_trace.llm_first_token_ms`（`llm_start` → 首个非空文本 delta）,补齐「`llm_ms` 为流结束口径」缺口;后续复测 L2 可精确读数。
+- **遗留项**：① 其余 `*web` 通道 UA 对齐（Chrome/150,另立项）;② 豆包流式 TTS 实施（后续选择）;③ bridge 换话题 `X-Session-Action: new` 未接;④ 上述第 2 项的 NAS 部署 + bridge 默认模型切换。
+- `docs/DEEPSEEK.md` §二 模型目录已更新（`deepseek-no-search` 行与命名规则）;`docs/NAS_DEPLOYMENT.md` 核对无偏差。

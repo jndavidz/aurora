@@ -24,6 +24,7 @@ func TestParseDeepSeekModel(t *testing.T) {
 		caps    []Capability
 	}{
 		{"deepseek", variantChat, modeQuick, []Capability{CapWebSearch, CapReasoning, CapVision}},
+		{"deepseek-no-search", variantChat, modeQuick, []Capability{CapReasoning, CapVision}},
 		{"deepseek-v4-flash", "", "", nil},      // 2026-09-27 下线
 		{"deepseek-v4-pro", "", "", nil},        // 2026-09-27 下线
 		{"deepseek-v4-flash-coding", variantCoding, "", []Capability{CapFunctionCall, CapReasoning}},
@@ -68,8 +69,31 @@ func TestRegistryResolve(t *testing.T) {
 	if p := r.Resolve("gpt-5.6"); p != nil {
 		t.Fatalf("Resolve(gpt-5.6) = %v, want nil", p.Name())
 	}
-	if len(r.Models()) != 1 {
-		t.Errorf("Models() = %d entries, want 1", len(r.Models()))
+	if len(r.Models()) != 2 {
+		t.Errorf("Models() = %d entries, want 2 (deepseek + deepseek-no-search)", len(r.Models()))
+	}
+}
+
+// 免搜索变体的搜索开关语义:SearchNever 恒关(即使 DEEPSEEK_WEB_SEARCH 开着);
+// "deepseek" 的 SearchAlways 恒开(即使 DEEPSEEK_WEB_SEARCH 关着)。
+func TestDeepSeekSearchEnabledByVariant(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.DeepSeekWebSearch = true
+	d := NewDeepSeek(cfg)
+
+	if m := d.byID["deepseek-no-search"]; m == nil {
+		t.Fatal("deepseek-no-search not in default catalog")
+	} else if d.searchEnabled(m, false) {
+		t.Error("deepseek-no-search: searchEnabled = true, want false (SearchNever)")
+	}
+
+	cfgOff := newTestConfig()
+	cfgOff.DeepSeekWebSearch = false
+	dOff := NewDeepSeek(cfgOff)
+	if m := dOff.byID["deepseek"]; m == nil {
+		t.Fatal("deepseek not in default catalog")
+	} else if !dOff.searchEnabled(m, false) {
+		t.Error("deepseek: searchEnabled = false, want true (SearchAlways)")
 	}
 }
 

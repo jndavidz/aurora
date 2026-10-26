@@ -35,6 +35,10 @@ type deepseekModel struct {
 	// 2026-09-27 起 exposed id "deepseek" 的定义即「智能搜索 + 非深度思考」,
 	// 搜索是模型参数的一部分,与全局开关解耦。
 	SearchAlways bool
+	// SearchNever 为 true 时恒不带搜索(免搜索变体,2026-10-26 语音链路
+	// 拍板:搜索步骤是首音延迟的主导项之一)。与 SearchAlways 互斥,
+	// 且同样与 DEEPSEEK_WEB_SEARCH 解耦——开关开着也不带搜索。
+	SearchNever bool
 }
 
 // DeepSeek 实现 Provider 接口,走 chat.deepseek.com 网页逆向。
@@ -53,11 +57,13 @@ type DeepSeek struct {
 }
 
 // defaultDeepSeekModels 是 DEEPSEEK_MODELS 未配置时的默认目录。
-// 2026-09-27 用户拍板:去掉 v4-pro/flash,只暴露一个 "deepseek"
-// (= 快速模式 + 智能搜索 + 非深度思考)。coding 变体已封存(CODING_ENABLED),
-// 解析逻辑保留但默认目录不含。
+// 2026-09-27 用户拍板:去掉 v4-pro/flash,收敛为 "deepseek"
+// (= 快速模式 + 智能搜索 + 非深度思考);2026-10-26 增补免搜索变体
+// "deepseek-no-search"(语音链路拍板,见 parseDeepSeekModel)。coding
+// 变体已封存(CODING_ENABLED),解析逻辑保留但默认目录不含。
 var defaultDeepSeekModels = []string{
 	"deepseek",
+	"deepseek-no-search",
 }
 
 // NewDeepSeek 构造 DeepSeek provider。无 token 池时仍可构造(返回 502 时提示)。
@@ -96,6 +102,11 @@ func parseDeepSeekModel(id string) *deepseekModel {
 	switch {
 	case id == "deepseek":
 		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeQuick, Caps: []Capability{CapWebSearch, CapReasoning, CapVision}, SearchAlways: true}
+	case id == "deepseek-no-search":
+		// 2026-10-26 语音链路拍板:与 "deepseek" 同为快速模式 + 非深度思考,
+		// 唯一差异是恒关搜索(SearchNever,不受 DEEPSEEK_WEB_SEARCH 影响)——
+		// 免掉搜索步骤换取更低首 token 延迟,代价是联网类问题无实时信息。
+		return &deepseekModel{ID: id, Variant: variantChat, Mode: modeQuick, Caps: []Capability{CapReasoning, CapVision}, SearchNever: true}
 	case strings.HasSuffix(id, "-coding"):
 		return &deepseekModel{
 			ID:      id,

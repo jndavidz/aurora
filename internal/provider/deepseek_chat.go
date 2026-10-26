@@ -21,6 +21,7 @@ import (
 // searchEnabled 返回请求是否带联网搜索。
 // 2026-09-27 起 exposed id "deepseek" 的定义即「智能搜索 + 非深度思考」,
 // SearchAlways=true 恒开搜索,不受 DEEPSEEK_WEB_SEARCH 影响(其余模型按开关)。
+// 2026-10-26 起 SearchNever=true 恒关搜索(免搜索变体),同样不受开关影响。
 // 有图时恒为 false(带图时上游忽略搜索开关)。
 func (d *DeepSeek) searchEnabled(m *deepseekModel, hasImages bool) bool {
 	if hasImages {
@@ -28,6 +29,9 @@ func (d *DeepSeek) searchEnabled(m *deepseekModel, hasImages bool) bool {
 	}
 	if m.SearchAlways {
 		return true
+	}
+	if m.SearchNever {
+		return false
 	}
 	return m.Mode == modeQuick && d.cfg.DeepSeekWebSearch
 }

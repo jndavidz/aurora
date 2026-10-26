@@ -48,6 +48,7 @@ DeepSeek 网页版**没有"工具调用"通道**,只有两个原生能力;客户
 | exposed id | 变体 | 通道 | 能力 |
 |---|---|---|---|
 | `deepseek` | chat | 网页·快速 | 对话 + 智能搜索(恒开) + 识图,非深度思考,无工具 |
+| `deepseek-no-search` | chat | 网页·快速 | 同 `deepseek` 但**恒关搜索**(免搜索变体,换更低首 token 延迟) |
 | `deepseek-v4-flash-coding` | coding | 网页 | 文本协议工具调用 |
 | `deepseek-v4-pro-coding` | coding | 网页 | 文本协议工具调用(重推理) |
 
@@ -55,9 +56,15 @@ DeepSeek 网页版**没有"工具调用"通道**,只有两个原生能力;客户
 > = 快速模式 + 智能搜索 + 非深度思考;搜索是模型参数的一部分,不受
 > `DEEPSEEK_WEB_SEARCH` 开关影响。coding 变体已封存(`CODING_ENABLED`,见
 > docs/CHATGPT_TOOL_BRIDGE.md),仅保留解析逻辑。
+>
+> 2026-10-26 新增 `deepseek-no-search`(语音链路拍板):与 `deepseek` 同为
+> 快速模式 + 非深度思考,唯一差异是恒关搜索(`SearchNever`,同样不受
+> `DEEPSEEK_WEB_SEARCH` 影响)——智能搜索的搜索步骤是首 token 延迟主导项
+> 之一,免掉它换取首音;代价是联网类问题无实时信息。默认目录含此 id。
 
 命名规则:
 - `deepseek`(无后缀)→ chat 变体快速模式,SearchAlways=true。
+- `deepseek-no-search` → chat 变体快速模式,SearchNever=true(恒关搜索)。
 - `-coding` 后缀 → coding 变体(function_call + reasoning)。
 
 ## 三、chat 变体硬规则
@@ -88,8 +95,8 @@ DeepSeek 网页版**没有"工具调用"通道**,只有两个原生能力;客户
 #   取 .value 一行一个写入本文件。不是 cookie!
 DEEPSEEK_WEB_TOKENS=/path/to/deepseek_tokens.txt
 
-# 暴露的模型目录(逗号分隔;不配置用默认: deepseek)
-DEEPSEEK_MODELS=deepseek
+# 暴露的模型目录(逗号分隔;不配置用默认: deepseek,deepseek-no-search)
+DEEPSEEK_MODELS=deepseek,deepseek-no-search
 
 # 网页端 base(默认 https://chat.deepseek.com)
 DEEPSEEK_WEB_BASE=https://chat.deepseek.com
