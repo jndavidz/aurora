@@ -45,6 +45,11 @@ OpenAI 兼容客户端(pi / zcode / aurora-chat.html / codebuddy)
 function_call_output items)。**不依赖 `previous_response_id`/`store`**(DeepSeek 不支持,
 aurora 也无需)`maxHistoryChars`(100000)预检保留,防长历史膨胀。
 
+> **ChatGPT 兜底例外(2026-10-26 起)**:`/v1/responses` 在 ChatGPT 路径上接受
+> `previous_response_id` —— 命中 handler 内 SessionManager 的上一轮响应时,复用其
+> conversation/parent 与 call_id→name 映射;未知 id 返回 400 `invalid_previous_response_id`。
+> provider 路径(DeepSeek 等)仍不依赖该字段,上面的「客户端持有上下文」对它们才成立。
+
 **上游会话复用**(2026-09-27 起,spec:`.scratch/upstream-session-reuse/spec.md`):
 带 `X-Session-Key` 头(或 chat completions 的 `user` 字段)的连续请求,复用同一个上游
 网页 session、只发本轮增量(`parent_message_id` = 上轮 `response_message_id`);无 key
