@@ -31,6 +31,11 @@
 2. **aurora 免搜索变体：已落地**——exposed id `deepseek-no-search`（快速模式 + 非深度思考 + `SearchNever` 恒关搜索），与搜索变体 `deepseek` 并存于默认目录，**由消费者（bridge）请求里的 `model` 字段指令选择**；`deepseek` 的 SearchAlways 语义不变。见 `internal/provider/deepseek.go` / `deepseek_chat.go`。
 3. **bridge 首段埋点：已落地**——`turn_trace` 新增 `llm_first_token_ms`（`llm_start` → 首个非空文本 delta），补齐「`llm_ms` 为流结束口径」的缺口；L2 = 首 `tts_start` − `llm_start` 之外，L1 桥接侧口径可精确读数。
 
-**遗留远程步骤（待单独批准，同 T04 模式）**：重建 aurora 镜像并部署 NAS（新变体需新镜像）→ bridge 生产配置 `openai.model` 切 `deepseek-no-search`（免搜索为语音默认；需要联网信息的问题再靠会话/单发改 `deepseek`）。切回 = `model` 改回 `deepseek`。
+**遗留远程步骤（2026-10-26 23:5x 用户授权后已执行）**：
+- aurora 新镜像 `9e3b604d3752` 已构建推 NAS 并 `compose up`（探活 200；`/v1/models` 广告 `deepseek` + `deepseek-no-search`；回退点：旧镜像 `edd4f25c705a`，load 时被挤成悬空镜像，可按 ID 恢复）。
+- 免搜索路径单发验证：HTTP 200、TTFT 1.88s、正文干净、无搜索/citation 帧。
+- bridge 两层配置切 `deepseek-no-search` 并修复**执行中发现的错配**：`runtime-overrides.json`（覆盖层，优先级高于 config.py）在当晚 20:02 被写回「官方 API」态（`base_url=https://api.deepseek.com` + 官方密钥 + 无效 id `deepseek-flash`）——即 T04 之后的某次写入把生产实际打回了官方直连（20:02 后无真实流量，未造成可见影响）。已备份后修复：覆盖层 base_url→`http://127.0.0.1:65432/v1`、api_key→aurora 鉴权值（程序化写入不回显）、model→`deepseek-no-search`；config.py 层同步切 model。重启后启动行确认 `base_url=http://127.0.0.1:65432/v1, model=deepseek-no-search`。备份：`config.py.bak-model-nosearch-20261026235708`、`data/runtime-overrides.json.bak-model-nosearch-20261026235708`、`data/runtime-overrides.json.bak-baseurl-20261026235901`。
+- **教训（再次印证 spec 校正注记）**：bridge 配置任何变更必须双层都看 + 改后重启看 `[OpenAI] Enabled` 启动行，只看 config.py 会被覆盖层静默盖住。
+- 真机听感（免搜索变体的首音对比）待下次实际使用确认。
 
 **Blocked by:** 04
