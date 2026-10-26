@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-来源：2026-10-26 面向主要消费者 open-xiaoai（小爱语音）的通道测速与降延迟方案，用户拍板「模型选 deepseek flash」。测速数据（NAS 生产 aurora，每通道单发×2 轮、真人节奏）：deepseek-v4-flash TTFT 1.8–1.9s、总时长 2.8–3.1s（最快完成、无思考直接出正文、~43 字/s 吐字）；对照 minimax-m3 TTFT 1.4s 但吐字 ~17 字/s、总时长 8s+，kimi/glm 1.5–1.8s 但带思考拖长。deepseek-v4-pro 有思考文本泄漏进正文（TTS 会念出，不可用于语音）；mimo-v2.5-pro 两发皆空回复（通道故障）；qwen 3.9s。
+来源：2026-10-26 面向主要消费者 open-xiaoai（小爱语音）的通道测速与降延迟方案，用户拍板「模型选 deepseek flash」。**注意（2026-10-26 部署时校正）**：原测速（每通道单发×2 轮、真人节奏）跑在 NAS 旧镜像上，当时暴露的是 `deepseek-v4-flash`（TTFT 1.8–1.9s、总时长 2.8–3.1s、无思考直接出正文、~43 字/s）；主干自 2026-09-27 起已下线 v4-flash/v4-pro，只暴露 `deepseek`（快速模式 + **智能搜索恒开** + 非深度思考）。因此旧数据仅作方向参考，验收必须用 `deepseek` 重测（新基线见 WP3）。对照数据：minimax-m3 TTFT 1.4s 但吐字 ~17 字/s、总时长 8s+；kimi/glm 1.5–1.8s 但带思考拖长；deepseek-v4-pro 有思考文本泄漏进正文（TTS 会念出）；mimo-v2.5-pro 两发皆空回复；qwen 3.9s。
 
 ## Problem Statement
 
@@ -57,7 +57,7 @@ Status: ready-for-agent
 - NAS aurora 环境变量除上述可选项外不动（`DEEPSEEK_WEB_SEARCH` 维持现状默认开——「智能搜索恒开」是既有拍板；是否关闭见 WP3 决策门）。
 
 **WP2 bridge 切换到 aurora + 流式**（改 NAS 上挂载进容器的生产 bridge 配置文件，bridge 代码零改动）：
-- openai 段：`base_url` 指向 aurora（bridge 为 host 网络，走 NAS 本机地址即可）；`model` 改 `deepseek-v4-flash`；`api_key` 对齐 aurora 的鉴权值（部署时从 aurora 侧环境读取，不落入任何文档或记录）；`stream: true`（代码键名 `openai.stream`，默认 false）启用句读分段管线。
+- openai 段：`base_url` 指向 aurora（bridge 为 host 网络，用 `http://127.0.0.1:65432/v1`）；`model` 改 **`deepseek`**（新镜像只暴露这一个 chat id；`deepseek-v4-flash` 会落入 ChatGPT 兜底）；`api_key` 对齐 aurora 的鉴权值（NAS compose 的 `Authorization`，部署时读取，不落入文档/记录）；`stream: true`（代码键名 `openai.stream`，默认 false）启用句读分段管线。
 - `session_header` 改为 aurora 认识的 `X-Session-Key`（默认 `X-Hermes-Session-Key` aurora 不认）。注意 bridge 的 `session_key` 默认恒定（`agent:default:open-xiaoai-bridge`）→ 所有对话共用同一个上游 session，30 分钟 TTL 后自然新开；「换话题立即新开」需要 `X-Session-Action: new`，bridge 当前未接（follow-up，不在本 spec）。
 - **首句约束（新增，直接压 L2）**：在 `system_prompt`（或按 `session_system_prompts`）追加「先用一句不超过 15 字的话给出结论，再展开」。首段切分门槛是 4 字强标点 / 12 字弱标点，首句越短首段越早；该项零代码、可回退。
 - `max_tokens` 300 → 220、`history_max_messages` 20 → 10：
@@ -70,12 +70,13 @@ Status: ready-for-agent
 - 变更后重启 bridge 容器；回退 = 配置改回官方 API 三项（base_url/model/stream），其余参数可保留。
 
 **WP3 验收**（三段预算；目标值是设计目标，不是实测值）：
-- **L1 HTTP 首 delta**（aurora chat/completions 流式端点，与测速同口径同 prompt）：首轮目标 ≤2.0s（吸收前实测 1.8–1.9s）；**会话续轮目标 ≤1.5s**（复用上游 session，省掉建会话与全量重发，这是本 spec 的核心增量）。
+- **L1 HTTP 首 delta**（aurora chat/completions 流式端点，同 prompt、同计时法）：首轮目标 ≤2.0s；**会话续轮目标 ≤1.5s**（复用上游 session，省掉建会话与全量重发）。
+  - 2026-10-26 部署后探针基线（NAS 本机 curl、`deepseek`、max_tokens 60、单发）：**首轮 1.42s / 同 `X-Session-Key` 二轮 1.59s**。二轮未更快——`deepseek` 的智能搜索恒开，建会话成本占比被搜索步骤抹平；续轮收益需在 bridge 实际链路（真实 prompt 长度）复测确认，不据此提前宣称。
 - **L2 bridge 首段就绪**（`turn_trace` 首条 `tts_start` − `llm_start`）：目标 ≤2.6s，= L1 + 首句生成；首句约束是这里的主要杠杆。
 - **L3 真机首音**（`turn_trace` 首条 `play_url` − `llm_start`）：生产为 xiaoai 原生 TTS，**L3 只记录基线、不设硬门槛**（含固定合成开销，主指标看 L2）。
-- 通道健康：单发确认新 TLS 栈（tls-client 1.16.0 / Chrome_150 + UA 150）下无 403、无握手失败。
+- 通道健康：单发确认新 TLS 栈（tls-client 1.16.0 / Chrome_150 + UA 150）下无 403、无握手失败（2026-10-26 已过：HTTP 200，无拦截）。
 - 人工：真机语音一轮连续对话，验收首音体感与流式播报连续性（分段不断流、不念思考）。
-- **决策门（每次只动一个变量）**：L1 > 2.0s → 先关 `DEEPSEEK_WEB_SEARCH` 复测；L1 达标但 L2 不达标 → 收紧首句约束（prompt），不动 bridge 分段门槛（不可配置，属代码变更）；L2 达标但 L3 不达标 → 查 TTS provider / `stream` 设置。
+- **决策门（每次只动一个变量）**：L1 达标但 L2 不达标 → 收紧首句约束（prompt），不动 bridge 分段门槛（不可配置，属代码变更）；L2 达标但 L3 不达标 → 查 TTS（豆包另立项）。**注意**：`deepseek` 是 `SearchAlways` 模型，`DEEPSEEK_WEB_SEARCH` 开关对它无效——「关搜索」不再是可用杠杆；若 L1 超标，记录为已知约束，免搜索变体另立项。
 - aurora 侧回归：新镜像部署前本地全量测试绿——2026-10-26 吸收后在 `local-toolfix` 实测 `go test ./...` 37 包全绿（`-p 1`），UA 对齐后 `internal/deepseekweb`、`internal/provider` 复测绿；WSL 侧 `-race` 关键包尚未在吸收后补跑，部署前需补。
 
 **全局约束**：一切 live 请求遵守防风控纪律（单发、真人节奏、不复跑不重放）；凭证（aurora 鉴权值、上游 token）不进 git、不进文档、不进对话记录——此前一次探查已意外回显 NAS 侧若干服务 token，本次所有远程命令必须先过滤键值再输出；NAS 侧变更执行后回读验证。
@@ -93,7 +94,7 @@ Status: ready-for-agent
 - bridge C3 流式管线的深化开发（bridge 仓库 `bridge-architecture-optimization-plan.md` C3 主线的后续,本 spec 只启用既有分段能力）。
 - mimo-v2.5-pro 通道故障修复（凭证/协议待查,修复后可另行评估）。
 - deepseek-v4-pro 思考泄漏问题（语音场景已排除该模型,低优先级另查）。
-- `DEEPSEEK_WEB_SEARCH` 默认值变更（维持「智能搜索恒开」拍板；仅在 WP3 决策门触发时作为单变量复测项）。
+- `DEEPSEEK_WEB_SEARCH` 默认值变更（维持「智能搜索恒开」拍板；`deepseek` 为 `SearchAlways`，该开关不生效，不构成验收杠杆）。
 - aurora 其他通道（GLM/Kimi/MiniMax 等）的接入与调优;CDP 桥类通道一律不用于语音。
 - open-xiaoai 仓库模板配置与 NAS 生产副本的一致性同步（该仓库自身纪律）。
 - **自然语言设备控制（LLM 工具）**：不是需求——用户确认语音控制走命令表命中（KWS `direct_table`），不依赖 LLM 工具；本 spec 显式关闭 `tool_calls_enabled` 即可。
@@ -102,7 +103,8 @@ Status: ready-for-agent
 ## Further Notes
 
 - 风险两面（用户已拍板方向,如实记录）：网页逆向通道相比官方 API 有结构性风控/封号风险与更高的协议失效频率（上游改版即断）,收益是零 API 费用 + 统一网关治理 + 会话复用;回退路径保留（WP2 三项配置改回即恢复官方 API）。
-- 模型 id 依据：NAS aurora `/v1/models` 现出 `deepseek-v4-flash [deepseek]`（token 池非空自动注册）,无需新增 NAS 侧环境变量。
+- 模型 id 依据：新镜像 `/v1/models` 的 DeepSeek 只有 `deepseek`（2026-09-27 拍板下线 v4-flash/v4-pro；旧镜像的 `deepseek-v4-flash` 已不存在），故 bridge 用 `deepseek`。
+- `DEEPSEEK_WEB_SEARCH` 默认值变更（维持「智能搜索恒开」拍板；且 `deepseek` 是 `SearchAlways` 模型，该开关对它无效——非本 spec 可调杠杆）。
 - 会话复用的运维语义（沿用上游会话复用 spec 的拍板）：增减 token 文件行会改变哈希分配,旧会话条目失效一轮（降级新开、自愈）;带会话键请求按客户端键确定性绑定同一账号。
 - 测速原始数据（两轮单发）已在本会话记录,验收时同口径复测对比即可。
 - **上游吸收的影响面（2026-10-26 复查）**：11 个提交里 9 个有吸收（`8fcdbeb`/`15983ce`/`10ca511` 为部分吸收或带本仓适配），2 个跳过（CI tag 发版、README 徽章）。吸收项绝大多数落在 ChatGPT 路径（`internal/chatgpt`、`internal/handler`、typings、`internal/toolcall`）以及依赖与指纹（tls-client、browserfp）；DeepSeek provider 的请求构造、解析、会话策略**零改动**。因此会话复用/流式的延迟收益判断不变，但 4.8→2.4s 是**吸收前**镜像的实测值，验收必须在新镜像上复测，不得直接引用。

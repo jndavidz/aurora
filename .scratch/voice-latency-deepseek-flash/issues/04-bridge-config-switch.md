@@ -7,9 +7,9 @@
 **配置键（`openai` 段）：**
 | 键 | 值 |
 |---|---|
-| `base_url` | aurora（NAS 本机 `http://127.0.0.1:65432/v1` 或容器可达地址） |
+| `base_url` | `http://127.0.0.1:65432/v1`（bridge 为 host 网络） |
 | `api_key` | aurora 鉴权值（从 aurora 侧环境读取，不回显、不入库） |
-| `model` | `deepseek-v4-flash` |
+| `model` | `deepseek`（新镜像唯一 chat id；`deepseek-v4-flash` 已下线，配错会落 ChatGPT 兜底） |
 | `stream` | `true`（代码键名 `openai.stream`，默认 false） |
 | `session_header` | `X-Session-Key`（默认 `X-Hermes-Session-Key` aurora 不认） |
 | `tool_calls_enabled` | `false`（命令表命中控制设备，不需要 LLM 工具；同时避免探测式流式） |

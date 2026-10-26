@@ -16,6 +16,6 @@ docker images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.CreatedAt}}' | grep 
 
 **回退：** 无（不改变任何运行环境；失败仅留下本地镜像层，可 `docker rmi` 新层）。
 
-**Status:** pending
+**Status:** done（经 `scripts/deploy_nas.sh` 内置构建完成：镜像 `edd4f25c705a` @ 2026-10-26 14:14，随 T03 一并推送 NAS）
 
 **Blocked by:** 01

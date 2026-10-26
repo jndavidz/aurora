@@ -14,6 +14,6 @@
 
 **回退：** 用第 1 步备份恢复旧镜像 tag + `compose up -d`；若仅新 TLS 栈被拦，优先试 `AURORA_LEGACY_IDENTITY=1`（DeepSeek 通道可回退 Go 原生，免重建）。
 
-**Status:** pending
+**Status:** done（镜像 `edd4f25c705a`；容器 Up；`/ping` 200；`/v1/models` 含 `deepseek`；单发 HTTP 200 / TTFT 1.42s / 无 TLS 拦截。回退点：旧镜像 `5284cf341cf8` + `docker-compose.yml.bak.20261026`）
 
 **Blocked by:** 02
