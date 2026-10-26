@@ -31,18 +31,18 @@ type TurnStile struct {
 	ProofOfWorkToken             string
 	TurnstileToken               string
 	ChatRequirementsPrepareToken string // prepare 接口返回的 prepare_token, 在 sentinel/ping 时注入
-	ChatRequirementsToken       string // finalize 接口返回的 chat-requirements token (sentinel/ping 复用)
-	SentinelReqToken            string // /sentinel/req 返回的 token
-	SentinelReqPersona          string // /sentinel/req 返回的 persona
-	SOToken                     string
-	soSession                   *so.Session
-	soSnapshotDX                string
-	soChatToken                 string
-	soFlow                      string
-	soOnce                      sync.Once
-	soMu                        sync.Mutex
-	soResult                    string
-	soErr                       error
+	ChatRequirementsToken        string // finalize 接口返回的 chat-requirements token (sentinel/ping 复用)
+	SentinelReqToken             string // /sentinel/req 返回的 token
+	SentinelReqPersona           string // /sentinel/req 返回的 persona
+	SOToken                      string
+	soSession                    *so.Session
+	soSnapshotDX                 string
+	soChatToken                  string
+	soFlow                       string
+	soOnce                       sync.Once
+	soMu                         sync.Mutex
+	soResult                     string
+	soErr                        error
 }
 
 // ProofWork 表示 proof-of-work 要求。

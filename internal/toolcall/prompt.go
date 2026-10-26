@@ -263,7 +263,7 @@ func pickReadPathParam(paramsJSON json.RawMessage) string {
 // 用 lastRole 决定上下文:
 //   - tool   : 提醒把 tool 输出当 ground truth,继续调用或总结
 //   - user   : 区分 coding 任务与非 coding 任务(CODER 指令仅对疑似 coding 任务注入,
-//              否则只给温和的协议提示,避免把普通对话/算术任务逼成空回复)
+//     否则只给温和的协议提示,避免把普通对话/算术任务逼成空回复)
 //   - 其他   : 返回空
 func FinalNudge(tools []official.Tool, messages []official.APIMessage) string {
 	if len(tools) == 0 || len(messages) == 0 {
