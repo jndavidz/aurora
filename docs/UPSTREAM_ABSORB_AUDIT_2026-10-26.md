@@ -33,7 +33,7 @@ go build ./...                  → 通过（exit 0）
 go test ./...                   → 仅 internal/toolcall FAIL，其余全绿
 ```
 
-`git status -sb` → `## local-toolfix...origin/local-toolfix [ahead 21]`（尚未推送）。
+`git status -sb` → `## local-toolfix...origin/local-toolfix [ahead 21]`（复核当时未推；现已推送，见 §五 #1）。
 
 ## 三、缺陷清单
 
@@ -59,7 +59,7 @@ go test ./...                   → 仅 internal/toolcall FAIL，其余全绿
 
 | # | 事项 | 状态 |
 |---|---|---|
-| 1 | `git push origin local-toolfix` | 待授权（当前 ahead 21） |
+| 1 | `git push origin local-toolfix` | **已完成**（2026-10-26，`cd45a3b..34f0574`） |
 | 2 | 删已并入的 `voice-latency-deepseek-flash`（本地 + 远端） | 待授权；分支纪律要求并入即删（[AGENTS.md:14](../AGENTS.md#L14)） |
 | 3 | `main` ff 到 `upstream/main`（落后 8、自有 0），再 `git merge main` 回主干 | 待授权 |
 | 4 | P1 golden 样本重建 | 未开始 |
