@@ -23,10 +23,9 @@
 
 **回退：** 恢复备份 + 重启容器（= 回官方 API 三项 base_url/model/stream，其余参数可保留）。
 
-**Status:** 已实施，待真机一轮确认（2026-10-26）
-- 生效配置有两层，两层都已改：`config.py`（字面量）+ `data/runtime-overrides.json`（面板覆盖，优先级更高；原先存着 `deepseek-v4-flash` + 旧 base_url + 旧密钥）。
-- 备份：`config.py.bak-voice-20261026141952`、`runtime-overrides.json.bak-voice-20261026142051`。
-- 重启后启动日志确认：`base_url=http://127.0.0.1:65432/v1, model=deepseek`。
-- 关闭条件：真机一轮后 bridge 日志出现指向 aurora 的请求且无 4xx/5xx。
+**Status:** done（2026-10-26）
+- 生效配置两层都已改：`config.py` + `data/runtime-overrides.json`（面板覆盖优先；原先存着 `deepseek-v4-flash` + 旧 base_url + 旧密钥）。
+- 备份：`config.py.bak-voice-20261026141952`、`runtime-overrides.json.bak-voice-20261026142051`、长度收紧前 `config.py.bak-voice-len-20261026162714`。
+- 真机 4 轮验证：bridge 日志 `llm_requests=1`、`tool_rounds=0`；aurora 侧 4 次 POST 全 200，`base_url`/`model` 生效。
 
 **Blocked by:** 03

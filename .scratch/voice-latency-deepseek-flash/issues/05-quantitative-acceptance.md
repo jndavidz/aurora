@@ -14,6 +14,12 @@
 
 **验收：** 四项数据与门槛结论写入本 ticket；未达标项附单变量复测记录与处置。
 
-**Status:** pending
+**实测（2026-10-26，真机 4 轮，`deepseek`）：**
+- 每轮 aurora `POST /v1/chat/completions` 均 200；单次 LLM 请求（`llm_requests=1`）、`tool_rounds=0`（工具确已关）、无思考泄漏。
+- aurora 端到端耗时：2.85s / 2.55s / 3.41s / 1.31s（对应 llm_chars 84 / 8 / 67 / 9）。
+- bridge `turn_trace`：TTS 合成 0.44–2.04s、合成→play_url 接受 0.11–0.30s；首音体感达标（用户确认），分段无断流。
+- **口径限制**：现有 trace 的 `llm_ms` 是「流结束」而非首个 delta，`llm_to_tts` 因此被钳为 0 —— **L2 无法从现有埋点精确导出**；L1 以独立探针为准（首轮 1.42s / 同 key 二轮 1.59s）。若要精确 L2，需给 bridge 增「首段就绪」mark（bridge 侧改动，另立项）。
+
+**Status:** done（量化数据已记录；L2 精确值受埋点限制，属已知约束）
 
 **Blocked by:** 04
