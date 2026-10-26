@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	chatgptrequestconverter "aurora/conversion/requests/chatgpt"
 	"aurora/httpclient/bogdanfinn"
 	"aurora/internal/accounts"
 	"aurora/internal/apierrors"
@@ -20,8 +19,8 @@ import (
 	officialtypes "aurora/typings/official"
 	"aurora/util"
 
+	"github.com/bogdanfinn/websocket"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 type ChatHandler struct {
@@ -110,59 +109,16 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		original_request.Model = base
 	}
 
-	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
-	if err != nil {
-		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
+	pre, ok := h.prepareChatGPTTurn(c, original_request, requestedModel)
+	if !ok {
 		return
 	}
-	if account == nil {
-		apierrors.NotFoundAccount(c)
-		return
-	}
-
-	proxyUrl := account.Proxy
+	account, proxyUrl, client := pre.account, pre.proxyUrl, pre.client
+	translated_request := pre.translated
+	clientState := pre.clientState
+	reqModel, uid := pre.reqModel, pre.uid
 	input_tokens := countMessagesTokens(original_request.Messages)
-
-	uid := uuid.NewString()
-	// 优先用 account.Client（bootstrap.InitClient 时已绑 fingerprint + proxy）
-	// 只有在 account.Client 为 nil（理论上不应发生）才 fallback 到 setupClientWithProxy
-	var client *bogdanfinn.TlsClient
-	if c, ok := account.Client.(*bogdanfinn.TlsClient); ok && c != nil {
-		client = c
-	} else {
-		client = setupClientWithProxy(proxyUrl)
-	}
-
-	// 工具调用模式判定(不再强制非流式:handleToolCalling 内部统一
-	// 非流式调用上游攒全文解析,对外按 original_request.Stream 输出 SSE 或 JSON)
 	toolsEnabled := toolCallingEnabled(original_request.Tools, h.cfg)
-
-	// 发送上游前清洗历史里的"绕开工具"回复,防止模型被自己之前的
-	// 拒绝/推诿文本锚定而每轮重复同样的行为。
-	// 仅工具路径清洗:防锚定是 coding 域策略,纯 chat 请求历史必须原样发上游
-	// (chat 变体硬规则:绝不注入工具调用语义)。
-	if toolsEnabled {
-		sanitizeRefusalHistory(original_request.Messages)
-	}
-
-	// Convert the chat request to a ChatGPT request
-	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
-
-	// 按 conversationID 复用 ChatClientState
-	var clientState *chatgpt.ChatClientState
-	if translated_request.ConversationID != "" {
-		clientState = h.sessions.Get(translated_request.ConversationID)
-	}
-	if clientState == nil {
-		clientState = chatgpt.NewChatClientStateForAccount(account)
-	}
-	clientState.ConversationID = translated_request.ConversationID
-	clientState.ParentMessageID = translated_request.ParentMessageID
-
-	reqModel := requestedModel
-	if reqModel == "" {
-		reqModel = "auto"
-	}
 
 	// 工具调用提前分支
 	if toolsEnabled {
@@ -177,32 +133,12 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		return
 	}
 
-	response, wsConn, turnStile, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, original_request.Stream, clientState, h.accountPool)
-	if err != nil {
-		apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
-		return
-	}
-	defer response.Body.Close()
-	if chatgpt.Handle_request_error(c, response) {
-		if wsConn != nil {
-			wsConn.Close()
-			wsConn = nil
-		}
-		return
-	}
-	var full_response string
-	var full_thinking string
-	var conversationID string
-	var sentinel []map[string]interface{}
-	var stopSent bool
-	pingSent := false
-
-	// 记录请求开始时间，用于 TTFT / total-time 计时
+	// 记录请求开始时间(TTFT 基准)。turnLoop 接管首轮发送后,基准点从「首轮响应
+	// 到达」提前到「发起首轮」——与 Responses 面原语义一致,TTFT 含首轮上游往返。
 	startTime := time.Now()
-	ttftSet := false
-	var ttftMs int64
 
-	// 提取 instructions / input 用于缓存模拟（与 Responses 路径一致）
+	// 提取 instructions / input 用于缓存模拟(与 Responses 路径一致)。
+	// 注:RecordCache 随之前移,首轮发送失败也会记账(原顺序在 send 之后)。
 	var instructions string
 	var inputTextParts []string
 	for _, msg := range original_request.Messages {
@@ -224,71 +160,29 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Header().Set("X-Accel-Buffering", "no")
 	}
-	for i := h.cfg.MaxContinueCount; i > 0; i-- {
-		var continue_info *chatgpt.ContinueInfo
-		result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, original_request.Stream, reqModel, chatgpt.HandlerDetailedOptions{
-			Websocket:        wsConn,
-			ClientState:      clientState,
-			ArtifactDelivery: original_request.ArtifactDelivery,
-			ProxyURL:         proxyUrl,
-		})
-		wsConn = nil
-		continue_info = result.Continue
-		full_response += result.Text
-		full_thinking += result.ThinkingText
-		// 首个输出 token 到达时记录 TTFT（text chunk 已在 HandlerDetailedWithOptions 内写出）
-		if result.Text != "" && !ttftSet {
-			ttftSet = true
-			ttftMs = time.Since(startTime).Milliseconds()
-		}
-		if result.ConversationID != "" {
-			conversationID = result.ConversationID
-			h.sessions.Register(conversationID, clientState)
-			if !pingSent && turnStile != nil {
-				pingSent = true
-				lastMsgID := result.ParentMessageID
-				pingClient := client
-				pingAccount := account
-				pingTurnStile := turnStile
-				go func() {
-					perr := chatgpt.POSTSentinelPing(pingClient, pingAccount, pingTurnStile, conversationID, lastMsgID, clientState)
-					if h.cfg.DebugSentinel {
-						fmt.Printf("[sentinel-ping] conv=%s lastMsg=%s err=%v\n", conversationID, lastMsgID, perr)
-					}
-				}()
-			}
-		}
-		sentinel = append(sentinel, result.Sentinel...)
-		if result.StopSent {
-			stopSent = true
-		}
-		parentMessageID := result.ParentMessageID
-		if continue_info != nil {
-			parentMessageID = continue_info.ParentID
-		}
-		clientState.NoteTurnResult(result.ConversationID, parentMessageID)
-		if continue_info == nil {
-			break
-		}
-		translated_request.Messages = nil
-		translated_request.Action = "continue"
-		translated_request.ConversationID = continue_info.ConversationID
-		translated_request.ParentMessageID = continue_info.ParentID
 
-		response, wsConn, _, status, err = conversationClientOrder(&client, account, translated_request, proxyUrl, original_request.Stream, clientState, h.accountPool)
-		if err != nil {
-			apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
-			return
-		}
-		defer response.Body.Close()
-		if chatgpt.Handle_request_error(c, response) {
-			if wsConn != nil {
-				wsConn.Close()
-				wsConn = nil
-			}
-			return
-		}
+	// continue 轮询循环单点(chatgptTurnLoop,spec arch-deepening-phase2 WP2);
+	// sentinel 保活 ping 仅本表面发送(keepAlivePing=true,现状行为)。
+	sendTurn := func() (*http.Response, *websocket.Conn, *chatgpt.TurnStile, *bogdanfinn.TlsClient, int, error) {
+		resp, ws, ts, st, serr := conversationClientOrder(&client, account, translated_request, proxyUrl, original_request.Stream, clientState, h.accountPool)
+		return resp, ws, ts, client, st, serr
 	}
+	turnRes, tlErr := h.chatgptTurnLoop(c, account, &translated_request, clientState, sendTurn, original_request.Stream, uid, reqModel, startTime,
+		chatgpt.HandlerDetailedOptions{ArtifactDelivery: original_request.ArtifactDelivery, ProxyURL: proxyUrl}, true, nil)
+	if tlErr != nil {
+		if tlErr.kind == turnSendFailed {
+			apierrors.JSONError(c, tlErr.status, "request_conversion_error", tlErr.msg, apierrors.Param("model"), "request_conversion_error")
+		}
+		return
+	}
+	full_response := turnRes.text
+	full_thinking := turnRes.thinking
+	conversationID := turnRes.conversationID
+	sentinel := turnRes.sentinel
+	stopSent := turnRes.stopSent
+	ttftSet := turnRes.ttftSet
+	ttftMs := turnRes.ttftMs
+
 	if c.Writer.Status() != 200 {
 		return
 	}
@@ -350,56 +244,21 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		original_request.Model = base
 	}
 
-	account, _, err := resolveAccount(c, h.accountPool, h.cfg, original_requestHasFiles(original_request))
-	if err != nil {
-		apierrors.JSONError(c, 400, "authorization_error", err.Error(), apierrors.Param("Authorization"), 400)
+	pre, ok := h.prepareChatGPTTurn(c, original_request, requestedModel)
+	if !ok {
 		return
 	}
-	if account == nil {
-		apierrors.NotFoundAccount(c)
-		return
-	}
-	if !account.Type.Satisfies(accounts.CapResponses) {
+	if !pre.account.Type.Satisfies(accounts.CapResponses) {
 		c.JSON(403, gin.H{"error": "Responses API requires a logged-in ChatGPT account."})
 		return
 	}
-
-	proxyUrl := account.Proxy
+	account, proxyUrl, client := pre.account, pre.proxyUrl, pre.client
+	translated_request := pre.translated
+	clientState := pre.clientState
+	reqModel, uid := pre.reqModel, pre.uid
 	input_tokens := 0
 	for _, message := range original_request.Messages {
 		input_tokens += util.CountToken(message.Text())
-	}
-
-	uid := uuid.NewString()
-	// 优先用 account.Client（bootstrap.InitClient 时已绑 fingerprint + proxy）
-	var client *bogdanfinn.TlsClient
-	if c, ok := account.Client.(*bogdanfinn.TlsClient); ok && c != nil {
-		client = c
-	} else {
-		client = setupClientWithProxy(proxyUrl)
-	}
-
-	// 发送上游前清洗历史里的"绕开工具"回复(同 Nightmare;仅工具路径,
-	// 纯 chat 历史原样发上游。responsesToolCalling 入口内部亦有同型清洗)。
-	if toolCallingEnabled(original_request.Tools, h.cfg) {
-		sanitizeRefusalHistory(original_request.Messages)
-	}
-
-	translated_request := chatgptrequestconverter.ConvertAPIRequest(original_request, account, proxyUrl, client)
-
-	// 按 conversationID 复用 ChatClientState，保持 DeviceID/SessionID 一致
-	var clientState *chatgpt.ChatClientState
-	if translated_request.ConversationID != "" {
-		clientState = h.sessions.Get(translated_request.ConversationID)
-	}
-	if clientState == nil {
-		clientState = chatgpt.NewChatClientStateForAccount(account)
-	}
-	clientState.ConversationID = translated_request.ConversationID
-	clientState.ParentMessageID = translated_request.ParentMessageID
-	reqModel := requestedModel
-	if reqModel == "" {
-		reqModel = "auto"
 	}
 
 	// ChatGPT 工具调用(coding):带 tools 的请求走文本协议工具调用,输出 Responses 事件。
@@ -432,71 +291,26 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 
 	// 非流式路径：保持原有行为，使用新的 NewResponsesResponse 签名（含 reasoning + cache）
 	if !streamRequested {
-		response, wsConn, _, status, err := conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
-		if err != nil {
-			apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
-			return
+		// continue 轮询循环单点(chatgptTurnLoop);Responses 不发 sentinel ping
+		// (keepAlivePing=false,现状行为;是否全开见 spec 观察项)。
+		sendTurn := func() (*http.Response, *websocket.Conn, *chatgpt.TurnStile, *bogdanfinn.TlsClient, int, error) {
+			resp, ws, ts, st, serr := conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
+			return resp, ws, ts, client, st, serr
 		}
-		defer response.Body.Close()
-		if chatgpt.Handle_request_error(c, response) {
-			if wsConn != nil {
-				wsConn.Close()
-				wsConn = nil
+		turnRes, tlErr := h.chatgptTurnLoop(c, account, &translated_request, clientState, sendTurn, false, uid, reqModel, time.Now(), chatgpt.HandlerDetailedOptions{}, false, nil)
+		if tlErr != nil {
+			if tlErr.kind == turnSendFailed {
+				apierrors.JSONError(c, tlErr.status, "request_conversion_error", tlErr.msg, apierrors.Param("model"), "request_conversion_error")
 			}
 			return
-		}
-
-		var full_response string
-		var full_thinking string
-		var conversationID string
-		for i := h.cfg.MaxContinueCount; i > 0; i-- {
-			var continue_info *chatgpt.ContinueInfo
-			result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, false, reqModel, chatgpt.HandlerDetailedOptions{
-				Websocket:   wsConn,
-				ClientState: clientState,
-			})
-			wsConn = nil
-			full_response += result.Text
-			full_thinking += result.ThinkingText
-			parentMessageID := result.ParentMessageID
-			continue_info = result.Continue
-			if continue_info != nil {
-				parentMessageID = continue_info.ParentID
-			}
-			clientState.NoteTurnResult(result.ConversationID, parentMessageID)
-			if result.ConversationID != "" {
-				conversationID = result.ConversationID
-				h.sessions.Register(conversationID, clientState)
-			}
-			if continue_info == nil {
-				break
-			}
-			translated_request.Messages = nil
-			translated_request.Action = "continue"
-			translated_request.ConversationID = continue_info.ConversationID
-			translated_request.ParentMessageID = continue_info.ParentID
-
-			response, wsConn, _, status, err = conversationClientOrder(&client, account, translated_request, proxyUrl, false, clientState, h.accountPool)
-			if err != nil {
-				apierrors.JSONError(c, status, "request_conversion_error", err.Error(), apierrors.Param("model"), "request_conversion_error")
-				return
-			}
-			defer response.Body.Close()
-			if chatgpt.Handle_request_error(c, response) {
-				if wsConn != nil {
-					wsConn.Close()
-					wsConn = nil
-				}
-				return
-			}
 		}
 		if c.Writer.Status() != 200 {
 			return
 		}
 
-		output_tokens := util.CountToken(full_response)
-		reasoning_tokens := util.CountToken(full_thinking)
-		responsesResponse := officialtypes.NewResponsesResponse(full_response, full_thinking, input_tokens, output_tokens, reasoning_tokens, cachedTokens, cacheWriteTokens, reqModel)
+		output_tokens := util.CountToken(turnRes.text)
+		reasoning_tokens := util.CountToken(turnRes.thinking)
+		responsesResponse := officialtypes.NewResponsesResponse(turnRes.text, turnRes.thinking, input_tokens, output_tokens, reasoning_tokens, cachedTokens, cacheWriteTokens, reqModel)
 		c.JSON(200, responsesResponse)
 		return
 	}
@@ -505,94 +319,34 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 	startTime := time.Now()
 	e := provider.NewResponsesEmitter(c, reqModel, true)
 
-	response, wsConn, _, _, err := conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
-	if err != nil {
-		e.Fail(err.Error())
-		return
+	// continue 轮询循环单点(chatgptTurnLoop);轮级增量经 onTurn 发 emitter。
+	// Responses 不发 sentinel ping(keepAlivePing=false,现状行为)。
+	sendTurn := func() (*http.Response, *websocket.Conn, *chatgpt.TurnStile, *bogdanfinn.TlsClient, int, error) {
+		resp, ws, ts, st, serr := conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
+		return resp, ws, ts, client, st, serr
 	}
-	defer response.Body.Close()
-	if chatgpt.Handle_request_error(c, response) {
-		if wsConn != nil {
-			wsConn.Close()
-			wsConn = nil
-		}
-		e.Fail("upstream error")
-		return
-	}
-
-	var full_response string
-	var full_thinking string
-	var conversationID string
-	ttftSet := false
-	var ttftMs int64
-
-	for i := h.cfg.MaxContinueCount; i > 0; i-- {
-		var continue_info *chatgpt.ContinueInfo
-		result := chatgpt.HandlerDetailedWithOptions(c, response, client, account, uid, translated_request, true, reqModel, chatgpt.HandlerDetailedOptions{
-			Websocket:   wsConn,
-			ClientState: clientState,
-		})
-		wsConn = nil
-		full_response += result.Text
-		full_thinking += result.ThinkingText
-
-		// 思维链增量
-		if result.ThinkingText != "" {
-			e.ReasoningDelta(result.ThinkingText)
-		}
-
-		// 正文增量
-		if result.Text != "" {
-			if !ttftSet {
-				ttftSet = true
-				ttftMs = time.Since(startTime).Milliseconds()
-			}
-			e.TextDelta(result.Text)
-		}
-
-		parentMessageID := result.ParentMessageID
-		continue_info = result.Continue
-		if continue_info != nil {
-			parentMessageID = continue_info.ParentID
-		}
-		clientState.NoteTurnResult(result.ConversationID, parentMessageID)
-		if result.ConversationID != "" {
-			conversationID = result.ConversationID
-			h.sessions.Register(conversationID, clientState)
-		}
-		if continue_info == nil {
-			break
-		}
-		translated_request.Messages = nil
-		translated_request.Action = "continue"
-		translated_request.ConversationID = continue_info.ConversationID
-		translated_request.ParentMessageID = continue_info.ParentID
-
-		response, wsConn, _, _, err = conversationClientOrder(&client, account, translated_request, proxyUrl, true, clientState, h.accountPool)
-		if err != nil {
-			e.Fail(err.Error())
-			return
-		}
-		defer response.Body.Close()
-		if chatgpt.Handle_request_error(c, response) {
-			if wsConn != nil {
-				wsConn.Close()
-				wsConn = nil
-			}
+	turnRes, tlErr := h.chatgptTurnLoop(c, account, &translated_request, clientState, sendTurn, true, uid, reqModel, startTime, chatgpt.HandlerDetailedOptions{}, false, func(result chatgpt.HandlerResult) {
+		e.ReasoningDelta(result.ThinkingText)
+		e.TextDelta(result.Text)
+	})
+	if tlErr != nil {
+		if tlErr.kind == turnSendFailed {
+			e.Fail(tlErr.msg)
+		} else {
 			e.Fail("upstream error")
-			return
 		}
+		return
 	}
 
-	output_tokens := util.CountToken(full_response)
-	reasoning_tokens := util.CountToken(full_thinking)
-	responsesResponse := officialtypes.NewResponsesResponse(full_response, full_thinking, input_tokens, output_tokens, reasoning_tokens, cachedTokens, cacheWriteTokens, reqModel)
+	output_tokens := util.CountToken(turnRes.text)
+	reasoning_tokens := util.CountToken(turnRes.thinking)
+	responsesResponse := officialtypes.NewResponsesResponse(turnRes.text, turnRes.thinking, input_tokens, output_tokens, reasoning_tokens, cachedTokens, cacheWriteTokens, reqModel)
 	// 在 response.completed 事件里附带 timing（HTTP headers 在首次 Flush 后不可写）
 	responsesResponse.MsSinceStart = time.Since(startTime).Milliseconds()
-	if ttftSet {
-		responsesResponse.MsTTFT = ttftMs
+	if turnRes.ttftSet {
+		responsesResponse.MsTTFT = turnRes.ttftMs
 	}
-	e.Complete(responsesResponse, full_response, full_thinking)
+	e.Complete(responsesResponse, turnRes.text, turnRes.thinking)
 	e.Done()
 }
 

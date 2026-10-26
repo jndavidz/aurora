@@ -253,4 +253,3 @@ func writeChatCompletionStreamDone(c *gin.Context, stopSent bool, model string, 
 }
 
 // looksLikeSandboxRefusal 检测模型是否声称自己处于隔离环境/无法访问工具。
-
