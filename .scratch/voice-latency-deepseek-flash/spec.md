@@ -10,7 +10,9 @@ Status: ready-for-agent
 
 **2026-10-26 复查（上游吸收后）**：主干 `local-toolfix` 已 fast-forward 吸收上游 11 个提交（end_turn/finish_reason、SSE 新格式与 citation、工具 prompt 角色块、`previous_response_id` 续接、tls-client 1.16.0、Chrome 150 指纹画像）。其中**会影响语音链路的是一条共享依赖变更**：所有网页逆向通道共用的 TLS 客户端从 tls-client 1.15.1 + `Chrome_144` 升到 1.16.0 + `Chrome_150`，而各 `internal/*web` 客户端 UA 常量仍是 `Chrome/144`（minimax/mimo 为 146）——UA 与 TLS 版本不一致（此前 DeepSeek 是 144↔144 一致的）。**处置已定：先做一行 UA 对齐**（`internal/deepseekweb` 的 `webUserAgent` → `Chrome/150`，见 WP1），再构建镜像；其余 `*web` 通道的 UA 收口另立项。吸收项其余部分落在 ChatGPT 路径，不影响 DeepSeek provider 的延迟与行为。
 
-**2026-10-26 复审（按主要消费者=open-xiaoai 重新核对 bridge 代码）**：
+**2026-10-26 部署执行校正（生效配置来源）**：bridge 的生产配置有两层——`config.py`（字面量）与**运行时覆盖 `data/runtime-overrides.json`（面板写入，深合并、优先级更高）**。核查发现覆盖层此前已被写入 `openai: {model: deepseek-v4-flash, base_url: http://10.10.10.2:65432/v1, stream: true, response_timeout: 15}`——即「bridge 直连官方 API / 非流式」的原前提对当前生产**不成立**（何时由谁写入无法从现场判定，早于本次实施）。因此本次变更实际是：把两层配置都对齐到新镜像可用值（`model=deepseek`、`base_url=http://127.0.0.1:65432/v1`、密钥、会话头、参数），并修掉「新镜像不认 v4-flash」这一会直接导致请求落 ChatGPT 兜底的错配。后续任何 bridge 配置变更都必须**同时看两层**，只改 `config.py` 可能被覆盖层静默盖住。
+
+
 - **池命中时 aurora 只发本轮增量的末条消息**（`deepseekChatFlow.buildRequest`：`resume` 时 `prompt = messages[len-1].Text`）——所以「历史窗口」只影响会话未命中轮（首轮/新开/TTL 过期），不影响续轮延迟。
 - **bridge 的首音不是首 token**：流式路径先经 `SentenceSegmenter` 切句再逐段 TTS——强标点（。！？；\n）累计 ≥4 字切、弱标点（，、：,;）≥12 字、无标点 ≥20 字强制切（`bridge/core/utils/sentence_split.py`）。首段就绪 = LLM TTFT + 首句生成时间。
 - **TTS 是并行段的最后一环**：`xiaoai` 原生 TTS 是「合成落盘 → play_url」阻塞式（`bridge/core/services/speaker.py:_play_text_blocking`），豆包 TTS 才有 `stream: true` 边合成边播。若生产用原生 TTS，L3 首音有固定合成开销，LLM 优化会被部分掩盖。
