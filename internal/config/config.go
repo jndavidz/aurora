@@ -21,12 +21,41 @@ type Config struct {
 	EnableExternalToken bool // 是否接受外部传入的 accessToken
 	ToolCallingEnabled  bool
 	RefusalRetries      int
-	DebugToolLog        string
-	FreeAccounts        bool
-	FreeAccountsNum     int
-	ProxyURL            string
-	HTTPProxy           string
-	DebugSentinel       bool
+
+	// provider 工具调用两组开关(默认全关/全空,新能力不隐式启用)。
+	// 网页逆向通道没有原生 tool_calls,工具调用只能走两条路:方案 A 在网关
+	// 侧模拟(文本协议注入 + <tool_call> 解析),方案 B 把请求原样透传给
+	// OpenAI 兼容上游(由上游真正执行工具)。
+
+	// 方案 A:provider 工具模拟。
+	// ProviderToolEmulation 是总开关:false 时下列两项不生效,请求完全走
+	// 现有对话路径(默认 false,保证不开就不改变任何已有行为)。
+	ProviderToolEmulation bool // PROVIDER_TOOL_EMULATION,默认 false
+	// ProviderToolModels 是模拟通道的模型白名单(客户端请求的 model id)。
+	// 空 = 允许所有 provider 模型;非空时白名单外的模型不注入文本协议,
+	// 用于只对验证过的模型开启工具模拟,避免拖累纯对话。
+	ProviderToolModels []string // PROVIDER_TOOL_MODELS,逗号分隔;空=不限
+	// ProviderToolRetries 是模型拒答/未按协议输出 <tool_call> 时的重试次数,
+	// 沿用 REFUSAL_RETRIES 语义:默认 3,0 合法(表示不重试)。
+	ProviderToolRetries int // PROVIDER_TOOL_RETRIES,默认 3;0=不重试
+
+	// 方案 B:原生工具透传(OpenAI 兼容上游)。
+	// NativeToolsBase 是上游 base url(如 https://api.deepseek.com/v1);
+	// 为空表示不启用透传,工具请求继续走方案 A / 现有路径。
+	NativeToolsBase string // NATIVE_TOOLS_BASE,默认空
+	// NativeToolsKey 是上游 API key,仅在 NativeToolsBase 非空时使用。
+	NativeToolsKey string // NATIVE_TOOLS_KEY,默认空
+	// NativeToolsModelMap 是客户端 model id 到上游 model id 的映射表,
+	// 每项形如 "<客户端 model id>=<上游 model id>";这里原样保留字符串,
+	// 拆解交给 provider 侧(配置层不做跨包语义)。
+	NativeToolsModelMap []string // NATIVE_TOOLS_MODEL_MAP,逗号分隔;空=同 id 透传
+
+	DebugToolLog    string
+	FreeAccounts    bool
+	FreeAccountsNum int
+	ProxyURL        string
+	HTTPProxy       string
+	DebugSentinel   bool
 
 	// DeepSeek 网页逆向(chat.deepseek.com)通道配置。
 	DeepSeekWebBase   string   // 网页端 base,默认 https://chat.deepseek.com
@@ -100,8 +129,8 @@ type Config struct {
 
 	// 豆包(字节)CDP 桥通道。网页版直连已被风控封死(回声/空响应/滑块),
 	// 走 NUC Chrome 页内 fetch(自动签名);桥地址默认复用 GEMINI_CDP_URL。
-	DoubaoCDPURL string
-	DoubaoCDPKey string
+	DoubaoCDPURL    string
+	DoubaoCDPKey    string
 	DoubaoCDPModels []string
 
 	// ChatGPT(chatgpt.com)CDP 桥通道。背景:ChatGPT 已改为浏览器会话绑定鉴权,
@@ -152,12 +181,21 @@ func Load() Config {
 		EnableExternalToken: getBoolEnv("ENABLE_EXTERNAL_TOKEN", true),
 		ToolCallingEnabled:  getBoolEnv("TOOL_CALLING_ENABLED", true),
 		RefusalRetries:      getIntEnv("REFUSAL_RETRIES", 3),
-		DebugToolLog:        os.Getenv("DEBUG_TOOL_LOG"),
-		FreeAccounts:        getBoolEnv("FREE_ACCOUNTS", false),
-		FreeAccountsNum:     getIntEnv("FREE_ACCOUNTS_NUM", 1024),
-		ProxyURL:            os.Getenv("PROXY_URL"),
-		HTTPProxy:           os.Getenv("http_proxy"),
-		DebugSentinel:       getBoolEnv("DEBUG_SENTINEL", false),
+
+		ProviderToolEmulation: getBoolEnv("PROVIDER_TOOL_EMULATION", false),
+		ProviderToolModels:    splitCSV(os.Getenv("PROVIDER_TOOL_MODELS")),
+		ProviderToolRetries:   getIntEnv("PROVIDER_TOOL_RETRIES", 3),
+
+		NativeToolsBase:     os.Getenv("NATIVE_TOOLS_BASE"),
+		NativeToolsKey:      os.Getenv("NATIVE_TOOLS_KEY"),
+		NativeToolsModelMap: splitCSV(os.Getenv("NATIVE_TOOLS_MODEL_MAP")),
+
+		DebugToolLog:    os.Getenv("DEBUG_TOOL_LOG"),
+		FreeAccounts:    getBoolEnv("FREE_ACCOUNTS", false),
+		FreeAccountsNum: getIntEnv("FREE_ACCOUNTS_NUM", 1024),
+		ProxyURL:        os.Getenv("PROXY_URL"),
+		HTTPProxy:       os.Getenv("http_proxy"),
+		DebugSentinel:   getBoolEnv("DEBUG_SENTINEL", false),
 
 		DeepSeekWebBase:   getEnv("DEEPSEEK_WEB_BASE", "https://chat.deepseek.com"),
 		DeepSeekWebTokens: os.Getenv("DEEPSEEK_WEB_TOKENS"),
@@ -204,8 +242,8 @@ func Load() Config {
 		HunyuanCDPKey: os.Getenv("HUNYUAN_CDP_KEY"),
 		HunyuanModels: splitCSV(os.Getenv("HUNYUAN_MODELS")),
 
-		DoubaoCDPURL: os.Getenv("DOUBAO_CDP_URL"),
-		DoubaoCDPKey: os.Getenv("DOUBAO_CDP_KEY"),
+		DoubaoCDPURL:    os.Getenv("DOUBAO_CDP_URL"),
+		DoubaoCDPKey:    os.Getenv("DOUBAO_CDP_KEY"),
 		DoubaoCDPModels: splitCSV(os.Getenv("DOUBAO_CDP_MODELS")),
 
 		CodingEnabled: os.Getenv("CODING_ENABLED") == "true" || os.Getenv("CODING_ENABLED") == "1",
