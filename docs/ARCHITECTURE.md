@@ -214,6 +214,107 @@ responsesToolCalling(/v1/responses) ──┘
 | `REFUSAL_RETRIES` | 3 | 重试次数(pi 场景建议 1,ZCode 建议 5) |
 | `DEBUG_TOOL_LOG` | — | 工具调用调试日志路径 |
 
+### 5.5 provider 工具模拟与原生透传(2026-10-27)
+
+§5.1–5.4 描述的是 ChatGPT 通道。其他 provider 的 chat 变体按 §四 的规定**剥离
+`tools`**,带工具的请求原本会静默退化为纯文本回答。本节两条路径补这个缺口,
+**默认全关/全空,不开即与旧行为逐字一致**。
+
+**优先级(仅当请求带 `tools` 时)**:方案 B(原生透传)> 方案 A(网关侧模拟)> 现状
+(交给 provider 自己处理,chat 变体即剥离 `tools`)。
+
+#### 方案 B:原生工具透传 `openai-native`
+
+文件:`internal/provider/openai_native.go`;接线:`internal/handler/chat_handler.go`
+的 `Nightmare` 开头(必须先于 `ResolveCanonical` 分派,否则永远轮不到)。
+
+- **只登记槽位、不 `Register`**:`Registry.SetNativeTools`(`internal/provider/provider.go`)
+  是独立槽位,不进 `providers` 列表——不参与 `Resolve` 路由与 `/v1/models`。原因是
+  `Register` 是**全量路由**——会把同名模型的普通对话、`/v1/responses`、熔断计数与
+  模型目录一并劫持到透传上游,而本 provider 只该接管「带 tools 的 chat 请求」。代价:
+  native 的模型 id 不在 `/v1/models` 里出现(预期行为)。成败仍按 `openai-native` 名字
+  记进熔断器(handler 的 `recordProviderOutcome`),但槽位命中判断不看熔断器。
+- **fail-closed**:`NewNativeTools` 要求 `NATIVE_TOOLS_BASE` + `NATIVE_TOOLS_KEY` 非空,
+  `NATIVE_TOOLS_MODEL_MAP` 非空且每项形如 `<客户端 id>=<上游 id>`;缺 `=`、任一侧为空、
+  左值重复都判非法。任一条不满足 → 返回 nil、打日志,`router.go` 不登记槽位。
+- **转发**:handler 已把原始 body 绑定进 `official.APIRequest`(原始字节不可复用),故
+  按结构体重新序列化:model 换成映射后的上游 id、删除 `artifact_delivery`、把
+  `stop`/`tool_choice` 还原成 OpenAI 线上形态、剥掉 `assistant.tool_calls[].index`。
+  `POST <BASE>/chat/completions`,状态码与 `Content-Type` 原样透传;SSE 逐块转发并
+  flush(不解析帧)。无隐式重试,整轮 60s 超时。
+- **仅 chat 表面**:`NativeTools.Responses` 返回 400 `unsupported_endpoint`;handler 在
+  `/v1/responses` 上同样先探测槽位并调用它,所以 native 模型走 Responses 表面得到的是
+  明确 400,而不是伪造的 Responses 事件。
+
+#### 方案 A:网关侧工具模拟
+
+文件:`internal/handler/provider_tools.go`(注入/重试/解析/输出全部在 handler 侧);
+provider 只提供「一轮请求 → 全文」的收集能力。
+
+```
+client(tools)
+  → chat_handler 分派(providerToolEmulationEnabled + TextCollector 断言)
+  → injectProviderToolProtocol 注入 <tool_calling_protocol>
+  → TextCollector.CollectText 取全文(非流式)
+  → toolcall 解析(Feed → Flush → RecoverFromText)
+  → tool_calls(标准响应/SSE)或降级为普通文本
+```
+
+- **门禁**:`providerToolEmulationEnabled` 要求 `PROVIDER_TOOL_EMULATION=true` 且模型命中
+  `PROVIDER_TOOL_MODELS`(空/全空白 = 不限),白名单按 `ResolveCanonical` 回填后的 id 判断。
+  provider 未实现 `provider.TextCollector` 时维持现状;目前只有 DeepSeek 实现
+  (`internal/provider/deepseek_chat.go` 的 `CollectText`)。
+- **注入**:`injectProviderToolProtocol` 用 `toolcall.BuildInstructions` 生成协议文本,包进
+  `<tool_calling_protocol>…</tool_calling_protocol>`;有 system 消息就追加到其末尾,没有
+  就在最前插一条。全程操作请求副本,`req` 不被修改。
+- **收集**:`CollectText` 非流式跑一轮 chat 变体,只返回正文(不含 reasoning)。DeepSeek 的
+  实现每轮强制新会话(`clientKey=""`,不进池、一轮一建一删):**续轮路径
+  (`deepseekChatFlow.buildRequest`)只发最后一条 message,注入的指令会整段丢失**,
+  所以工具模拟不能复用会话池。
+- **重试**:`PROVIDER_TOOL_RETRIES`(默认 3,总尝试 = 1 + N)内没解析到工具调用时,在副本
+  末尾追加一条固定的 nudge user 消息(`providerToolNudge`:非 coding 语义、列出工具名、
+  给「确实不需要工具」留退路)再收集;每轮从注入副本出发,不累积。
+- **解析**:`parseProviderToolCalls` 与 ChatGPT 通道同序——标签解析 `Feed` → 未闭合兜底
+  `Flush` → 无标签 JSON 兜底 `RecoverFromText`;命中后按出现顺序重排 `Index`。
+- **输出**:命中时非流式用 `NewChatCompletionWithToolCalls`(正文丢弃、
+  `finish_reason=tool_calls`),流式走 `provider.NewDeferredChunkStream` +
+  `toolcall.StreamToToolCallDeltas` + `StopToolCall`/`Done`(每帧一条增量);未命中则降级为
+  普通文本(`TextDelta` + `Stop("stop")` / `NewChatCompletionWithMetadata`),**不 5xx**。
+  唯一例外是上游错误:流未写头时干净的 JSON 502,已写头则 error 帧 + `[DONE]`。
+- **边界**:仅 `/v1/chat/completions`;`/v1/responses` 带 `tools` 维持现状(Responses 表面
+  的工具模拟留待后续)。
+
+#### 工具历史翻译(两条路径共用)
+
+上游只收真人对话形态的 prompt,**`tools` 本身绝不下发**;历史里的工具痕迹按 ChatGPT
+通道已验证的文本协议回灌(`internal/provider/deepseek_chat.go` 的
+`deepseekTurnsFromItems`):
+
+| 输入形态 | 回灌文本 |
+|---|---|
+| `assistant.tool_calls` / `function_call` item | `<tool_call>{"name": …, "arguments": …}</tool_call>`(`toolcall.SerializeForHistory`) |
+| `role=tool` / `function_call_output` item | `Tool (Resultado da ferramenta <name>): <content>`,超 4KB 按字节截断并加 `…（已截断）` |
+
+前缀必须写作 `Tool (Resultado da ferramenta …)`:toolcall 系统提示靠这个块识别「真实
+机器输出」,换措辞会削弱遵循率。工具名取 item 自带的 `name`,其次按 `call_id` 反查本轮
+`function_call`,都拿不到才回落 `tool`。
+
+**为什么复用 `internal/toolcall` 而不改它**:该包的 `DefaultTags` / `Feed` / `Flush` /
+`RecoverFromText` / `SerializeForHistory` 已被 ChatGPT 通道长期验证。方案 A 只多出
+「注入包装 / 全文收集 / 重试」三件事,无需碰解析器——两通道共用同一套解析,标签与
+兜底行为才不会悄悄分叉,也不会把回归引到已稳定的 ChatGPT 路径。
+
+#### 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PROVIDER_TOOL_EMULATION` | false | 方案 A 总开关;false 时下列两项不生效,请求完全走现有对话路径 |
+| `PROVIDER_TOOL_MODELS` | 空 | A 的模型白名单(逗号分隔,客户端 model id);空 = 全部 provider 模型 |
+| `PROVIDER_TOOL_RETRIES` | 3 | 未输出 `<tool_call>` 时的额外重试次数;0 = 只跑一次 |
+| `NATIVE_TOOLS_BASE` | 空 | 方案 B 上游 base(如 `https://api.deepseek.com/v1`);空 = B 不启用 |
+| `NATIVE_TOOLS_KEY` | 空 | B 的上游 API key(仅在 BASE 非空时使用) |
+| `NATIVE_TOOLS_MODEL_MAP` | 空 | `<客户端 id>=<上游 id>` 逗号分隔;空或任一项非法 = B 不注册 |
+
 ## 六、各 Provider 详情
 
 ### 6.1 ChatGPT(默认兜底)
@@ -439,7 +540,7 @@ DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16
 
 | 文件 | 职责 |
 |---|---|
-| `internal/provider/provider.go` | Provider 接口 + Registry + Capability/Model 类型 |
+| `internal/provider/provider.go` | Provider 接口 + `TextCollector` + Registry(含 `NativeTools` 槽位) + Capability/Model 类型 |
 | `internal/provider/*.go` | 各 provider 入口(模型解析、chat/coding 变体路由) |
 | `internal/provider/*_chat.go` | chat 变体实现 |
 | `internal/provider/*_coding.go` | coding 变体实现 |
@@ -451,7 +552,9 @@ DeepSeek adapter 在 `internal/provider/deepseek_chat_session.go`。池上限 16
 | `internal/provider/gemini_cdp.go` | CDP 桥公共底座 `cdpBase`(桥池/熔断/唤醒/模型归一)+ Gemini 桥 provider |
 | `internal/*web/` | 各网页逆向客户端包(协议层) |
 | `internal/toolcall/` | 标签解析、recover、fence、prompt、params |
-| `internal/handler/chat_handler.go` | `Nightmare`/`Responses` 入口 + provider 分发 + 工具调用路径 |
+| `internal/handler/chat_handler.go` | `Nightmare`/`Responses` 入口 + provider 分发(B 原生透传 / A 模拟的分派点均在 `ResolveCanonical` 之前或之内)+ 工具调用路径 |
+| `internal/handler/provider_tools.go` | 方案 A 网关侧工具模拟入口(`providerToolEmulationEnabled` 门禁 + `handleProviderToolCalling` 注入/重试/解析/SSE) |
+| `internal/provider/openai_native.go` | 方案 B 原生工具透传 `NativeTools`(`openai-native`;只进 Registry 槽位,不 `Register`) |
 | `internal/handler/chatgpt_turnloop.go` | ChatGPT 兜底 continue 轮询循环单点(`chatgptTurnLoop`,三入口共用;ping 参数化;sendTurn 可注入 seam) |
 | `internal/handler/shared.go` | `toolCallingEnabled`、拒绝分类器、`sanitizeRefusalHistory`(仅工具路径调用) |
 | `internal/handler/router.go` | Registry 构建 + 路由注册 + 流式失败上报通道注入 |
