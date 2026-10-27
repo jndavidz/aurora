@@ -1,8 +1,8 @@
 # aurora 支持 function calling（供 open-xiaoai-bridge 使用）
 
-Status: ready-for-agent
+Status: implemented-pending-live-verification
 
-> 状态：**施工中**（spec，2026-10-27）· 影响仓：`repos/aurora`（集成分支 `feat/provider-tool-calling`）
+> 状态：**代码完成，待 L2/L3 验收**（spec 2026-10-27）· 影响仓：`repos/aurora`（集成分支 `feat/provider-tool-calling`）
 > 本轮拍板（2026-10-27）：方案 A + 方案 B 同批实施；L2 NAS 验收与 L3 真机验收不在本轮。
 > 触发场景：bridge 的 Agent 工具层（`song_request`、`hass`、`ir_send` 等）需要 OpenAI 兼容的
 > `tools` → `tool_calls` 回环；当前 aurora 只有 ChatGPT 通道支持，provider 通道一律剥离 tools。
@@ -217,3 +217,18 @@ bridge 侧无改动。
 - 回环：`bridge/core/openai.py:296-345`（tool_calls → execute_tool → `role=tool` 回传）；
 - 流式探测回退：`bridge/core/openai.py:354-395`（`_ToolLoopDetected` → 非流式）；
 - 工具轮超时：`bridge/deploy/config.py` `openai.response_timeout`。
+
+## 9. 施工记录（2026-10-27）
+
+**代码侧完成**，集成分支 `feat/provider-tool-calling`（tip `39b4c38`），主干 `local-toolfix` 未动、未 push。
+
+- tickets：`01`–`07` 全部 done（07 = review 修复票，P1×4 + P2×9）。
+- 范围偏差（相对本 spec）：
+  1. **方案 A 只接 `/v1/chat/completions`**；`/v1/responses` 带 tools 维持现状（§3.3 未提表面限制）。
+  2. **方案 B 不 `Register` 进 providers 列表**，只登记 `Registry.SetNativeTools` 槽位——`Register` 是全量路由，会劫持同名模型的普通对话与 `/v1/responses`（§4 原文「由 handler 路由过来」按此落地）；因此 B 的模型 id 不进 `/v1/models`，且 B 的 `Responses` 表面返回 400。
+  3. **不做无标签 JSON 恢复**（§3.1 的重试分类器只保留标签解析）：`RecoverFromText` 的参数推断会把正文里解释性的 `{"query":"…"}` 伪造成调用，对音箱/红外这类真实执行工具是有害失败。
+  4. 工具结果文本沿用 ChatGPT 通道的 `Tool (Resultado da ferramenta <name>): …` 前缀（§3.4 建议的中文前缀会削弱共享 prompt 的遵循率）。
+  5. `CollectText` 每轮新开会话（`clientKey=""`）：续轮路径只发最后一条 message，注入的协议指令会整段丢失。
+- 已知代价（未做）：重试轮各自新开会话/重传图片/可能换 token，需改 `TextCollector` 签名才能复用；已加 context-aware 退避（400ms×N，上限 2s）。
+- **未验收**：L1 单测全绿（`go test ./...` 37 包），L2（NAS curl 命中率）与 L3（bridge 真机点歌、首响 ≤6s）需 NAS 与音箱，留待你执行；本 spec 状态在完成 L2/L3 前不置 closed。
+- 回退：`.env` 置 `PROVIDER_TOOL_EMULATION=0` 或清空 `PROVIDER_TOOL_MODELS` → 重启 aurora；不开两个开关时行为与旧版逐字一致。

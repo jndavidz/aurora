@@ -31,4 +31,11 @@
 
 **验收：** 两处文档改完，`git status` 显示只有 `docs/ARCHITECTURE.md` 属于本仓改动。
 
+**Status:** done（`83a0737` → 并入 `a8b8b7c`）
+
 **Blocked by:** 05
+
+## Comments
+- 2026-10-27 实现：`docs/ARCHITECTURE.md` 新增 §5.5 与 §八 两行接线点；`env.template` 补 6 个变量；`D:\_work\dev\apps\aurora\部署说明.md` 新增「八、工具调用」（仓库外，不入 git）。
+- 发现既有不一致（未改）：`env.template` DeepSeek 段仍写默认只有 `deepseek`，而 `deepseek.go` 已含 `deepseek-no-search`。
+- review 后同步：`39b4c38` 修订 400 边界措辞。

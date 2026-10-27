@@ -57,4 +57,10 @@ p.ChatCompletions(c, &original_request)
 
 **验收：** `go build ./... && go test ./internal/handler/...` 绿；`git diff chat_handler.go` 只有新增分派块与注释，既有 ChatGPT 路径零改动。
 
+**Status:** done（`954c59d` → 并入 `3717115`；T07 修订见 `07` 票）
+
 **Blocked by:** 03, 04
+
+## Comments
+- 2026-10-27 实现：B 块在 `ResolveCanonical` 之前、A 块在 provider 命中之内，白名单按 canonical 回填后的 id 判断；额外加 `h.providers != nil` 守卫（handler 允许 providers 为 nil）。
+- review 后变更：槽位命中加熔断判定；无 tools 的纯别名请求 400（该 400 又被 `39b4c38` 收窄为「仅纯别名」）。

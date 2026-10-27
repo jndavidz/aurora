@@ -29,4 +29,10 @@ NativeToolsModelMap []string // NATIVE_TOOLS_MODEL_MAP，逗号分隔，每项 "
 - 新增 `internal/config/config_test.go`（若无则新建）表驱动覆盖：默认值、`PROVIDER_TOOL_RETRIES=0`、`=abc` 回落默认、CSV 空白裁剪。环境变量用 `t.Setenv`。
 - `go test ./internal/config/...` 绿。
 
+**Status:** done（`a80bcba` → 并入 `581ed8e`）
+
 **Blocked by:** None
+
+## Comments
+- 2026-10-27 实现：6 字段 + 5 组 `t.Setenv` 表驱动用例，`go test ./internal/config/` 绿。
+- 后续修正：`NativeToolsModelMap` 的注释原写「空=同 id 透传」，与 T04 的 fail-closed 实现矛盾 → `361bf67` 改为「空或非法=不注册」。

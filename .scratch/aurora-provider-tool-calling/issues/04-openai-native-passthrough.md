@@ -59,4 +59,10 @@ if cfg.NativeToolsBase != "" && cfg.NativeToolsKey != "" {
 
 **验收：** `go build ./... && go test ./internal/provider/... ./internal/handler/...` 绿；无真实网络。
 
+**Status:** done（`04349e3` → 并入 `fd3ef4f`；T07 修订见 `07` 票）
+
 **Blocked by:** 01
+
+## Comments
+- 2026-10-27 实现：只登记槽位、**不 `Register`**（避免劫持全量路由）；映射 fail-closed；handler 已消费原始 body，故按 `official.APIRequest` 重序列化转发。
+- review 后变更：流式补 `sseHeaders`、消息白名单化（剥 `attachments`）、空 `stop` 删字段、槽位命中尊重熔断。

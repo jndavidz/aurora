@@ -54,4 +54,10 @@ type TextCollector interface {
 - `go build ./... && go test ./internal/provider/...` 绿；不触真实网络。
 - `git diff --stat` 证明 `internal/toolcall` 零改动。
 
+**Status:** done（`b423056` → 并入 `c8f06d3`）
+
 **Blocked by:** None
+
+## Comments
+- 2026-10-27 实现：`TextCollector` 定为 `(string, error)`（`official.Usage` 不存在）；`CollectText` 每轮 `clientKey=""` 新开会话；历史翻译走 `SerializeForHistory` + `Tool (Resultado da ferramenta …)`（4KB 截断、多字节安全）。
+- 既有硬规则用例 `TestChatCompletionsStripsTools` 改造为双向断言：工具**定义**不泄漏、工具**历史**按新格式回灌。

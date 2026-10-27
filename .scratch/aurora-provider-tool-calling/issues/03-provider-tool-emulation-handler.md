@@ -58,4 +58,10 @@ func (h *ChatHandler) handleProviderToolCalling(c *gin.Context, req *official.AP
 
 **验收：** `go build ./... && go test ./internal/handler/... ./internal/toolcall/...` 绿；`git diff --stat` 显示 `internal/toolcall` 零改动。
 
+**Status:** done（`dae400d` → 并入 `3452777`；T07 修订见 `07` 票）
+
 **Blocked by:** 01, 02
+
+## Comments
+- 2026-10-27 实现：12 条用例（含注入不污染入参、nudge 送达第二轮、流式帧序）。
+- review 后变更：去掉 `RecoverFromText` 兜底（参数推断会伪造调用）、补工具轮守卫/退避/文本保留 —— 见 `07-review-fixes.md`。

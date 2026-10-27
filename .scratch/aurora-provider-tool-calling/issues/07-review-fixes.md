@@ -68,5 +68,11 @@ B 分派只看 `native != nil && native.Handles(model)`，`ProviderBreaker.Tripp
 - 新增/修改用例覆盖 7.1–7.13 的每一条（缺一不可）。
 - commit 中文，形如 `fix(provider-tool): review 修复——工具轮守卫/去参数推断/熔断/文本保留 + P2 项`。
 
-**Status:** done（2026-10-27，t07-review-fixes；7.1–7.13 全部落实，含回归用例）
+**Status:** done（`abe4bf6` → 并入 `a5ef4ab`；追加修正 `39b4c38`）
 **Blocked by:** 06
+
+## Comments
+- 2026-10-27 处置：7.1–7.13 全修。7.2 是删功能（去掉 `RecoverFromText` 的参数推断）；7.7 退避用包级 `providerToolWait` 注入以免时间断言 flaky；7.13 的多字节截断用例落在 `internal/provider/deepseek_tool_history_test.go`（截断实现在 provider 包）。
+- **追加修正（`39b4c38`）**：7.11 的 400 原判据是「槽位 `Handles(model)` 且无 tools」，但推荐配置的左值就是已注册模型（`deepseek-no-search`），会把该模型的普通对话一起拒掉——为补边界打坏了主路径。现收窄为「该 id 不属于任何已注册 provider（纯别名）」才 400，补 `TestNativeMappingOverRegisteredModelStillChats`。
+- 未做（超出本批范围）：重试轮复用图片/`refFileIDs`/token（需改 `TextCollector` 签名），已在 §5.5 记为已知代价。
+- 需 live 验证：模型对协议与 nudge 的实际遵循率、重复执行工具是否真会发生、每轮新建会话是否触发风控、真实上游对重序列化消息体的接受度。
