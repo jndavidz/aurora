@@ -48,7 +48,7 @@ type Config struct {
 	// NativeToolsModelMap 是客户端 model id 到上游 model id 的映射表,
 	// 每项形如 "<客户端 model id>=<上游 model id>";这里原样保留字符串,
 	// 拆解交给 provider 侧(配置层不做跨包语义)。
-	NativeToolsModelMap []string // NATIVE_TOOLS_MODEL_MAP,逗号分隔;空=同 id 透传
+	NativeToolsModelMap []string // NATIVE_TOOLS_MODEL_MAP,逗号分隔;空或任一项非法=provider 不注册(fail-closed)
 
 	DebugToolLog    string
 	FreeAccounts    bool
