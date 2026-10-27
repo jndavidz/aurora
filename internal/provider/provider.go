@@ -59,6 +59,10 @@ type Registry struct {
 	providers []Provider
 	// E1/G2:provider 级熔断——连续失败达阈值则 Resolve 跳过,冷却到期半开恢复
 	breaker *ProviderBreaker
+	// nativeTools 是「原生工具透传」provider(方案 B)的独立槽位。
+	// 与 providers 列表互不影响:provider 照常 Register 参与 /v1/models,
+	// 槽位只用于 handler 在带 tools 的请求上做优先级判断(B > A)。
+	nativeTools Provider
 }
 
 // NewRegistry 构造一个空注册表。
@@ -71,6 +75,13 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(p Provider) {
 	r.providers = append(r.providers, p)
 }
+
+// SetNativeTools 登记「原生工具透传」provider,供 handler 在带 tools 的
+// 请求上优先分派（B > A）。未配置时为 nil。
+func (r *Registry) SetNativeTools(p Provider) { r.nativeTools = p }
+
+// NativeTools 返回「原生工具透传」provider;未配置时为 nil。
+func (r *Registry) NativeTools() Provider { return r.nativeTools }
 
 // Resolve 返回接管给定模型的 Provider;无匹配返回 nil(走默认 ChatGPT)。
 // 匹配分两层:先精确 Handles;失败后按规范化 id(小写、去空白)再匹配——
