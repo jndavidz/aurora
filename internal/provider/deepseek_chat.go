@@ -205,13 +205,17 @@ func toolCallRefFromItem(it responsesInputItem) (official.ToolCallRef, bool) {
 }
 
 // toolCallArguments 把 item 里的 arguments 还原成原始 JSON 文本:
-// JSON 字符串 → 解包后的内容;对象/数组 → 原样;缺省 → "{}"。
+// JSON 字符串 → 解包后的内容;对象/数组 → 原样;缺省/空串 → "{}"
+// (空串会拼出 `"arguments": }` 这种坏 JSON,模型无法照抄)。
 func toolCallArguments(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "{}"
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
+		if strings.TrimSpace(s) == "" {
+			return "{}"
+		}
 		return s
 	}
 	return string(raw)

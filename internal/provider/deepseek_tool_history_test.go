@@ -172,16 +172,24 @@ func TestDeepSeekTurnsFromChatMessages(t *testing.T) {
 }
 
 // TestDeepSeekTurnsSkipsUnparsableFunctionCall 断言解不出的 function_call
-// 被跳过(不 panic、不产生空 turn)。
+// 被跳过(不 panic、不产生空 turn);缺省 arguments 回落 "{}"(坏 JSON 会
+// 让模型无格式可照抄)。
 func TestDeepSeekTurnsSkipsUnparsableFunctionCall(t *testing.T) {
 	items := []responsesInputItem{
 		{Type: "function_call", Role: "assistant", Text: "not json at all"},
 		{Type: "function_call", Role: "assistant", Text: `{"type":"tool_calls","tool_calls":{"arguments":"{}"}}`},
+		{Type: "function_call", Role: "assistant", Text: `{"type":"tool_calls","tool_calls":{"name":"noargs","arguments":""}}`},
 		{Type: "message", Role: "user", Text: "hi"},
 	}
 	turns := deepseekTurnsFromItems(items)
-	if len(turns) != 1 || turns[0].Text != "hi" {
+	if len(turns) != 2 {
 		t.Fatalf("解不出的 function_call 应被跳过, got %+v", turns)
+	}
+	if want := `<tool_call>{"name": "noargs", "arguments": {}}</tool_call>`; turns[0].Text != want {
+		t.Fatalf("缺省 arguments 应回落 {}: got %q want %q", turns[0].Text, want)
+	}
+	if turns[1].Text != "hi" {
+		t.Fatalf("普通文本应原样保留, got %q", turns[1].Text)
 	}
 }
 
