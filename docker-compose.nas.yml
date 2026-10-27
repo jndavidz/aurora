@@ -24,6 +24,11 @@ services:
       - TOOL_CALLING_ENABLED=true   # local-toolfix 工具调用修复总开关
       - REFUSAL_RETRIES=1       # pi 场景:普通对话不带 <tool_call> 时立即返回,不重试(ZCode 场景才需 5)
       - DEBUG_TOOL_LOG=/work/.runtime/logs/tool_debug.log   # 工具调用 trace,local-toolfix 专属
+      # provider 工具调用灰度(2026-10-28 合并 ed2f3a6,见 .scratch/aurora-provider-tool-calling/):
+      # 仅带 tools 的 chat 请求受影响(bridge 生产 tool_calls_enabled=False,语音纯对话零感知);
+      # 白名单只放 deepseek-no-search;回退=置 false 重启容器,无需回滚镜像。
+      - PROVIDER_TOOL_EMULATION=true
+      - PROVIDER_TOOL_MODELS=deepseek-no-search
       # DeepSeek 网页逆向通道(见 docs/DEEPSEEK.md)。token 放 tokens/deepseek_tokens.txt,
       # 只读挂载到 /work/.runtime/tokens/;路径硬编码(部署脚本会清 .env,勿用 ${} 间接)。
       - DEEPSEEK_WEB_TOKENS=/work/.runtime/tokens/deepseek_tokens.txt
