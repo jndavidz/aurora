@@ -69,10 +69,14 @@ func providerToolEmulationRequestEligible(req *officialtypes.APIRequest) bool {
 	return !isCodingModelName(req.Model)
 }
 
-// rejectNativeModelWithoutTools:方案 B 槽位里的模型只接管「带 tools 的 chat
-// 请求」,无 tools 时明确 400 invalid_request_error(两表面同文案)。否则请求
-// 会落到 ChatGPT 兜底:消耗账号、按未知模型返回莫名 4xx(而槽位 id 又不在
-// /v1/models 里,客户端无从得知原因)。返回 true 表示已写响应。
+// rejectNativeModelWithoutTools:方案 B 的**纯别名**(槽位 id 不属于任何已注册
+// provider)只接管「带 tools 的 chat 请求」,无 tools 时明确 400 invalid_request_error
+// (两表面同文案)。否则请求会落到 ChatGPT 兜底:消耗账号、按未知模型返回莫名 4xx
+// (而槽位 id 又不在 /v1/models 里,客户端无从得知原因)。
+//
+// 映射左值常常就是某个已注册模型(推荐配置 deepseek-no-search=deepseek-chat),
+// 这种 id 的无 tools 对话必须照常交给该 provider —— 只有查不到的才拒。
+// 返回 true 表示已写响应。
 func (h *ChatHandler) rejectNativeModelWithoutTools(c *gin.Context, model string, hasTools bool) bool {
 	if h.providers == nil || hasTools {
 		return false
@@ -80,6 +84,11 @@ func (h *ChatHandler) rejectNativeModelWithoutTools(c *gin.Context, model string
 	native := h.providers.NativeTools()
 	if native == nil || !native.Handles(model) {
 		return false
+	}
+	for _, m := range h.providers.Models() {
+		if m.ID == model {
+			return false // 是真实 provider 模型:无 tools 走原路径
+		}
 	}
 	apierrors.JSONError(c, 400, "invalid_request_error",
 		"模型 "+model+" 仅接受带 tools 的 chat 请求(原生工具透传槽位,不支持无工具对话);请改用其他模型或携带 tools",

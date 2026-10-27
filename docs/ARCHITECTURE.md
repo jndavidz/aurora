@@ -236,10 +236,12 @@ responsesToolCalling(/v1/responses) ──┘
   记进熔断器(handler 的 `recordProviderOutcome`);**槽位命中判断也看熔断器**——熔断
   期间跳过槽位,请求自然回落到方案 A / 已注册 provider,避免上游持续 5xx 时所有工具
   请求都打空。
-- **无 tools → 400**:槽位模型只接管带 tools 的 chat 请求。两表面在探测槽位前先校验:
-  `len(Tools)==0` 且 `Handles(model)` → 400 `invalid_request_error`(`missing_tools`,
-  文案说明「仅接受带 tools 的 chat 请求」)。否则请求会落到 ChatGPT 兜底,消耗账号
-  且按未知模型返回莫名 4xx。
+- **纯别名 + 无 tools → 400**:槽位只接管带 tools 的 chat 请求。两表面在探测槽位前校验:
+  `len(Tools)==0` 且 `Handles(model)` 且该 id **不属于任何已注册 provider** → 400
+  `invalid_request_error`(`missing_tools`,文案说明「仅接受带 tools 的 chat 请求」)。
+  否则请求会落到 ChatGPT 兜底,消耗账号且按未知模型返回莫名 4xx。
+  映射左值本身就是真实模型时(推荐配置 `deepseek-no-search=deepseek-chat`),无 tools
+  的普通对话照常交给该 provider —— 400 只针对纯别名。
 - **fail-closed**:`NewNativeTools` 要求 `NATIVE_TOOLS_BASE` + `NATIVE_TOOLS_KEY` 非空,
   `NATIVE_TOOLS_MODEL_MAP` 非空且每项形如 `<客户端 id>=<上游 id>`;缺 `=`、任一侧为空、
   左值重复都判非法。任一条不满足 → 返回 nil、打日志,`router.go` 不登记槽位。
@@ -335,7 +337,7 @@ ChatGPT 路径。唯一的刻意分歧:A 路径**不调用** `RecoverFromText`(�
 | `PROVIDER_TOOL_RETRIES` | 3 | 未输出 `<tool_call>` 时的额外重试次数;0 = 只跑一次;重试间退避 400ms×N(上限 2s) |
 | `NATIVE_TOOLS_BASE` | 空 | 方案 B 上游 base(如 `https://api.deepseek.com/v1`);空 = B 不启用 |
 | `NATIVE_TOOLS_KEY` | 空 | B 的上游 API key(仅在 BASE 非空时使用) |
-| `NATIVE_TOOLS_MODEL_MAP` | 空 | `<客户端 id>=<上游 id>` 逗号分隔;空或任一项非法 = B 不注册;槽位模型无 tools 的 chat 请求 → 400 `missing_tools` |
+| `NATIVE_TOOLS_MODEL_MAP` | 空 | `<客户端 id>=<上游 id>` 逗号分隔;空或任一项非法 = B 不注册;纯别名(非已注册模型)无 tools 的 chat 请求 → 400 `missing_tools` |
 
 ## 六、各 Provider 详情
 

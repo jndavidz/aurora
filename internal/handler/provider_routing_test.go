@@ -378,7 +378,7 @@ func TestNightmareEmulationSkipsCodingVariant(t *testing.T) {
 	}
 }
 
-// ── 12. native 槽位模型 + 无 tools → 两表面都 400(7.11)───────────
+// ── 12. **纯别名**(不属于任何已注册 provider)+ 无 tools → 两表面 400(7.11)──
 
 func TestNativeModelWithoutToolsRejectedOnBothSurfaces(t *testing.T) {
 	cases := []struct {
@@ -427,7 +427,34 @@ func TestNativeModelWithoutToolsRejectedOnBothSurfaces(t *testing.T) {
 	}
 }
 
-// ── 13. Responses + tools + 无 native → A 不接管,走 p.Responses(7.13)──
+// ── 13. 映射左值就是已注册模型时,无 tools 对话不得被 400 ──────────
+//
+// 推荐配置是 NATIVE_TOOLS_MODEL_MAP=deepseek-no-search=deepseek-chat —— 左值
+// 与真实 provider 模型同名。此时该模型的普通对话(无 tools)必须照常交给
+// provider;400 只适用于「纯别名」(见 12)。
+
+func TestNativeMappingOverRegisteredModelStillChats(t *testing.T) {
+	reg := provider.NewRegistry()
+	plain := routingProvider("deepseek", "deepseek")
+	reg.Register(plain)
+	reg.SetNativeTools(routingProvider("native", "deepseek"))
+
+	h := routingHandler(&config.Config{ProviderToolEmulation: true}, reg)
+	c, w := routingPost("/v1/chat/completions", routingChatBodyNoTools)
+	h.Nightmare(c)
+
+	if w.Code == http.StatusBadRequest {
+		t.Fatalf("已注册模型的无 tools 对话不应被拒; body=%s", w.Body.String())
+	}
+	if plain.chatCalls != 1 {
+		t.Errorf("provider.ChatCompletions 调用次数 = %d, 想要 1", plain.chatCalls)
+	}
+	if !strings.Contains(w.Body.String(), "deepseek-chat") {
+		t.Errorf("响应应来自 provider.ChatCompletions; body=%s", w.Body.String())
+	}
+}
+
+// ── 14. Responses + tools + 无 native → A 不接管,走 p.Responses(7.13)──
 
 func TestResponsesWithoutNativeDoesNotUseEmulation(t *testing.T) {
 	reg := provider.NewRegistry()
