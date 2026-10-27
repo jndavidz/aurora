@@ -312,15 +312,17 @@ func TestChatCompletionsMultiTokenPoolStillResumes(t *testing.T) {
 	}
 }
 
-// 硬规则回归:chat.completions 带 tools 时,prompt 不得注入任何工具信息
-// (chat 变体剥离 tools;ticket 04 的接线改走 flow 后仍需保持)。
+// 硬规则回归:chat.completions 带 tools 时,工具定义(名称/描述/schema)不得
+// 注入 prompt;但工具**历史**自 T02 起按 ChatGPT 通道格式翻译回灌
+// (assistant.tool_calls → <tool_call>、role=tool → "Tool (...)" 块),
+// 否则多轮工具链会在模型侧"失忆"。
 func TestChatCompletionsStripsTools(t *testing.T) {
 	w := &wireUpstream{}
 	d, closer := startChatWire(t, w)
 	defer closer()
 
 	req := apiChatReq("u1", "读一下")
-	req.Tools = []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "read"}}}
+	req.Tools = []official.Tool{{Type: "function", Function: official.ToolFunction{Name: "read", Description: "TOOL-SCHEMA-MARKER", Parameters: []byte(`{"type":"object","properties":{"path":{"type":"string"}}}`)}}}
 	req.Messages = append(req.Messages,
 		official.APIMessage{Role: "assistant", ToolCalls: []official.ToolCallRef{{Index: 0, ID: "c1", Type: "function", Function: official.ToolCallFunc{Name: "read", Arguments: `{"path":"a.txt"}`}}}},
 		official.APIMessage{Role: "tool", ToolCallID: "c1", Content: official.MessageContent{TextValue: "文件内容"}},
@@ -332,13 +334,19 @@ func TestChatCompletionsStripsTools(t *testing.T) {
 		t.Fatalf("completions=%d, want 1", len(w.completions))
 	}
 	prompt := w.completions[0].Prompt
-	for _, banned := range []string{"read", "a.txt", "文件内容", "tool_call"} {
+	for _, banned := range []string{"TOOL-SCHEMA-MARKER", `"parameters"`, "TOOLS AVAILABLE"} {
 		if strings.Contains(prompt, banned) {
-			t.Fatalf("chat prompt 不得含工具信息 %q: %q", banned, prompt)
+			t.Fatalf("chat prompt 不得含工具定义 %q: %q", banned, prompt)
 		}
 	}
 	if !strings.Contains(prompt, "读一下") {
 		t.Fatalf("chat prompt 丢失正文: %q", prompt)
+	}
+	if !strings.Contains(prompt, `<tool_call>{"name": "read", "arguments": {"path":"a.txt"}}</tool_call>`) {
+		t.Fatalf("chat prompt 丢了工具历史调用: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Tool (Resultado da ferramenta read): 文件内容") {
+		t.Fatalf("chat prompt 丢了工具结果: %q", prompt)
 	}
 }
 

@@ -18,6 +18,11 @@ type responsesInputItem struct {
 	Role      string
 	Text      string
 	ImageURLs []string
+	// Name / CallID 仅工具 item 使用:function_call 记工具名与调用 id,
+	// function_call_output 记工具名(客户端不一定给)与对应的 call_id——
+	// 工具历史翻译(T02)靠 call_id 反查工具名才能拼出 "Tool (...)" 前缀。
+	Name   string
+	CallID string
 }
 
 // rawInputItem 是 input 数组元素的原始结构。
@@ -69,9 +74,9 @@ func parseInputItem(it rawInputItem) responsesInputItem {
 			"type":       "tool_calls",
 			"tool_calls": map[string]any{"name": it.Name, "arguments": it.Arguments},
 		})
-		return responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner)}
+		return responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner), Name: it.Name, CallID: it.CallID}
 	case "function_call_output":
-		return responsesInputItem{Type: "function_call_output", Role: "tool", Text: rawResponsesText(it.Output)}
+		return responsesInputItem{Type: "function_call_output", Role: "tool", Text: rawResponsesText(it.Output), Name: it.Name, CallID: it.CallID}
 	default:
 		item := responsesInputItem{Type: "message", Role: it.Role}
 		if item.Role == "" {
@@ -96,12 +101,12 @@ func apiMessagesToItems(messages []official.APIMessage) []responsesInputItem {
 						"type":       "tool_calls",
 						"tool_calls": map[string]any{"name": tc.Function.Name, "arguments": tc.Function.Arguments},
 					})
-					out = append(out, responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner)})
+					out = append(out, responsesInputItem{Type: "function_call", Role: "assistant", Text: string(inner), Name: tc.Function.Name, CallID: tc.ID})
 				}
 				continue
 			}
 		case "tool", "function":
-			out = append(out, responsesInputItem{Type: "function_call_output", Role: "tool", Text: msg.Text()})
+			out = append(out, responsesInputItem{Type: "function_call_output", Role: "tool", Text: msg.Text(), Name: msg.Name, CallID: msg.ToolCallID})
 			continue
 		}
 		text, urls := contentPartsFromMessage(msg.Content)
