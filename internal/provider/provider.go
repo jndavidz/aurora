@@ -54,6 +54,16 @@ type Provider interface {
 	ChatCompletions(c *gin.Context, req *official.APIRequest)
 }
 
+// TextCollector 由需要接入工具模拟的 provider 实现:以非流式方式取回
+// 一轮全文(不含 reasoning),供 handler 侧解析 <tool_call>。
+//
+// 与 Provider.ChatCompletions 的区别:不写 gin.Context,只把上游正文交回
+// 调用方(handler 负责解析、包装成 tool_calls/文本与错误出口)。工具指令的
+// 注入、重试与 nudge 均在 handler 侧,provider 只保证「一轮请求 → 全文」。
+type TextCollector interface {
+	CollectText(c *gin.Context, req *official.APIRequest) (text string, err error)
+}
+
 // Registry 持有所有已注册的 Provider,按模型 id 路由。
 type Registry struct {
 	providers []Provider

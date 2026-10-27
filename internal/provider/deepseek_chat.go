@@ -2,10 +2,14 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 
 	"aurora/internal/apierrors"
 	"aurora/internal/deepseekweb"
 	"aurora/internal/provider/session"
+	"aurora/internal/toolcall"
 	"aurora/typings/official"
 	"aurora/util"
 
@@ -104,24 +108,113 @@ func (d *DeepSeek) webPool(client *deepseekweb.Client) *session.Pool {
 	return d.sessionPool
 }
 
-// deepseekTurnsFromItems 把统一 item 列表收敛为本轮拍平输入(仅取文本;
-// 图片走独立 vision 路径)。Responses / chat.completions 两表面共用。
+// deepseekTurnsFromItems 把统一 item 列表收敛为本轮拍平输入。
+// 图片走独立 vision 路径,这里只取文本。Responses / chat.completions 两表面共用。
 //
-// 硬规则:chat 变体绝不向上游注入任何工具信息——function_call /
-// function_call_output 与 flattenChatItems 同口径跳过(防御性:客户端带了
-// tools 也不得泄漏到 prompt)。
+// 工具历史(T02)按 ChatGPT 通道已验证的文本协议翻译,而不是丢弃:
+//   - function_call → `<tool_call>{"name":...,"arguments":...}</tool_call>`
+//     (toolcall.SerializeForHistory,模型据此"记得"自己调过什么)
+//   - function_call_output → `Tool (Resultado da ferramenta <name>): <content>`
+//     (toolcall 系统提示以 "Tool (...)" 块识别真实工具输出,换措辞会削弱遵循率)
+//
+// 硬规则不变:不下发 req.Tools(上游只收真人对话形态的 prompt,工具参数
+// 绝不出现);工具历史只是对话文本的一部分。
 func deepseekTurnsFromItems(items []responsesInputItem) []deepseekTurn {
 	var turns []deepseekTurn
+	// callNames 记录本轮 function_call 的 call_id → 工具名:OpenAI 的
+	// role=tool 消息只带 tool_call_id,靠它反查才能拼出 "Tool (...)" 前缀。
+	callNames := make(map[string]string)
 	for _, it := range items {
 		switch it.Type {
-		case "function_call", "function_call_output":
-			continue
-		}
-		if it.Text != "" {
-			turns = append(turns, deepseekTurn{Text: it.Text})
+		case "function_call":
+			ref, ok := toolCallRefFromItem(it)
+			if !ok {
+				continue // 解不出 name/arguments 的历史调用跳过,不污染 prompt
+			}
+			callNames[ref.ID] = ref.Function.Name
+			turns = append(turns, deepseekTurn{Text: strings.TrimSpace(toolcall.SerializeForHistory([]official.ToolCallRef{ref}))})
+		case "function_call_output":
+			turns = append(turns, deepseekTurn{Text: formatToolResult(toolResultName(it, callNames), it.Text)})
+		default:
+			if it.Text != "" {
+				turns = append(turns, deepseekTurn{Text: it.Text})
+			}
 		}
 	}
 	return turns
+}
+
+// 工具结果回灌上限与截断后缀(与 ChatGPT 通道同口径:防长结果挤占上下文)。
+const (
+	toolResultMaxBytes      = 4096
+	toolResultTruncatedTail = "…（已截断）"
+)
+
+// toolResultName 决定 "Tool (...)" 前缀里的工具名:item 自带 name 优先,
+// 其次按 call_id 反查本轮的 function_call,都拿不到回落 "tool"。
+func toolResultName(it responsesInputItem, callNames map[string]string) string {
+	if it.Name != "" {
+		return it.Name
+	}
+	if it.CallID != "" {
+		if name, ok := callNames[it.CallID]; ok && name != "" {
+			return name
+		}
+	}
+	return "tool"
+}
+
+// formatToolResult 复刻 ChatGPT 通道的工具结果文本
+// (typings/chatgpt 的 AddToolMessage),超限按字节截断并加后缀。
+func formatToolResult(name, content string) string {
+	if len(content) > toolResultMaxBytes {
+		// ToValidUTF8 顺带去掉截断处的半个多字节字符(ASCII 结果仍是 4096 字节)。
+		content = strings.ToValidUTF8(content[:toolResultMaxBytes], "") + toolResultTruncatedTail
+	}
+	return "Tool (Resultado da ferramenta " + name + "): " + content
+}
+
+// toolCallRefFromItem 从 function_call item 里还原 call_id / name / arguments。
+// item.Text 是 apiMessagesToItems / parseInputItem 复刻的围栏形状:
+//
+//	{"type":"tool_calls","tool_calls":{"name":"read","arguments":"{\"path\":\"a\"}"}}
+//
+// arguments 既可能是 JSON 字符串(OpenAI 协议)也可能是对象(容错),
+// 统一还原成原始 JSON 文本供 SerializeForHistory 拼装。解不出返回 false。
+func toolCallRefFromItem(it responsesInputItem) (official.ToolCallRef, bool) {
+	var payload struct {
+		ToolCalls struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"tool_calls"`
+	}
+	if err := json.Unmarshal([]byte(it.Text), &payload); err != nil {
+		return official.ToolCallRef{}, false
+	}
+	name := payload.ToolCalls.Name
+	if name == "" {
+		name = it.Name // Responses 表面单带 name 时兜底
+	}
+	if name == "" {
+		return official.ToolCallRef{}, false
+	}
+	ref := official.ToolCallRef{Index: 0, ID: it.CallID, Type: "function"}
+	ref.Function.Name = name
+	ref.Function.Arguments = toolCallArguments(payload.ToolCalls.Arguments)
+	return ref, true
+}
+
+// toolCallArguments 把 item 里的 arguments 还原成原始 JSON 文本:
+// JSON 字符串 → 解包后的内容;对象/数组 → 原样;缺省 → "{}"。
+func toolCallArguments(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "{}"
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
 }
 
 // chatStreamTurn 流式一轮:穿过与 flow.run 相同的 seam,但增量在 delta
@@ -239,39 +332,16 @@ func (d *DeepSeek) chatNonStreamReplay(c *gin.Context, m *deepseekModel, req *of
 func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *official.APIRequest) {
 	client := d.webClient()
 	if client == nil {
-		apierrors.JSONError(c, 502, "api_error", "deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?", nil, "upstream_error")
+		apierrors.JSONError(c, 502, "api_error", errDeepSeekWebUnavailable.Error(), nil, "upstream_error")
 		return
 	}
 	// 会话策略 ticket 04:clientKey 解析与 Responses 表面同一规则
 	// (X-Session-Key 头 → user 字段剥 #new# → 空不进池),信令两表面统一。
 	clientKey, isNew := session.ResolveClientKey(c.GetHeader("X-Session-Key"), c.GetHeader("X-Session-Action"), req.User)
-	token := client.TokenFor(clientKey)
-	if token == "" {
-		apierrors.JSONError(c, 502, "api_error", "deepseek web token pool is empty", nil, "upstream_error")
+	flow, err := d.newChatFlow(client, m, req, clientKey, isNew)
+	if err != nil {
+		apierrors.JSONError(c, 502, "api_error", err.Error(), nil, "upstream_error")
 		return
-	}
-
-	// 识图:从 messages 里收集图片上传并 fork 成 vision 版;带图不进池。
-	refFileIDs, _ := uploadImagesFromMessages(client, token, req.Messages)
-	vision := len(refFileIDs) > 0
-
-	modelType := modelTypeFor(m)
-	if vision {
-		modelType = "vision"
-	}
-
-	flow := &deepseekChatFlow{
-		pool: d.webPool(client),
-		// chat.completions 的思考开关走 reasoning_effort(thinkingEnabledAPI)。
-		sender:     &deepseekWebSender{client: client, searchEnabled: d.searchEnabled(m, vision), thinking: thinkingEnabledAPI(m, req)},
-		clientKey:  clientKey,
-		isNew:      isNew,
-		vision:     vision,
-		noResume:   d.resumeDisabled(m),
-		modelType:  modelType,
-		token:      token,
-		messages:   deepseekTurnsFromItems(apiMessagesToItems(req.Messages)),
-		refFileIDs: refFileIDs,
 	}
 
 	if req.Stream {
@@ -284,6 +354,76 @@ func (d *DeepSeek) chatCompletions(c *gin.Context, m *deepseekModel, req *offici
 		return
 	}
 	d.chatReplayCompletion(c, req, out)
+}
+
+// errDeepSeekWebUnavailable / errDeepSeekTokenPoolEmpty 是两个 chat 表面共用的
+// 干净 502 错误(文案与历史一致,对客户端可见)。
+var (
+	errDeepSeekWebUnavailable = errors.New("deepseek web client unavailable: missing DEEPSEEK_WEB_TOKENS?")
+	errDeepSeekTokenPoolEmpty = errors.New("deepseek web token pool is empty")
+)
+
+// 编译期断言:DeepSeek 支持工具模拟所需的「非流式取回全文」。
+var _ TextCollector = (*DeepSeek)(nil)
+
+// CollectText 实现 TextCollector:非流式跑一轮 chat 变体,返回正文
+// (不含 reasoning),不写 gin.Context。
+//
+// 会话必须每轮新建:续轮路径(buildRequest)只发最后一条 message,注入的
+// 工具指令/系统片段会被整段丢弃 → clientKey 恒置空(不进池、一轮一建一删)。
+// 硬规则保留:req.Tools 不透传上游(发出去的只是真人对话形态的 prompt)。
+// req.Stream 被忽略 —— 工具模拟要等全文到齐才能解析。
+func (d *DeepSeek) CollectText(c *gin.Context, req *official.APIRequest) (string, error) {
+	client := d.webClient()
+	if client == nil {
+		return "", errDeepSeekWebUnavailable
+	}
+	m, ok := d.byID[req.Model]
+	if !ok || m.Variant != variantChat {
+		return "", fmt.Errorf("deepseek: model %q is not a chat model", req.Model)
+	}
+	flow, err := d.newChatFlow(client, m, req, "", false)
+	if err != nil {
+		return "", err
+	}
+	out, err := flow.run()
+	if err != nil {
+		return "", err
+	}
+	return out.text, nil
+}
+
+// newChatFlow 构造 chat.completions 形态的一轮 flow(chatCompletions 与
+// CollectText 共用):token 选取、识图上传、网页 model_type 判定与 flow 装配。
+// clientKey 为空 = 不进池(一轮一建一删)。
+func (d *DeepSeek) newChatFlow(client *deepseekweb.Client, m *deepseekModel, req *official.APIRequest, clientKey string, isNew bool) (*deepseekChatFlow, error) {
+	token := client.TokenFor(clientKey)
+	if token == "" {
+		return nil, errDeepSeekTokenPoolEmpty
+	}
+
+	// 识图:从 messages 里收集图片上传并 fork 成 vision 版;带图不进池。
+	refFileIDs, _ := uploadImagesFromMessages(client, token, req.Messages)
+	vision := len(refFileIDs) > 0
+
+	modelType := modelTypeFor(m)
+	if vision {
+		modelType = "vision"
+	}
+
+	return &deepseekChatFlow{
+		pool: d.webPool(client),
+		// chat.completions 的思考开关走 reasoning_effort(thinkingEnabledAPI)。
+		sender:     &deepseekWebSender{client: client, searchEnabled: d.searchEnabled(m, vision), thinking: thinkingEnabledAPI(m, req)},
+		clientKey:  clientKey,
+		isNew:      isNew,
+		vision:     vision,
+		noResume:   d.resumeDisabled(m),
+		modelType:  modelType,
+		token:      token,
+		messages:   deepseekTurnsFromItems(apiMessagesToItems(req.Messages)),
+		refFileIDs: refFileIDs,
+	}, nil
 }
 
 // thinkingEnabledAPI chat.completions 版的深度思考开关(reasoning_effort)。
