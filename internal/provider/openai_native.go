@@ -147,6 +147,10 @@ func (n *NativeTools) ChatCompletions(c *gin.Context, req *official.APIRequest) 
 	defer resp.Body.Close()
 
 	// 状态码与 Content-Type 原样透传:4xx/5xx 的 error body 交给 bridge 判读。
+	// 流式补齐 SSE 头四件套(与同包 sseHeaders 同源,防中间层缓冲)。
+	if req.Stream {
+		sseHeaders(c.Writer)
+	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		c.Writer.Header().Set("Content-Type", ct)
 	} else if req.Stream {
@@ -189,8 +193,10 @@ func pipeNativeStream(w gin.ResponseWriter, body io.Reader) {
 //  1. model 换成映射后的上游 id,并删除 aurora 自有字段(artifact_delivery);
 //  2. stop / tool_choice 在 official 里只实现了 UnmarshalJSON,默认 Marshal
 //     会变形(如 "auto" → {"type":"auto"}),这里按 OpenAI 线上形态还原;
-//  3. assistant.tool_calls 的回放不需要 index(客户端请求里没有该字段),
-//     去掉以免严格上游拒收。
+//     stop 为空数组时删掉该字段(否则变成 {"Values":null});
+//  3. 消息按白名单重序列化(只留 role/content/name/tool_calls/tool_call_id),
+//     attachments 等 aurora 扩展不外泄;assistant.tool_calls 的回放不需要
+//     index(客户端请求里没有该字段),去掉以免严格上游拒收。
 func nativeToolsPayload(req *official.APIRequest, upstreamModel string) ([]byte, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -207,13 +213,19 @@ func nativeToolsPayload(req *official.APIRequest, upstreamModel string) ([]byte,
 		return nil, err
 	}
 
-	if req.Stop != nil && len(req.Stop.Values) > 0 {
-		var stop any = req.Stop.Values
-		if len(req.Stop.Values) == 1 {
-			stop = req.Stop.Values[0]
-		}
-		if fields["stop"], err = json.Marshal(stop); err != nil {
-			return nil, err
+	if req.Stop != nil {
+		if len(req.Stop.Values) == 0 {
+			// 空数组("stop": [])在 official.StopParam 下会 marshal 成
+			// {"Values":null} —— 上游不认,直接删掉该字段。
+			delete(fields, "stop")
+		} else {
+			var stop any = req.Stop.Values
+			if len(req.Stop.Values) == 1 {
+				stop = req.Stop.Values[0]
+			}
+			if fields["stop"], err = json.Marshal(stop); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -237,8 +249,20 @@ func nativeToolsPayload(req *official.APIRequest, upstreamModel string) ([]byte,
 	return json.Marshal(fields)
 }
 
-// nativeToolsMessages 序列化消息列表,并剥掉 assistant.tool_calls 里客户端
-// 不认识的 index 字段(其余字段不动)。
+// nativeToolsMessageFields 是允许转发上游的消息字段白名单。
+// attachments(以及未来任何 aurora 自有扩展)不得外泄给严格上游 —— 未声明的
+// 字段一律剥掉;assistant.tool_calls[].index 另按 OpenAI 线上形态处理。
+var nativeToolsMessageFields = map[string]bool{
+	"role":         true,
+	"content":      true,
+	"name":         true,
+	"tool_calls":   true,
+	"tool_call_id": true,
+}
+
+// nativeToolsMessages 序列化消息列表:按白名单只保留标准字段(剥离
+// attachments 等 aurora 扩展),并去掉 assistant.tool_calls 里客户端请求
+// 不认识的 index 字段。
 func nativeToolsMessages(msgs []official.APIMessage) (json.RawMessage, error) {
 	out := make([]json.RawMessage, 0, len(msgs))
 	for _, m := range msgs {
@@ -246,11 +270,16 @@ func nativeToolsMessages(msgs []official.APIMessage) (json.RawMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(m.ToolCalls) > 0 {
-			var obj map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &obj); err != nil {
-				return nil, err
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, err
+		}
+		for key := range obj {
+			if !nativeToolsMessageFields[key] {
+				delete(obj, key)
 			}
+		}
+		if len(m.ToolCalls) > 0 {
 			var calls []map[string]json.RawMessage
 			if err := json.Unmarshal(obj["tool_calls"], &calls); err != nil {
 				return nil, err
@@ -261,9 +290,9 @@ func nativeToolsMessages(msgs []official.APIMessage) (json.RawMessage, error) {
 			if obj["tool_calls"], err = json.Marshal(calls); err != nil {
 				return nil, err
 			}
-			if raw, err = json.Marshal(obj); err != nil {
-				return nil, err
-			}
+		}
+		if raw, err = json.Marshal(obj); err != nil {
+			return nil, err
 		}
 		out = append(out, raw)
 	}

@@ -207,7 +207,9 @@ func TestNightmareWithoutToolsSkipsNewBranches(t *testing.T) {
 	reg := provider.NewRegistry()
 	collecting := routingCollector("deepseek", "deepseek", "plain answer")
 	reg.Register(collecting)
-	native := routingProvider("native", "deepseek")
+	// 槽位登记的是别的模型:本请求既无 tools,也不命中槽位(命中槽位时
+	// 无 tools 现在是 400,见 7.11 用例)。
+	native := routingProvider("native", "other-model")
 	reg.SetNativeTools(native)
 
 	cfg := &config.Config{ProviderToolEmulation: true, ProviderToolRetries: 0}
@@ -294,5 +296,156 @@ func TestNightmareEmulationUsesCanonicalModel(t *testing.T) {
 	}
 	if collecting.chatCalls != 0 {
 		t.Errorf("provider.ChatCompletions 调用次数 = %d, 想要 0", collecting.chatCalls)
+	}
+}
+
+// ── 9. native 槽位熔断期间跳过槽位,落到已注册 provider(7.3)──────
+
+func TestNightmareNativeSlotSkipsWhenTripped(t *testing.T) {
+	reg := provider.NewRegistry()
+	normal := routingProvider("deepseek", "deepseek")
+	reg.Register(normal)
+	native := routingProvider("native", "deepseek")
+	reg.SetNativeTools(native)
+	// 连续 3 次失败 → 达阈值摘除 60s。
+	for i := 0; i < 3; i++ {
+		reg.Breaker().RecordFailure(native.Name(), "502")
+	}
+
+	h := routingHandler(&config.Config{}, reg)
+	c, w := routingPost("/v1/chat/completions", routingChatBody)
+	h.Nightmare(c)
+
+	if native.chatCalls != 0 {
+		t.Errorf("熔断期间 native.ChatCompletions 调用次数 = %d, 想要 0", native.chatCalls)
+	}
+	if normal.chatCalls != 1 {
+		t.Errorf("provider.ChatCompletions 调用次数 = %d, 想要 1(熔断后落到 provider)", normal.chatCalls)
+	}
+	if !strings.Contains(w.Body.String(), "deepseek-chat") {
+		t.Errorf("响应应来自 provider; body=%s", w.Body.String())
+	}
+}
+
+// ── 10. tool_choice:"none" 不注入、不重试(7.5)───────────────────
+
+func TestNightmareEmulationSkippedWhenToolChoiceNone(t *testing.T) {
+	reg := provider.NewRegistry()
+	collecting := routingCollector("deepseek", "deepseek", "plain answer")
+	reg.Register(collecting)
+
+	cfg := &config.Config{ProviderToolEmulation: true, ProviderToolRetries: 0}
+	h := routingHandler(cfg, reg)
+	body := `{"model":"deepseek","messages":[{"role":"user","content":"hi"}],` +
+		`"tool_choice":"none",` +
+		`"tools":[{"type":"function","function":{"name":"get_weather"}}]}`
+	c, w := routingPost("/v1/chat/completions", body)
+	h.Nightmare(c)
+
+	if collecting.collectCalls != 0 {
+		t.Errorf("CollectText 调用次数 = %d, 想要 0(tool_choice=none 禁止注入)", collecting.collectCalls)
+	}
+	if collecting.chatCalls != 1 {
+		t.Errorf("provider.ChatCompletions 调用次数 = %d, 想要 1", collecting.chatCalls)
+	}
+	if !strings.Contains(w.Body.String(), "deepseek-chat") {
+		t.Errorf("响应应来自 provider; body=%s", w.Body.String())
+	}
+}
+
+// ── 11. -coding 变体不进模拟(7.6)────────────────────────────────
+
+func TestNightmareEmulationSkipsCodingVariant(t *testing.T) {
+	reg := provider.NewRegistry()
+	collecting := routingCollector("deepseek", "deepseek-coding", "plain answer")
+	reg.Register(collecting)
+
+	cfg := &config.Config{ProviderToolEmulation: true, ProviderToolRetries: 0, CodingEnabled: true}
+	h := routingHandler(cfg, reg)
+	body := `{"model":"deepseek-coding","messages":[{"role":"user","content":"hi"}],` +
+		`"tools":[{"type":"function","function":{"name":"get_weather"}}]}`
+	c, w := routingPost("/v1/chat/completions", body)
+	h.Nightmare(c)
+
+	if collecting.collectCalls != 0 {
+		t.Errorf("CollectText 调用次数 = %d, 想要 0(coding 变体维持原生流程)", collecting.collectCalls)
+	}
+	if collecting.chatCalls != 1 {
+		t.Errorf("provider.ChatCompletions 调用次数 = %d, 想要 1", collecting.chatCalls)
+	}
+	if !strings.Contains(w.Body.String(), "deepseek-chat") {
+		t.Errorf("响应应来自 provider; body=%s", w.Body.String())
+	}
+}
+
+// ── 12. native 槽位模型 + 无 tools → 两表面都 400(7.11)───────────
+
+func TestNativeModelWithoutToolsRejectedOnBothSurfaces(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "chat",
+			path: "/v1/chat/completions",
+			body: `{"model":"bridge-tools","messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			name: "responses",
+			path: "/v1/responses",
+			body: `{"model":"bridge-tools","input":"hi"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := provider.NewRegistry()
+			native := routingProvider("native", "bridge-tools")
+			reg.SetNativeTools(native)
+			h := routingHandler(&config.Config{}, reg)
+			c, w := routingPost(tc.path, tc.body)
+
+			if tc.path == "/v1/chat/completions" {
+				h.Nightmare(c)
+			} else {
+				h.Responses(c)
+			}
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, 想要 400; body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "仅接受带 tools") {
+				t.Errorf("错误文案应说明仅接受带 tools 的请求; body=%s", w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "invalid_request_error") {
+				t.Errorf("error.type 应为 invalid_request_error; body=%s", w.Body.String())
+			}
+			if native.chatCalls != 0 || native.responsesCalls != 0 {
+				t.Errorf("native 不应被调用: chat=%d responses=%d", native.chatCalls, native.responsesCalls)
+			}
+		})
+	}
+}
+
+// ── 13. Responses + tools + 无 native → A 不接管,走 p.Responses(7.13)──
+
+func TestResponsesWithoutNativeDoesNotUseEmulation(t *testing.T) {
+	reg := provider.NewRegistry()
+	collecting := routingCollector("deepseek", "deepseek", "plain answer")
+	reg.Register(collecting)
+
+	cfg := &config.Config{ProviderToolEmulation: true, ProviderToolRetries: 0}
+	h := routingHandler(cfg, reg)
+	c, w := routingPost("/v1/responses", routingResponsesBody)
+	h.Responses(c)
+
+	if collecting.collectCalls != 0 {
+		t.Errorf("Responses 表面不走方案 A; CollectText 调用次数 = %d", collecting.collectCalls)
+	}
+	if collecting.responsesCalls != 1 {
+		t.Errorf("provider.Responses 调用次数 = %d, 想要 1", collecting.responsesCalls)
+	}
+	if !strings.Contains(w.Body.String(), "deepseek-responses") {
+		t.Errorf("响应应来自 provider.Responses; body=%s", w.Body.String())
 	}
 }

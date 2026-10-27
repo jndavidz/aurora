@@ -232,16 +232,25 @@ responsesToolCalling(/v1/responses) ──┘
   是独立槽位,不进 `providers` 列表——不参与 `Resolve` 路由与 `/v1/models`。原因是
   `Register` 是**全量路由**——会把同名模型的普通对话、`/v1/responses`、熔断计数与
   模型目录一并劫持到透传上游,而本 provider 只该接管「带 tools 的 chat 请求」。代价:
-  native 的模型 id 不在 `/v1/models` 里出现(预期行为)。成败仍按 `openai-native` 名字
-  记进熔断器(handler 的 `recordProviderOutcome`),但槽位命中判断不看熔断器。
+  native 的模型 id 不在 `/v1/models` 里出现(预期行为)。成败按 `openai-native` 名字
+  记进熔断器(handler 的 `recordProviderOutcome`);**槽位命中判断也看熔断器**——熔断
+  期间跳过槽位,请求自然回落到方案 A / 已注册 provider,避免上游持续 5xx 时所有工具
+  请求都打空。
+- **无 tools → 400**:槽位模型只接管带 tools 的 chat 请求。两表面在探测槽位前先校验:
+  `len(Tools)==0` 且 `Handles(model)` → 400 `invalid_request_error`(`missing_tools`,
+  文案说明「仅接受带 tools 的 chat 请求」)。否则请求会落到 ChatGPT 兜底,消耗账号
+  且按未知模型返回莫名 4xx。
 - **fail-closed**:`NewNativeTools` 要求 `NATIVE_TOOLS_BASE` + `NATIVE_TOOLS_KEY` 非空,
   `NATIVE_TOOLS_MODEL_MAP` 非空且每项形如 `<客户端 id>=<上游 id>`;缺 `=`、任一侧为空、
   左值重复都判非法。任一条不满足 → 返回 nil、打日志,`router.go` 不登记槽位。
 - **转发**:handler 已把原始 body 绑定进 `official.APIRequest`(原始字节不可复用),故
-  按结构体重新序列化:model 换成映射后的上游 id、删除 `artifact_delivery`、把
-  `stop`/`tool_choice` 还原成 OpenAI 线上形态、剥掉 `assistant.tool_calls[].index`。
-  `POST <BASE>/chat/completions`,状态码与 `Content-Type` 原样透传;SSE 逐块转发并
-  flush(不解析帧)。无隐式重试,整轮 60s 超时。
+  按结构体重新序列化:model 换成映射后的上游 id、删除 `artifact_delivery`;`stop`/
+  `tool_choice` 还原成 OpenAI 线上形态(单元素 stop → 字符串,空数组 stop → 删字段,
+  否则会变成 `{"Values":null}`);**消息按白名单重序列化**(只留 `role`/`content`/
+  `name`/`tool_calls`/`tool_call_id`,剥掉 `attachments` 等 aurora 扩展,防严格上游
+  400),并去掉 `assistant.tool_calls[].index`。`POST <BASE>/chat/completions`,状态码与
+  `Content-Type` 原样透传;流式复用 `sseHeaders`(Content-Type/Cache-Control/Connection/
+  X-Accel-Buffering 四件套),SSE 逐块转发并 flush(不解析帧)。无隐式重试,整轮 60s 超时。
 - **仅 chat 表面**:`NativeTools.Responses` 返回 400 `unsupported_endpoint`;handler 在
   `/v1/responses` 上同样先探测槽位并调用它,所以 native 模型走 Responses 表面得到的是
   明确 400,而不是伪造的 Responses 事件。
@@ -253,15 +262,18 @@ provider 只提供「一轮请求 → 全文」的收集能力。
 
 ```
 client(tools)
-  → chat_handler 分派(providerToolEmulationEnabled + TextCollector 断言)
+  → chat_handler 分派(providerToolEmulationEnabled + providerToolEmulationRequestEligible + TextCollector 断言)
   → injectProviderToolProtocol 注入 <tool_calling_protocol>
   → TextCollector.CollectText 取全文(非流式)
-  → toolcall 解析(Feed → Flush → RecoverFromText)
+  → toolcall 解析(Feed → Flush,不做无标签 JSON 猜测)
   → tool_calls(标准响应/SSE)或降级为普通文本
 ```
 
 - **门禁**:`providerToolEmulationEnabled` 要求 `PROVIDER_TOOL_EMULATION=true` 且模型命中
-  `PROVIDER_TOOL_MODELS`(空/全空白 = 不限),白名单按 `ResolveCanonical` 回填后的 id 判断。
+  `PROVIDER_TOOL_MODELS`(空/全空白 = 不限),白名单按 `ResolveCanonical` 回填后的 id 判断;
+  `providerToolEmulationRequestEligible` 再挡两种请求:`tool_choice:"none"`(客户端显式
+  禁止工具,注入 + nudge 会强迫模型违约)与 `-coding` 变体(`CollectText` 对非 chat 变体
+  返回 error,接管会变 502;判定沿用 handler 的 `isCodingModelName` / `CODING_ENABLED`)。
   provider 未实现 `provider.TextCollector` 时维持现状;目前只有 DeepSeek 实现
   (`internal/provider/deepseek_chat.go` 的 `CollectText`)。
 - **注入**:`injectProviderToolProtocol` 用 `toolcall.BuildInstructions` 生成协议文本,包进
@@ -270,17 +282,26 @@ client(tools)
 - **收集**:`CollectText` 非流式跑一轮 chat 变体,只返回正文(不含 reasoning)。DeepSeek 的
   实现每轮强制新会话(`clientKey=""`,不进池、一轮一建一删):**续轮路径
   (`deepseekChatFlow.buildRequest`)只发最后一条 message,注入的指令会整段丢失**,
-  所以工具模拟不能复用会话池。
-- **重试**:`PROVIDER_TOOL_RETRIES`(默认 3,总尝试 = 1 + N)内没解析到工具调用时,在副本
-  末尾追加一条固定的 nudge user 消息(`providerToolNudge`:非 coding 语义、列出工具名、
-  给「确实不需要工具」留退路)再收集;每轮从注入副本出发,不累积。
-- **解析**:`parseProviderToolCalls` 与 ChatGPT 通道同序——标签解析 `Feed` → 未闭合兜底
-  `Flush` → 无标签 JSON 兜底 `RecoverFromText`;命中后按出现顺序重排 `Index`。
+  所以工具模拟不能复用会话池。重试是 N 次独立收集(新会话/重传图),仅在失败路径发生。
+- **接受与重试**(先判「是否该接受」,再判「是否该重试」):命中工具调用即接受;末条消息
+  role 是 `tool`/`function` 且本轮文本非空也直接接受(模型已基于工具输出作答,再 nudge
+  会逼它重复发起工具调用——重复点歌/重复发红外);否则在 `PROVIDER_TOOL_RETRIES`
+  (默认 3,总尝试 = 1 + N)内追加固定 nudge user 消息(`providerToolNudge`:非 coding
+  语义、列出工具名、给「确实不需要工具」留退路)重试,每轮从注入副本出发、不累积。
+- **退避**:重试前 context-aware 等待 `400ms×(attempt+1)`(上限 2s;`providerToolWait` 是
+  可注入的包级变量,测试替换后不真睡),客户端断开(`ctx.Done()`)立即退出。图片/token
+  不复用(要改 `TextCollector` 签名,超出本批范围)。
+- **解析**:`parseProviderToolCalls` 只做标签解析 `Feed` → 未闭合兜底 `Flush`,**不做
+  `RecoverFromText` 的无标签 JSON 推测**——正文里任何「key 恰好是某工具参数子集」的 JSON
+  都会被伪造成调用(模型解释「`song_request` 需要 `{"query":"歌曲名"}`」→ 网关真的去点
+  「歌曲名」)。宁可降级为文本,也不猜工具调用;命中后按出现顺序重排 `Index`。
 - **输出**:命中时非流式用 `NewChatCompletionWithToolCalls`(正文丢弃、
   `finish_reason=tool_calls`),流式走 `provider.NewDeferredChunkStream` +
   `toolcall.StreamToToolCallDeltas` + `StopToolCall`/`Done`(每帧一条增量);未命中则降级为
-  普通文本(`TextDelta` + `Stop("stop")` / `NewChatCompletionWithMetadata`),**不 5xx**。
-  唯一例外是上游错误:流未写头时干净的 JSON 502,已写头则 error 帧 + `[DONE]`。
+  普通文本(`TextDelta` + `Stop("stop")` / `NewChatCompletionWithMetadata`)。
+  两个例外都是 502:上游错误(流未写头时干净 JSON,已写头则 error 帧 + `[DONE]`),以及
+  **重试耗尽仍无有效文本**——此时保留「最后一个非空文本」,全空才 `502 no_valid_reply`
+  (绝不 200 + `content:""`,bridge 会判成「没收到回复」)。
 - **边界**:仅 `/v1/chat/completions`;`/v1/responses` 带 `tools` 维持现状(Responses 表面
   的工具模拟留待后续)。
 
@@ -300,20 +321,21 @@ client(tools)
 `function_call`,都拿不到才回落 `tool`。
 
 **为什么复用 `internal/toolcall` 而不改它**:该包的 `DefaultTags` / `Feed` / `Flush` /
-`RecoverFromText` / `SerializeForHistory` 已被 ChatGPT 通道长期验证。方案 A 只多出
-「注入包装 / 全文收集 / 重试」三件事,无需碰解析器——两通道共用同一套解析,标签与
-兜底行为才不会悄悄分叉,也不会把回归引到已稳定的 ChatGPT 路径。
+`SerializeForHistory` 已被 ChatGPT 通道长期验证。方案 A 只多出「注入包装 / 全文收集 /
+重试」三件事,无需碰解析器——标签与 Flush 行为不会悄悄分叉,也不会把回归引到已稳定的
+ChatGPT 路径。唯一的刻意分歧:A 路径**不调用** `RecoverFromText`(见上「解析」段),
+因为无标签 JSON 在对话正文里更常见,参数推断会把解释文本伪造成真实调用。
 
 #### 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PROVIDER_TOOL_EMULATION` | false | 方案 A 总开关;false 时下列两项不生效,请求完全走现有对话路径 |
-| `PROVIDER_TOOL_MODELS` | 空 | A 的模型白名单(逗号分隔,客户端 model id);空 = 全部 provider 模型 |
-| `PROVIDER_TOOL_RETRIES` | 3 | 未输出 `<tool_call>` 时的额外重试次数;0 = 只跑一次 |
+| `PROVIDER_TOOL_MODELS` | 空 | A 的模型白名单(逗号分隔);按 `ResolveCanonical` 回填后的 id 匹配(大小写/空白容错后),空 = 全部 provider 模型 |
+| `PROVIDER_TOOL_RETRIES` | 3 | 未输出 `<tool_call>` 时的额外重试次数;0 = 只跑一次;重试间退避 400ms×N(上限 2s) |
 | `NATIVE_TOOLS_BASE` | 空 | 方案 B 上游 base(如 `https://api.deepseek.com/v1`);空 = B 不启用 |
 | `NATIVE_TOOLS_KEY` | 空 | B 的上游 API key(仅在 BASE 非空时使用) |
-| `NATIVE_TOOLS_MODEL_MAP` | 空 | `<客户端 id>=<上游 id>` 逗号分隔;空或任一项非法 = B 不注册 |
+| `NATIVE_TOOLS_MODEL_MAP` | 空 | `<客户端 id>=<上游 id>` 逗号分隔;空或任一项非法 = B 不注册;槽位模型无 tools 的 chat 请求 → 400 `missing_tools` |
 
 ## 六、各 Provider 详情
 

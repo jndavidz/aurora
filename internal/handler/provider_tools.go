@@ -9,11 +9,14 @@ package handler
 // 与 ChatGPT 通道(tool_calling.go)的区别:
 //   - 收集走 provider.TextCollector(非流式全文),不碰 ChatGPT 账号池/会话状态
 //   - 重试的 nudge 是固定文本(不套 FinalNudge 的 coding 语义),按轮追加为 user 消息
-//   - 重试耗尽降级为普通文本,绝不 5xx(上游错误除外)
+//   - 不做无标签 JSON 恢复(RecoverFromText):宁可降级为文本,也不猜工具调用
+//   - 重试耗尽降级为普通文本;仅当连非空文本都没有时才 502(上游错误同样 502)
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"aurora/internal/apierrors"
 	"aurora/internal/config"
@@ -51,8 +54,41 @@ func providerToolEmulationEnabled(cfg *config.Config, model string) bool {
 	return !hasEntry
 }
 
+// providerToolEmulationRequestEligible 是请求侧的额外门禁(配置门禁之外):
+//   - tool_choice:"none" —— 客户端显式禁止工具,注入协议 + nudge 会强迫模型
+//     违反契约,直接交回 provider 原路径;
+//   - -coding 变体 —— 走原生 coding 流程(CollectText 对非 chat 变体返回 error,
+//     若被模拟接管会 502),判定沿用 handler 既有的 isCodingModelName。
+func providerToolEmulationRequestEligible(req *officialtypes.APIRequest) bool {
+	if req == nil {
+		return false
+	}
+	if req.ToolChoice.IsForcedNone() {
+		return false
+	}
+	return !isCodingModelName(req.Model)
+}
+
+// rejectNativeModelWithoutTools:方案 B 槽位里的模型只接管「带 tools 的 chat
+// 请求」,无 tools 时明确 400 invalid_request_error(两表面同文案)。否则请求
+// 会落到 ChatGPT 兜底:消耗账号、按未知模型返回莫名 4xx(而槽位 id 又不在
+// /v1/models 里,客户端无从得知原因)。返回 true 表示已写响应。
+func (h *ChatHandler) rejectNativeModelWithoutTools(c *gin.Context, model string, hasTools bool) bool {
+	if h.providers == nil || hasTools {
+		return false
+	}
+	native := h.providers.NativeTools()
+	if native == nil || !native.Handles(model) {
+		return false
+	}
+	apierrors.JSONError(c, 400, "invalid_request_error",
+		"模型 "+model+" 仅接受带 tools 的 chat 请求(原生工具透传槽位,不支持无工具对话);请改用其他模型或携带 tools",
+		apierrors.Param("tools"), "missing_tools")
+	return true
+}
+
 // handleProviderToolCalling 是方案 A 的主流程:
-// 注入 → 收集(带重试)→ 解析(标签/兜底恢复)→ 封装(tool_calls 或文本 / SSE)。
+// 注入 → 收集(带退避重试)→ 解析(仅标签,不做无标签 JSON 猜测)→ 封装(tool_calls 或文本 / SSE)。
 //
 // tc 由调用方按模型选择(如 *provider.DeepSeek);本函数不写任何会话状态,
 // 每次尝试都是一次独立收集。req 及其消息切片不被修改。
@@ -74,9 +110,19 @@ func (h *ChatHandler) handleProviderToolCalling(c *gin.Context, req *officialtyp
 	nudge := providerToolNudge(req.Tools)
 	retries := providerToolRetryBudget(h.cfg)
 
+	// 末条消息是工具结果(tool/function)且模型给出非空文本时,说明模型已经
+	// 基于工具输出完成任务 —— 再 nudge 会逼它重复发起工具调用(重复点歌 /
+	// 重复发红外),所以这一轮必须直接接受(与 tool_calling.go 的守卫同口径)。
+	lastRole := ""
+	if n := len(req.Messages); n > 0 {
+		lastRole = req.Messages[n-1].Role
+	}
+	toolResultTurn := lastRole == "tool" || lastRole == "function"
+
 	var (
-		text  string
-		calls []officialtypes.ToolCall
+		text         string
+		lastNonEmpty string
+		calls        []officialtypes.ToolCall
 	)
 	for attempt := 0; ; attempt++ {
 		// 每轮从注入副本出发,重试轮只多一条 nudge user 消息(不累积、不污染)。
@@ -90,10 +136,33 @@ func (h *ChatHandler) handleProviderToolCalling(c *gin.Context, req *officialtyp
 			return
 		}
 		text = out
-		calls = parseProviderToolCalls(text, req.Tools)
-		if len(calls) > 0 || attempt >= retries {
+		if strings.TrimSpace(out) != "" {
+			lastNonEmpty = out // 重试耗尽时回退用(末轮可能为空)
+		}
+		calls = parseProviderToolCalls(out, req.Tools)
+		// 先判「是否该接受」,再判「是否该重试」:
+		//   1) 命中工具调用 → 接受
+		//   2) 工具结果轮 + 非空文本 → 接受(不再催工具,见上)
+		//   3) 重试预算耗尽 → 接受(降级为文本,空文本由下方统一转 502)
+		if len(calls) > 0 || (toolResultTurn && strings.TrimSpace(out) != "") || attempt >= retries {
 			break
 		}
+		// 重试前 context-aware 退避(防风控:连续重试会新开会话/重传图片,
+		// 无间隔地打上游是最典型的机器化流量特征)。
+		if !providerToolWait(c.Request.Context(), providerToolRetryDelay(attempt)) {
+			return // 客户端已断开,不再白跑上游
+		}
+	}
+
+	// 重试耗尽后保留「最后一个非空文本」:末轮空串时用它,全部尝试都空则
+	// 502 —— 200 + content:"" 会被 bridge 判成「没收到回复」。
+	if strings.TrimSpace(text) == "" {
+		text = lastNonEmpty
+	}
+	if len(calls) == 0 && strings.TrimSpace(text) == "" {
+		// 流是延迟模式,此时头尚未写出,两表面都走同一份干净 JSON 502。
+		apierrors.JSONError(c, 502, "api_error", "provider tool emulation: empty reply", nil, "no_valid_reply")
+		return
 	}
 
 	inputTokens := countMessagesTokens(req.Messages)
@@ -200,8 +269,35 @@ func providerToolRetryBudget(cfg *config.Config) int {
 	return cfg.ProviderToolRetries
 }
 
-// parseProviderToolCalls 从全文解析工具调用:标签解析(Feed) → 未闭合兜底
-// (Flush) → 无标签 JSON 兜底(RecoverFromText),与 ChatGPT 通道同序。
+// providerToolRetryDelay 返回第 attempt 轮失败后的重试退避:
+// 400ms × (attempt+1),上限 2s。退避只在失败路径发生(成功轮不睡)。
+func providerToolRetryDelay(attempt int) time.Duration {
+	d := 400 * time.Millisecond * time.Duration(attempt+1)
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
+}
+
+// providerToolWait 是退避的实际执行点(包级变量,测试可替换以不真睡)。
+// 返回 false 表示 context 已取消(客户端断开),调用方应立即退出。
+var providerToolWait = func(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// parseProviderToolCalls 从全文解析工具调用:标签解析(Feed)→ 未闭合兜底(Flush)。
+//
+// 不做「无标签 JSON」恢复(RecoverFromText 的 InferToolFromParams):正文里任何
+// 「key 恰好是某工具参数子集」的 JSON 都会被伪造成调用——例如模型解释
+// 「song_request 需要 {"query":"歌曲名"}」,网关就会真的去点「歌曲名」。
+// 宁可降级为文本,也不猜工具调用(与 ChatGPT 通道不同,这里刻意不共享该兜底)。
 // 命中后按出现顺序重排 Index。
 func parseProviderToolCalls(text string, tools []officialtypes.Tool) []officialtypes.ToolCall {
 	parser := toolcall.NewParserWithTagsAndTools(toolcall.DefaultTags, tools)
@@ -209,9 +305,6 @@ func parseProviderToolCalls(text string, tools []officialtypes.Tool) []officialt
 	if len(calls) == 0 {
 		_, extra := parser.Flush()
 		calls = append(calls, extra...)
-	}
-	if len(calls) == 0 {
-		calls = toolcall.RecoverFromText(text, tools)
 	}
 	for i := range calls {
 		calls[i].Index = i
