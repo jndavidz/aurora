@@ -2,7 +2,9 @@
 
 **Type:** task
 
-**What to build:** 让 provider 能以「非流式、取回全文」的方式跑一轮，并让 provider 的请求翻译层认识 `role=tool` / `assistant.tool_calls` 历史。**不改 `internal/toolcall`，不改 handler。**
+**What to build:** 让 provider 能以「非流式、取回全文」的方式跑一轮，并让 DeepSeek 的请求翻译层认识 `role=tool` / `assistant.tool_calls` 历史。**不改 `internal/toolcall`，不改 handler。**
+
+> 先读共享笔记 `D:\_work\dev\tmp\aurora-tool-calling-notes\notes.md` §1/§2/§3/§4。参考同型实现 `internal/provider/deepseek_coding.go`（已封存，别修改它）。
 
 ### 2.1 新增可选接口（`internal/provider/provider.go`）
 
@@ -10,42 +12,46 @@
 // TextCollector 由需要接入工具模拟的 provider 实现：以非流式方式取回
 // 一轮全文（不含 reasoning），供 handler 侧解析 <tool_call>。
 type TextCollector interface {
-    CollectText(c *gin.Context, req *official.APIRequest) (text string, usage *official.Usage, err error)
+    CollectText(c *gin.Context, req *official.APIRequest) (text string, err error)
 }
 ```
 
-- 若 `typings/official` 没有 `Usage` 类型，就用 `(text string, err error)` 并在 commit message 里记明理由；**不要**为此新造 usage 结构。
-- 接口只加声明 + 注释，不得修改 `Provider` 接口本身（不能强制所有 provider 实现）。
+- `typings/official` **没有** `Usage` 类型（已核实：`usage` 结构未导出）→ 签名就用 `(string, error)`，不要新造 usage 类型。
+- 只加接口声明 + 注释，**不改 `Provider` 接口**；加编译期断言 `var _ TextCollector = (*DeepSeek)(nil)`。
 
-### 2.2 DeepSeek 实现（`internal/provider/deepseek_chat.go`）
+### 2.2 DeepSeek 实现 `CollectText`（`internal/provider/deepseek_chat.go`）
 
-- 复用 `chatCompletions` 的非流式分支：`deepseekChatFlow` + `flow.run()` → `deepseekTurnOutput.text`。
-- **保持 tools 剥离硬规则**：不得把 `req.Tools` 传给上游；`CollectText` 与 `chatCompletions` 唯一差别是「不写 gin.Context、把结果返回」。
-- 会话/token/搜索/识图逻辑与 `chatCompletions` 完全一致（`session.ResolveClientKey`、`client.TokenFor`、`uploadImagesFromMessages`、`searchEnabled`、`thinkingEnabledAPI`）。若出现复制粘贴，抽一个 `buildChatFlow(c, m, req) (*deepseekChatFlow, int, error)` 之类的内部函数供两者共用，但**不要**顺手重构 `chatCompletions` 的对外行为。
-- 推荐实现路径：在 `provider.go` 里加编译期断言 `var _ TextCollector = (*DeepSeek)(nil)`。
+- 复用 `chatCompletions` 的非流式分支（`deepseekChatFlow` + `flow.run()` → `deepseekTurnOutput.text`），**不写 gin.Context、把文本返回**。
+- 保持 tools 剥离硬规则：不得把 `req.Tools` 传给上游。
+- 会话/搜索/识图逻辑与 `chatCompletions` 一致；重复代码抽内部 helper（如 `buildChatFlow`），但不得改变 `chatCompletions` 的对外行为。
+- **会话必须每轮新建**：`buildRequest` 续轮只发最后一条 message（`deepseek_chat_session.go:291-308`），注入的 instructions 只在「新会话」路径生效。→ `CollectText` 里 `clientKey` 置空（不进池、一轮一建一删）。单测必须断言「送给上游的 prompt 含注入片段」，不能只测返回值。
 
-### 2.3 工具历史翻译（`deepseekTurnsFromItems` 所在处）
+### 2.3 工具历史翻译（`deepseekTurnsFromItems`）
 
-现状：`deepseekTurnsFromItems` 对 `function_call` / `function_call_output` 直接 `continue`——**工具结果内容被整条丢弃**，第二轮模型会不知道为什么工具返回了什么。改成：
+现状：`function_call` / `function_call_output` 被整条 `continue` 丢掉内容。改成按 **ChatGPT 通道已验证的格式**翻译（`internal/toolcall/prompt.go:279` 的系统提示依赖 `"Tool (...)"` 块）：
 
-| 输入 item | 翻译成上游可读文本 |
+| item | 翻译成 turns 里的文本 |
 |---|---|
-| `function_call`（assistant 发起） | `一轮助手输出里的文本：调用 <name>(<arguments>)`（保留 arguments 原文，避免模型复述 JSON 时被截断到无法理解） |
-| `function_call_output`（tool 结果） | `工具 <name> 的执行结果：<content>`；content 超过 4096 字节时截断并追加 `…（已截断）` |
-| 普通文本 | 原样 |
+| `function_call` | `toolcall.SerializeForHistory([]official.ToolCallRef{...})` 的输出（即 `<tool_call>{"name":...,"arguments":...}</tool_call>`） |
+| `function_call_output` | `"Tool (Resultado da ferramenta <name>): " + content`；content > 4096 字节时截断并追加 `…（已截断）`；name 解析不到时用 `"tool"` |
+| 普通文本 | 原样，行为不变 |
 
-- 两个表面（`/v1/responses` 的 `responsesInputItems`、`/v1/chat/completions` 的 `apiMessagesToItems`）都汇入 `deepseekTurnsFromItems`，所以翻译只实现一次。
-- `role=tool` 消息在 chat 表面必须能拿到内容：先确认 `apiMessagesToItems` 是否把 `role=tool` 的 content 保留下来；若丢了，在本 ticket 内修好（这是 spec §3.4 的关键坑）。
-- 只对**已有工具调用痕迹**的输入生效；无工具历史的普通对话，输出必须与现状逐字一致（这是 L4 回归判据）。
+问题：`responsesInputItem`（`input.go:16`）现在只有 `Type/Role/Text/ImageURLs`，`apiMessagesToItems` 丢掉了 `APIMessage.Name` 与 `ToolCallID`。因此本 ticket 内：
+- 给 `responsesInputItem` 增 `Name`、`CallID` 字段，并在 `apiMessagesToItems` 填充；
+- `function_call_output` 的 name 优先用 item 自带 name，其次用 `CallID` 反查**最近一次** `function_call` 的 name（call_id 不匹配就回落 `"tool"`）；
+- `function_call` 的 name/arguments 从 item.Text 里那段 `{"type":"tool_calls","tool_calls":{...}}` JSON 解出；解不出就跳过（不要 panic）。
+- 两个表面都汇入 `deepseekTurnsFromItems`，翻译只写一处；**无工具历史的输入输出必须与改动前逐字一致**（L4 回归判据）。
 
-**文件归属：** `internal/provider/provider.go`、`internal/provider/deepseek_chat.go`、必要时 `internal/provider/` 下的翻译辅助文件与测试。
+**文件归属：** `internal/provider/provider.go`、`internal/provider/deepseek_chat.go`、`internal/provider/input.go`、`internal/provider/deepseek_chat_session.go`（仅在确需暴露 token 数时）、新增测试文件。
 
 **验收：**
-- 新增表驱动单测（放 `internal/provider/` 下）：
-  1. `function_call` / `function_call_output` → 两段文本的**精确**字符串（含截断用例：4097 字节 → 4096 + 后缀）；
-  2. 无工具历史的普通文本路径输出与改动前一致（把改动前的期望值写死）；
-  3. `DeepSeek` 满足 `TextCollector`（编译期断言即可）。
-- `go build ./... && go test ./internal/provider/...` 绿。
-- 不触网：单测不得调用真实上游。
+- 表驱动单测（`internal/provider/` 下）：
+  1. `function_call` → 精确的 `<tool_call>` 文本；`function_call_output` → 精确的 `Tool (…)` 文本；
+  2. 4097 字节结果 → 4096 + 截断后缀；
+  3. name 反查：有 name / 只有 call_id 能反查 / 完全没有 → `"tool"`；
+  4. 无工具历史的普通文本 → 与改动前一致（写死期望值）；
+  5. `CollectText` 走假上游（`httptest`）断言：**送出的 prompt 含注入的 instructions 片段**、不含 `tools` 相关上游参数、返回文本正确。
+- `go build ./... && go test ./internal/provider/...` 绿；不触真实网络。
+- `git diff --stat` 证明 `internal/toolcall` 零改动。
 
 **Blocked by:** None
