@@ -79,6 +79,16 @@ func RegisterRouter(accountPool *accounts.Pool, cfg *config.Config) *gin.Engine 
 	if cfg.YuanbaoWebTokens != "" {
 		registry.Register(provider.NewYuanbao(cfg))
 	}
+	// 方案 B:原生工具透传(OpenAI 兼容上游)。映射非法/为空时 NewNativeTools
+	// 返回 nil(已打日志),此时不登记槽位(fail-closed)。
+	// 只登记槽位、不 Register:Register 是全量路由,会把同名模型的普通对话、
+	// /v1/responses、熔断与 /v1/models 全部劫持到透传上游(见 T04 §4.2)。
+	// 代价是 native 的模型 id 不进 /v1/models——预期行为(文档见 T06)。
+	if cfg.NativeToolsBase != "" && cfg.NativeToolsKey != "" {
+		if native := provider.NewNativeTools(cfg); native != nil {
+			registry.SetNativeTools(native)
+		}
+	}
 
 	chatHandler := NewChatHandler(accountPool, cfg, registry)
 	imageHandler := NewImageHandler(accountPool, cfg)
