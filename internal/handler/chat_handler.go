@@ -80,6 +80,18 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 		return
 	}
 
+	// 方案 B:原生工具透传优先。带 tools 且模型命中槽位时先给 native,
+	// 必须插在 ResolveCanonical 分派之前(槽位 provider 不进 providers 列表,
+	// 否则会劫持同名模型的普通对话与 /v1/responses)。
+	if len(original_request.Tools) > 0 && h.providers != nil {
+		if native := h.providers.NativeTools(); native != nil && native.Handles(original_request.Model) {
+			defer h.recordProviderOutcome(native.Name(), c)
+			c.Set(provider.ProviderNameCtxKey, native.Name())
+			native.ChatCompletions(c, &original_request)
+			return
+		}
+	}
+
 	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider,
 	// 不经过 ChatGPT 账号池 / resolveAccount。
 	if h.providers != nil {
@@ -93,6 +105,15 @@ func (h *ChatHandler) Nightmare(c *gin.Context) {
 			defer h.recordProviderOutcome(p.Name(), c)
 			// 流式失败上报熔断器用(WP6):emitter Fail 经 context 取 provider 名
 			c.Set(provider.ProviderNameCtxKey, p.Name())
+			// 方案 A:Provider 工具模拟(仅 chat 表面)。门禁在 provider 命中之内,
+			// 白名单按 canonical 回填后的模型判断;provider 未实现 TextCollector
+			// 时维持现状,行为与未接线时逐字一致。
+			if len(original_request.Tools) > 0 && providerToolEmulationEnabled(h.cfg, original_request.Model) {
+				if tc, ok := p.(provider.TextCollector); ok {
+					h.handleProviderToolCalling(c, &original_request, tc)
+					return
+				}
+			}
 			p.ChatCompletions(c, &original_request)
 			return
 		}
@@ -213,8 +234,21 @@ func (h *ChatHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	// 方案 B:原生工具透传优先(Responses 表面)。带 tools 且模型命中槽位时
+	// 先给 native,同样插在 ResolveCanonical 分派之前并挂熔断/ctx 上报。
+	if len(responsesRequest.Tools) > 0 && h.providers != nil {
+		if native := h.providers.NativeTools(); native != nil && native.Handles(responsesRequest.Model) {
+			defer h.recordProviderOutcome(native.Name(), c)
+			c.Set(provider.ProviderNameCtxKey, native.Name())
+			native.Responses(c, &responsesRequest)
+			return
+		}
+	}
+
 	// Provider 分派:模型命中 DeepSeek 等新上游时,直接交给 Provider 处理,
 	// 不经过 ChatGPT 账号池 / resolveAccount。
+	// 方案 A(provider 工具模拟)仅接 /v1/chat/completions;Responses 表面的
+	// 工具模拟为后续工作,带 tools 的 Responses 请求维持现状。
 	if h.providers != nil {
 		if p, canonical := h.providers.ResolveCanonical(responsesRequest.Model); p != nil {
 			if canonical != responsesRequest.Model {
