@@ -236,6 +236,16 @@ func TestNativeToolsPassthroughStream(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
 	}
+	// 流式必须带齐 SSE 头四件套(同包 sseHeaders)
+	for header, want := range map[string]string{
+		"Cache-Control":     "no-cache",
+		"Connection":        "keep-alive",
+		"X-Accel-Buffering": "no",
+	} {
+		if got := rec.Header().Get(header); got != want {
+			t.Errorf("流式响应头 %s = %q, want %q", header, got, want)
+		}
+	}
 	var upstreamBody map[string]json.RawMessage
 	_, _, _, body := capture.snapshot()
 	if err := json.Unmarshal(body, &upstreamBody); err != nil {
@@ -356,5 +366,125 @@ func TestNativeToolsResponsesUnsupported(t *testing.T) {
 	}
 	if envelope.Error.Type != "invalid_request_error" {
 		t.Errorf("error.type = %q, want invalid_request_error", envelope.Error.Type)
+	}
+}
+
+// nativeForward 起一个假上游(固定 200 JSON),把 clientBody 原样过一遍
+// ChatCompletions,返回假上游实际收到的请求体字段(供序列化口径断言)。
+func nativeForward(t *testing.T, clientBody string) map[string]json.RawMessage {
+	t.Helper()
+	var capture nativeCapture
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capture.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+	}))
+	defer srv.Close()
+
+	n := newNativeToolsForTest(t, srv.URL)
+	rec := nativeChatCall(t, n, clientBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	_, _, _, body := capture.snapshot()
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("上游请求体不是合法 JSON: %v (%s)", err, body)
+	}
+	return got
+}
+
+// attachments 是 aurora 扩展,重序列化按白名单剥掉,不得泄漏给严格上游(7.9)。
+func TestNativeToolsStripsAttachments(t *testing.T) {
+	const bodyWithAttachment = `{
+		"model": "bridge-tools",
+		"messages": [{"role": "user", "content": "看图",
+			"attachments": [{"file_id": "file-1", "name": "a.png", "mime_type": "image/png"}]}]
+	}`
+
+	got := nativeForward(t, bodyWithAttachment)
+
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(got["messages"], &msgs); err != nil {
+		t.Fatalf("messages 解析失败: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages 条数 = %d, want 1", len(msgs))
+	}
+	if _, ok := msgs[0]["attachments"]; ok {
+		t.Errorf("attachments 不得转发上游: %s", msgs[0]["attachments"])
+	}
+	var role, content string
+	_ = json.Unmarshal(msgs[0]["role"], &role)
+	_ = json.Unmarshal(msgs[0]["content"], &content)
+	if role != "user" || content != "看图" {
+		t.Errorf("标准字段丢失: role=%q content=%q", role, content)
+	}
+}
+
+// stop 空数组不得变成 {"Values":null},应直接删掉该字段(7.10)。
+func TestNativeToolsEmptyStopDropped(t *testing.T) {
+	clientBody := strings.Replace(nativeClientBody, `"tool_choice": "auto",`, `"tool_choice": "auto", "stop": [],`, 1)
+
+	got := nativeForward(t, clientBody)
+
+	if raw, ok := got["stop"]; ok {
+		t.Errorf("空 stop 应删除该字段,得到: %s", raw)
+	}
+}
+
+// stop 单元素数组还原成字符串(既有语义不回归)。
+func TestNativeToolsSingleStopString(t *testing.T) {
+	clientBody := strings.Replace(nativeClientBody, `"tool_choice": "auto",`, `"tool_choice": "auto", "stop": ["\n\n"],`, 1)
+
+	got := nativeForward(t, clientBody)
+
+	var stop string
+	if err := json.Unmarshal(got["stop"], &stop); err != nil || stop != "\n\n" {
+		t.Errorf("单元素 stop 应还原成字符串: %s (err=%v)", got["stop"], err)
+	}
+}
+
+// tool_choice 的对象形态(function)按 OpenAI 线上形态重写(7.13)。
+func TestNativeToolsToolChoiceFunctionObject(t *testing.T) {
+	clientBody := strings.Replace(nativeClientBody, `"tool_choice": "auto",`,
+		`"tool_choice": {"type": "function", "function": {"name": "song_request"}},`, 1)
+
+	got := nativeForward(t, clientBody)
+
+	var choice struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(got["tool_choice"], &choice); err != nil {
+		t.Fatalf("tool_choice 解析失败: %v (%s)", err, got["tool_choice"])
+	}
+	if choice.Type != "function" || choice.Function.Name != "song_request" {
+		t.Errorf("tool_choice 对象形态失真: %s", got["tool_choice"])
+	}
+}
+
+// 上游 500(非 429)同样原样透传状态码与 body(7.13)。
+func TestNativeToolsUpstream500Passthrough(t *testing.T) {
+	const errBody = `{"error":{"message":"upstream boom","type":"server_error"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, errBody)
+	}))
+	defer srv.Close()
+
+	n := newNativeToolsForTest(t, srv.URL)
+	rec := nativeChatCall(t, n, nativeClientBody)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if got := rec.Body.String(); got != errBody {
+		t.Errorf("上游 500 错误体未原样回吐: got %s want %s", got, errBody)
 	}
 }

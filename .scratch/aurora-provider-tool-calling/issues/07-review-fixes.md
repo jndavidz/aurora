@@ -68,5 +68,5 @@ B 分派只看 `native != nil && native.Handles(model)`，`ProviderBreaker.Tripp
 - 新增/修改用例覆盖 7.1–7.13 的每一条（缺一不可）。
 - commit 中文，形如 `fix(provider-tool): review 修复——工具轮守卫/去参数推断/熔断/文本保留 + P2 项`。
 
-**Status:** pending
+**Status:** done（2026-10-27，t07-review-fixes；7.1–7.13 全部落实，含回归用例）
 **Blocked by:** 06

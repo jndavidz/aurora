@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"aurora/typings/official"
 
@@ -359,5 +360,37 @@ func TestDeepSeekCollectTextUnknownModel(t *testing.T) {
 
 	if _, err := d.CollectText(c, &req); err == nil {
 		t.Fatal("未知模型应返回 error")
+	}
+}
+
+// TestDeepSeekTurnsTruncatesLongToolResultMultibyte 覆盖 4096 字节边界落在
+// 多字节字符(4 字节 emoji)中间的截断:结果必须是合法 UTF-8、payload 不超过
+// 4096 字节,且后缀保留。
+func TestDeepSeekTurnsTruncatesLongToolResultMultibyte(t *testing.T) {
+	// 边界正好切进 emoji:4094 个 'a' 之后是 4 字节字符。
+	content := strings.Repeat("a", 4094) + "😀" + strings.Repeat("b", 100)
+	turns := deepseekTurnsFromItems([]responsesInputItem{
+		{Type: "function_call_output", Role: "tool", Name: "read", Text: content},
+	})
+	if len(turns) != 1 {
+		t.Fatalf("turns=%d, want 1", len(turns))
+	}
+	prefix := "Tool (Resultado da ferramenta read): "
+	text := turns[0].Text
+	if !strings.HasPrefix(text, prefix) {
+		t.Fatalf("前缀丢失: %q", text)
+	}
+	if !strings.HasSuffix(text, toolResultTruncatedTail) {
+		t.Fatalf("截断后缀丢失: %q", text)
+	}
+	if !utf8.ValidString(text) {
+		t.Fatal("截断结果不是合法 UTF-8")
+	}
+	payload := strings.TrimSuffix(strings.TrimPrefix(text, prefix), toolResultTruncatedTail)
+	if len(payload) > toolResultMaxBytes {
+		t.Fatalf("payload = %d 字节, 超过上限 %d", len(payload), toolResultMaxBytes)
+	}
+	if payload != strings.Repeat("a", 4094) {
+		t.Fatalf("跨边界的半个多字节字符应被丢弃: payload 长度=%d", len(payload))
 	}
 }

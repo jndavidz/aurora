@@ -5,12 +5,15 @@ package handler
 // 注入/解析/重试降级/SSE 帧序列全在本地验证,不触真实网络。
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"aurora/internal/config"
 	"aurora/internal/provider"
@@ -549,6 +552,275 @@ func TestProviderToolCallingCollectErrorReturns502(t *testing.T) {
 			}
 			if tc.calls != 1 {
 				t.Errorf("上游错误不应重试; 调用次数 = %d", tc.calls)
+			}
+		})
+	}
+}
+
+// ── 11. 工具结果轮:非空文本直接接受,不再催工具(7.1)────────────
+
+func TestProviderToolCallingAcceptsTextOnToolResultTurn(t *testing.T) {
+	h := ptHandler(3)
+	c, w := ptContext()
+	req := ptRequest(false)
+	toolMsg := officialtypes.NewTextMessage("tool", "Paris: 21°C, sunny")
+	toolMsg.ToolCallID = "call_1"
+	toolMsg.Name = "get_weather"
+	req.Messages = append(req.Messages, toolMsg)
+	const reply = "已按天气结果回答:巴黎 21 度。"
+	tc := &ptCollector{replies: []string{reply}}
+
+	h.handleProviderToolCalling(c, req, tc)
+
+	if tc.calls != 1 {
+		t.Fatalf("收集器调用次数 = %d, 想要 1(工具结果轮不得重试)", tc.calls)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, 想要 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := ptChatCompletion(t, w.Body.Bytes())
+	if resp.Choices[0].FinishReason != "stop" {
+		t.Errorf("finish_reason = %#v, 想要 stop", resp.Choices[0].FinishReason)
+	}
+	if resp.Choices[0].Message.Content != reply {
+		t.Errorf("content = %q, 想要 %q", resp.Choices[0].Message.Content, reply)
+	}
+	if strings.Contains(ptMessagesText(tc.requests[0].Messages), providerToolNudge(req.Tools)) {
+		t.Errorf("工具结果轮不应追加 nudge")
+	}
+}
+
+// ── 12. 无标签 JSON 不得被伪造成调用(7.2 strict fallback)──────────
+
+func TestProviderToolCallingDoesNotInferToolFromProse(t *testing.T) {
+	h := ptHandler(0)
+	c, w := ptContext()
+	req := &officialtypes.APIRequest{
+		Model: "deepseek",
+		Messages: []officialtypes.APIMessage{
+			officialtypes.NewTextMessage("user", "song_request 怎么用?"),
+		},
+		Tools: []officialtypes.Tool{
+			{Type: "function", Function: officialtypes.ToolFunction{Name: "song_request"}},
+		},
+	}
+	const reply = `我记得 song_request 需要 {"query": "歌曲名"} 这种参数。`
+	tc := &ptCollector{replies: []string{reply}}
+
+	h.handleProviderToolCalling(c, req, tc)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, 想要 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := ptChatCompletion(t, w.Body.Bytes())
+	if got := resp.Choices[0].Message.ToolCalls; len(got) != 0 {
+		t.Fatalf("正文里的参数示例不得被伪造成工具调用: %#v", got)
+	}
+	if resp.Choices[0].FinishReason != "stop" {
+		t.Errorf("finish_reason = %#v, 想要 stop(降级为文本)", resp.Choices[0].FinishReason)
+	}
+	if resp.Choices[0].Message.Content != reply {
+		t.Errorf("content = %q, 想要原样文本", resp.Choices[0].Message.Content)
+	}
+}
+
+// ── 13. 重试耗尽保留最后一个非空文本(7.4)───────────────────────
+
+func TestProviderToolCallingRetriesExhaustedKeepsLastNonEmptyText(t *testing.T) {
+	h := ptHandler(2)
+	c, w := ptContext()
+	tc := &ptCollector{replies: []string{"完整答案", "", ""}}
+
+	h.handleProviderToolCalling(c, ptRequest(false), tc)
+
+	if tc.calls != 3 {
+		t.Fatalf("收集器调用次数 = %d, 想要 3", tc.calls)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, 想要 200; body=%s", w.Code, w.Body.String())
+	}
+	resp := ptChatCompletion(t, w.Body.Bytes())
+	if resp.Choices[0].Message.Content != "完整答案" {
+		t.Errorf("content = %q, 想要保留最后一个非空文本", resp.Choices[0].Message.Content)
+	}
+	if resp.Choices[0].FinishReason != "stop" {
+		t.Errorf("finish_reason = %#v, 想要 stop", resp.Choices[0].FinishReason)
+	}
+}
+
+// ── 14. 三轮全空 → 502 no_valid_reply,绝不 200 + 空正文(7.4)─────
+
+func TestProviderToolCallingAllEmptyReturns502(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "非流式"
+		if stream {
+			name = "流式"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := ptHandler(2)
+			c, w := ptContext()
+			tc := &ptCollector{replies: []string{"", "", ""}}
+
+			h.handleProviderToolCalling(c, ptRequest(stream), tc)
+
+			if tc.calls != 3 {
+				t.Fatalf("收集器调用次数 = %d, 想要 3", tc.calls)
+			}
+			if w.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, 想要 502(空回复不得 200); body=%s", w.Code, w.Body.String())
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, "no_valid_reply") {
+				t.Errorf("body 应含 no_valid_reply; body=%s", body)
+			}
+			if strings.Contains(body, "data: [DONE]") {
+				t.Errorf("流尚未开始,不应写 SSE 帧; body=%s", body)
+			}
+		})
+	}
+}
+
+// ── 15. 重试退避:400ms×(attempt+1),上限 2s,失败路径才发生(7.7)──
+
+func TestProviderToolRetryDelay(t *testing.T) {
+	want := []time.Duration{
+		400 * time.Millisecond,
+		800 * time.Millisecond,
+		1200 * time.Millisecond,
+		1600 * time.Millisecond,
+		2 * time.Second,
+		2 * time.Second,
+	}
+	for attempt, w := range want {
+		if got := providerToolRetryDelay(attempt); got != w {
+			t.Errorf("providerToolRetryDelay(%d) = %v, 想要 %v", attempt, got, w)
+		}
+	}
+}
+
+func TestProviderToolCallingRetryBackoff(t *testing.T) {
+	orig := providerToolWait
+	defer func() { providerToolWait = orig }()
+	var waits []time.Duration
+	providerToolWait = func(_ context.Context, d time.Duration) bool {
+		waits = append(waits, d)
+		return true
+	}
+
+	h := ptHandler(2)
+	c, w := ptContext()
+	tc := &ptCollector{replies: []string{"one", "two", "three"}}
+
+	h.handleProviderToolCalling(c, ptRequest(false), tc)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	want := []time.Duration{400 * time.Millisecond, 800 * time.Millisecond}
+	if !reflect.DeepEqual(waits, want) {
+		t.Errorf("退避序列 = %v, 想要 %v", waits, want)
+	}
+}
+
+func TestProviderToolCallingNoBackoffWhenFirstAttemptSucceeds(t *testing.T) {
+	orig := providerToolWait
+	defer func() { providerToolWait = orig }()
+	providerToolWait = func(_ context.Context, _ time.Duration) bool {
+		t.Fatal("命中工具调用的一轮不应退避")
+		return true
+	}
+
+	h := ptHandler(3)
+	c, _ := ptContext()
+	tc := &ptCollector{replies: []string{
+		"<tool_call>{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Paris\"}}</tool_call>",
+	}}
+	h.handleProviderToolCalling(c, ptRequest(false), tc)
+}
+
+func TestProviderToolWaitHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if providerToolWait(ctx, time.Hour) {
+		t.Fatal("context 已取消时退避应立即返回 false(不得真睡)")
+	}
+}
+
+// ── 16. 流式帧顺序(role → tool_calls → finish_reason → [DONE])与多工具 index(7.13)──
+
+func TestProviderToolCallingStreamFrameOrderAndIndexes(t *testing.T) {
+	h := ptHandler(0)
+	c, w := ptContext()
+	tc := &ptCollector{replies: []string{
+		`<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>` +
+			`<tool_call>{"name": "search_web", "arguments": {"q": "Paris weather"}}</tool_call>`,
+	}}
+
+	h.handleProviderToolCalling(c, ptRequest(true), tc)
+
+	chunks := ptStreamChunks(t, w.Body.String()) // 顺带断言末帧是 [DONE]
+	if len(chunks) < 4 {
+		t.Fatalf("帧数 = %d, 太少: %s", len(chunks), w.Body.String())
+	}
+	// 首帧:role=assistant
+	firstDelta, _ := ptChoice(t, chunks[0])["delta"].(map[string]any)
+	if firstDelta["role"] != "assistant" {
+		t.Fatalf("首帧 role = %#v, 想要 assistant", firstDelta["role"])
+	}
+	// 末帧(停止块):finish_reason=tool_calls,紧邻 [DONE]
+	lastChoice := ptChoice(t, chunks[len(chunks)-1])
+	if lastChoice["finish_reason"] != "tool_calls" {
+		t.Fatalf("末帧 finish_reason = %#v, 想要 tool_calls", lastChoice["finish_reason"])
+	}
+	if delta, _ := lastChoice["delta"].(map[string]any); len(delta) > 0 {
+		if delta["content"] != nil || delta["tool_calls"] != nil || delta["role"] != nil {
+			t.Errorf("停止块不应带正文/工具增量: %#v", delta)
+		}
+	}
+	// 中间帧全是 tool_calls 增量,index 按 0,0,1,1(每调用 name/arguments 两帧)
+	var indexes []int
+	for i, chunk := range chunks[1 : len(chunks)-1] {
+		delta, _ := ptChoice(t, chunk)["delta"].(map[string]any)
+		rawCalls, _ := delta["tool_calls"].([]any)
+		if len(rawCalls) == 0 {
+			t.Fatalf("帧 %d 应为 tool_calls 增量,得到 %#v", i+1, chunk)
+		}
+		for _, raw := range rawCalls {
+			call, _ := raw.(map[string]any)
+			idx, ok := call["index"].(float64)
+			if !ok {
+				t.Fatalf("tool_calls 帧缺 index: %#v", call)
+			}
+			indexes = append(indexes, int(idx))
+		}
+	}
+	if want := []int{0, 0, 1, 1}; !reflect.DeepEqual(indexes, want) {
+		t.Errorf("流式 index 序列 = %v, 想要 %v", indexes, want)
+	}
+	if reasons := ptFinishReasons(chunks); len(reasons) != 1 || reasons[0] != "tool_calls" {
+		t.Errorf("finish_reason 序列 = %#v, 想要唯一 tool_calls", reasons)
+	}
+}
+
+// ── 17. 请求侧门禁 helper(7.5 / 7.6)─────────────────────────────
+
+func TestProviderToolEmulationRequestEligible(t *testing.T) {
+	tools := ptTools()
+	cases := []struct {
+		name string
+		req  *officialtypes.APIRequest
+		want bool
+	}{
+		{"nil", nil, false},
+		{"普通请求", &officialtypes.APIRequest{Model: "deepseek", Tools: tools}, true},
+		{"tool_choice auto", &officialtypes.APIRequest{Model: "deepseek", Tools: tools, ToolChoice: &officialtypes.ToolChoice{Type: "auto"}}, true},
+		{"tool_choice none", &officialtypes.APIRequest{Model: "deepseek", Tools: tools, ToolChoice: &officialtypes.ToolChoice{Type: "none"}}, false},
+		{"coding 变体", &officialtypes.APIRequest{Model: "deepseek-coding", Tools: tools}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := providerToolEmulationRequestEligible(tc.req); got != tc.want {
+				t.Errorf("providerToolEmulationRequestEligible() = %v, 想要 %v", got, tc.want)
 			}
 		})
 	}
