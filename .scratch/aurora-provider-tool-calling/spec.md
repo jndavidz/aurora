@@ -232,3 +232,17 @@ bridge 侧无改动。
 - 已知代价（未做）：重试轮各自新开会话/重传图片/可能换 token，需改 `TextCollector` 签名才能复用；已加 context-aware 退避（400ms×N，上限 2s）。
 - **未验收**：L1 单测全绿（`go test ./...` 37 包），L2（NAS curl 命中率）与 L3（bridge 真机点歌、首响 ≤6s）需 NAS 与音箱，留待你执行；本 spec 状态在完成 L2/L3 前不置 closed。
 - 回退：`.env` 置 `PROVIDER_TOOL_EMULATION=0` 或清空 `PROVIDER_TOOL_MODELS` → 重启 aurora；不开两个开关时行为与旧版逐字一致。
+
+## 10. L2 验收记录（2026-10-28，ZCode 会话）
+
+合并部署：`feat/provider-tool-calling` 经用户拍板 ff 合并入 `local-toolfix`（`ed2f3a6`），compose 灰度开关入库（`28cfcbd`：`PROVIDER_TOOL_EMULATION=true` + `PROVIDER_TOOL_MODELS=deepseek-no-search`，硬编码——部署脚本会清 .env），NAS 镜像 `525dfe247` 部署探活通过，容器内 env 回读确认开关生效。
+
+三发单发验证（`song_request` 假工具、`X-Session-Key: l2-toolcall-1028`）：
+
+| 轮次 | 期望 | 实测 | 耗时 |
+|---|---|---|---|
+| R1 带 tools | `tool_calls` + `finish_reason=tool_calls` | ✅ `song_request({"query":"周杰伦 晴天"})`，参数正确 | **6.73s**（略超 6s SLO，未触发重试；单点） |
+| R2 工具结果轮 | 口语终答 + `stop` | ✅「已开始播放：晴天 - 周杰伦」+ `stop` | **2.78s** ✅ |
+| R3 无 tools 回归 | 普通流式对话不受影响 | ✅ 流式正文 + `stop` | TTFT 2.39s（上游抖动范围内） |
+
+结论：**多轮工具回环契约（§2 目标契约）端到端成立**。R1 超 SLO 0.7s 为首建会话+上游抖动单点，待 L3 bridge 真机复测；若真机持续超 6s，杠杆是 `PROVIDER_TOOL_RETRIES` 下调与首句约束（不首先动重试预算）。**L3（bridge 真机点歌）待 bridge 重部署后执行**（前置：bridge B-29 系列收尾）。
